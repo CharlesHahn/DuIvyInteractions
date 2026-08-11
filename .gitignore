@@ -1,0 +1,14 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Large dump files (can be regenerated with gmx dump)
+dump_md_D927.tpr.txt
+dump_md_D927.tpr.log
+
+# Generated reports
+fg_report.txt
+
+# Logs
+*.log
