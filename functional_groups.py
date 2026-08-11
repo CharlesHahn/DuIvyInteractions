@@ -408,30 +408,36 @@ def identify_functional_groups(mt: MolType) -> Dict:
     }
 
 
-def format_report(mt: MolType, result: Dict) -> str:
-    """格式化输出官能团报告。"""
+def format_report(mt: MolType, result: Dict, offset: int = 0) -> str:
+    """格式化输出官能团报告。offset 为全局原子索引偏移（moltype 内 idx → 全局 idx）。"""
     lines = []
     lines.append(f"=== {mt.name} ({len(mt.atoms)} atoms) ===")
     lines.append(f"  芳香环 ({sum(1 for r in result['rings'] if r.aromatic)}):")
     for r in result["rings"]:
         if r.aromatic:
-            names = [mt.atoms[i].name for i in r.atoms]
+            names = [f"{mt.atoms[i].name}[{offset + i}]" for i in r.atoms]
             lines.append(f"    ring{len(r.atoms)}: {'-'.join(names)}")
     lines.append(f"  H键供体 ({len(result['donors'])}):")
     for d in result["donors"]:
         d_q = mt.atoms[d.atom].charge
         h_q = mt.atoms[d.h_atom].charge
-        lines.append(f"    {mt.atoms[d.atom].name}({d.type_name}) -H{d.h_atom}  qD={d_q:.3f} qH={h_q:.3f}")
+        d_idx = offset + d.atom
+        h_idx = offset + d.h_atom
+        lines.append(f"    {mt.atoms[d.atom].name}({d.type_name})[{d_idx}] -H{mt.atoms[d.h_atom].name}[{h_idx}]  qD={d_q:.3f} qH={h_q:.3f}")
     lines.append(f"  H键受体 ({len(result['acceptors'])}):")
     for a in result["acceptors"]:
-        lines.append(f"    {mt.atoms[a.atom].name}({a.type_name})  q={mt.atoms[a.atom].charge:.3f}")
+        a_idx = offset + a.atom
+        lines.append(f"    {mt.atoms[a.atom].name}({a.type_name})[{a_idx}]  q={mt.atoms[a.atom].charge:.3f}")
     lines.append(f"  强电荷基团 ({len(result['charged'])}):")
     for c in result["charged"]:
-        lines.append(f"    {mt.atoms[c.atom].name}({c.type_name}) {c.sign}{c.charge:.2f}")
+        c_idx = offset + c.atom
+        lines.append(f"    {mt.atoms[c.atom].name}({c.type_name})[{c_idx}] {c.sign}{c.charge:.2f}")
     if result["halogens"]:
-        lines.append(f"  卤素: {', '.join(mt.atoms[h.idx].name for h in result['halogens'])}")
+        hal = [f"{h.name}({h.type_name})[{offset + h.idx}]" for h in result["halogens"]]
+        lines.append(f"  卤素: {', '.join(hal)}")
     if result["metals"]:
-        lines.append(f"  金属: {', '.join(mt.atoms[m.idx].name for m in result['metals'])}")
+        met = [f"{m.name}[{offset + m.idx}]" for m in result["metals"]]
+        lines.append(f"  金属: {', '.join(met)}")
     return "\n".join(lines)
 
 
@@ -439,9 +445,15 @@ if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "dump_md_D927.tpr.txt"
     mts = parse_dump(path)
+    # 计算全局原子偏移
+    offsets = {}
+    cumul = 0
+    for mt in mts:
+        offsets[mt.name] = cumul
+        cumul += len(mt.atoms)
     for mt in mts:
         fill_residues(mt)
         if mt.name in ("RBD_pro", "D927", "KRAS_pro", "GNP_neg"):
             result = identify_functional_groups(mt)
-            print(format_report(mt, result))
+            print(format_report(mt, result, offsets.get(mt.name, 0)))
             print()
