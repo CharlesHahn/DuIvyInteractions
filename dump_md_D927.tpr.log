@@ -1,0 +1,13 @@
+                 :-) GROMACS - gmx dump, 2024.5-conda_forge (-:
+
+Executable:   /home/hanyl/.micromamba/envs/DIP/bin.AVX2_256/gmx
+Data prefix:  /home/hanyl/.micromamba/envs/DIP
+Working dir:  /mnt/work1/PMO/hanyl/JF_work/KRAS_MD/DuIvyInteraction
+Command line:
+  gmx dump -s /mnt/work1/PMO/hanyl/JF_work/KRAS_MD/RBD_D927_KRAS_GNP_Mg_MD/md.tpr
+
+Reading file /mnt/work1/PMO/hanyl/JF_work/KRAS_MD/RBD_D927_KRAS_GNP_Mg_MD/md.tpr, VERSION 2024.6 (single precision)
+Reading file /mnt/work1/PMO/hanyl/JF_work/KRAS_MD/RBD_D927_KRAS_GNP_Mg_MD/md.tpr, VERSION 2024.6 (single precision)
+
+GROMACS reminds you: "If all it takes to motivate you is a fancy picture and quote, you probably have a very easy job. The type of job computers will soon be doing." (Anonymous)
+
