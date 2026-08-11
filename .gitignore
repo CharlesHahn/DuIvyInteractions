@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# 测试数据（已 push 到远程，但不再更新）
+test_MD_case/
