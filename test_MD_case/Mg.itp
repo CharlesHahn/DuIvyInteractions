@@ -1,0 +1,7 @@
+[ moleculetype ]
+; molname       nrexcl
+Mg              1
+
+[ atoms ]
+; id    at type         res nr  residu name     at name  cg nr  charge
+1       MG              1       MG              MG       1      2.00000

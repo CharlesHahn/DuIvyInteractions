@@ -1,0 +1,64 @@
+;
+;	File 'topol.top' was generated
+;	By user: hanyl (1011)
+;	On host: grid02
+;	At date: Mon Jul 27 10:59:17 2026
+;
+;	This is a standalone topology file
+;
+;	Created by:
+;	                    :-) GROMACS - gmx pdb2gmx, 2024.6 (-:
+;	
+;	Executable:   /mnt/work1/PMO/hanyl/MDsoftware/gromacs2024.6/bin/gmx
+;	Data prefix:  /mnt/work1/PMO/hanyl/MDsoftware/gromacs2024.6
+;	Working dir:  /mnt/work1/PMO/hanyl/KRAS_MD/RBD_KRAS_GNP_Mg_MD
+;	Command line:
+;	  gmx pdb2gmx -f RBD_aligned.pdb -o RBD_aligned.gro -p topol.top -ff amber14sb -water tip3p -ignh
+;	Force field was read from current directory or a relative path - path added.
+;
+
+; Include forcefield parameters
+#include "./amber14sb.ff/forcefield.itp"
+
+; Include RBD_pro topology
+#include "RBD_pro.itp"
+
+; Include D927 topology
+#include "D927.itp"
+
+; Include KRAS_pro topology
+#include "KRAS_pro.itp"
+
+; Include GNP_neg topology
+#include "GNP_neg.itp"
+
+; Include Mg topology
+#include "Mg.itp"
+
+; Include water topology
+#include "./amber14sb.ff/tip3p.itp"
+
+#ifdef POSRES_WATER
+; Position restraint for each water oxygen
+[ position_restraints ]
+;  i funct       fcx        fcy        fcz
+   1    1       1000       1000       1000
+#endif
+
+; Include topology for ions
+#include "./amber14sb.ff/ions.itp"
+
+[ system ]
+; Name
+Protein in water
+
+[ molecules ]
+; Compound        #mols
+RBD_pro             1
+D927                1
+KRAS_pro            1
+GNP_neg             1
+Mg                  1
+SOL         37021
+NA               110
+CL               108
