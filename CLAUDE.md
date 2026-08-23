@@ -203,3 +203,190 @@ PLIP v3.0.1 对同一 D927 结构（trjconv 导出的 PDB）判定 `num_aromatic
 - **本方案**：从 tpr 直接识别 3 个芳香环 + 1 个非芳香含硫环，与化学事实一致
 - **DIP 佐证**：你们自己的 PiStacking 分析（dip_PiStacking.yaml）必须**手动指定环原子索引**（Pi_rings_Index），因为 DIP 不能自动判定芳香环——这正是本项目工具的价值
 - 注：早期调研文档（plip_md_research_survey.md §1.2）记录的"默认模式 3 环"结果是 PLIP 对含键序/芳香标注 PDB 的能力，对 trjconv 导出 PDB 不适用
+
+---
+
+## 项目架构设计（2026-08-12）
+
+### 目录结构
+
+```
+DuIvyInteraction/
+│
+├── DuIvyInteractions/             # 主包
+│   ├── core/                      # 领域模型 + 接口定义
+│   │   ├── __init__.py
+│   │   ├── data.py                # Group, Interaction 数据类
+│   │   ├── interfaces.py          # GroupIdentifier, InteractionDetector ABC
+│   │   └── constants.py           # 元素周期表、力场类型常量
+│   │
+│   ├── identifiers/               # 基团识别器（策略模式，可插拔）
+│   │   ├── __init__.py
+│   │   ├── amber.py               # Amber 力场识别器（含 tpr 解析）
+│   │   ├── rdkit.py               # 未来：基于 RDKit
+│   │   └── smarts.py              # 未来：基于 SMARTS
+│   │
+│   ├── detectors/                 # 相互作用判定器（策略模式，可插拔）
+│   │   ├── __init__.py
+│   │   ├── hydrogen_bond.py
+│   │   ├── pi_stacking.py
+│   │   ├── salt_bridge.py
+│   │   ├── hydrophobic.py
+│   │   ├── halogen_bond.py
+│   │   ├── metal_coordination.py
+│   │   ├── water_bridge.py
+│   │   └── pi_cation.py
+│   │
+│   ├── utils/                     # 通用工具（无状态、可复用）
+│   │   ├── __init__.py
+│   │   ├── geometry.py            # 距离、角度、平面计算
+│   │   ├── trajectory.py          # MDAnalysis 轨迹读取封装
+│   │   └── output.py              # CSV/JSON/矩阵 输出
+│   │
+│   ├── visualize/                 # 可视化
+│   │   ├── __init__.py
+│   │   └── plotter.py
+│   │
+│   └── pipeline.py                # 主流程编排
+│
+├── tests/                         # 单元测试（镜像 src 结构）
+├── docs/                          # 中文文档
+├── docs_en/                       # 英文文档
+├── test/                          # 个人测试（不追踪）
+├── test_MD_case/                  # 测试数据（已 gitignore）
+├── .gitignore
+├── CLAUDE.md
+├── README.md
+└── LICENSE
+```
+
+### 架构设计原则
+
+1. **单一职责**：每个模块只做一件事
+2. **依赖方向**：高层依赖低层，不反向（identifiers/detectors → core → utils）
+3. **策略模式**：识别器和判定器都是可插拔的策略
+4. **可测试性**：模块可独立测试
+
+### core vs utils 的边界
+
+| 目录 | 本质 | 特征 |
+|:----|:----|:----|
+| **core/** | 领域模型 + 接口定义 | "是什么" — 数据结构、ABC、常量 |
+| **utils/** | 通用工具函数 | "怎么做" — 纯函数、无状态、可复用 |
+
+**判断标准**：如果一个模块换了项目还能用 → utils；只在本项目有意义 → core
+
+### 为什么没有 io/ 目录
+
+- `tpr_parser.py` 是 Amber 特定的 → 合并进 `identifiers/amber.py`
+- `output.py` 是通用工具 → 放在 `utils/output.py`
+- `io/` 作为目录职责不清晰，不如按性质分散
+
+### 核心接口设计
+
+#### 数据类（core/data.py）
+
+```python
+@dataclass
+class Group:
+    """一个可参与相互作用的基团"""
+    group_id: int                    # 唯一标识
+    group_type: str                  # "aromatic_ring", "donor", "acceptor", ...
+    molecule: str                    # 所属分子名（如 "D927", "RBD_pro"）
+    residue_name: str                # 残基名
+    residue_id: int                  # 残基号
+    atom_indices: List[int]          # 全局原子索引列表
+    center: Optional[Tuple] = None   # 质心坐标（动态计算）
+    normal: Optional[Tuple] = None   # 法向量（芳香环用）
+    properties: dict = None          # 额外属性
+
+@dataclass
+class Interaction:
+    """一个检测到的相互作用"""
+    interaction_type: str            # "hydrogen_bond", "pi_stacking", ...
+    group1: Group
+    group2: Group
+    frame: int
+    time_ps: float
+    distance: float
+    angle: Optional[float] = None
+    is_active: bool = True
+```
+
+#### 基团识别器 ABC（core/interfaces.py）
+
+```python
+class GroupIdentifier(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @abstractmethod
+    def identify(self, topology) -> List[Group]: ...
+```
+
+#### 相互作用判定器 ABC（core/interfaces.py）
+
+```python
+class InteractionDetector(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def required_group_types(self) -> List[str]: ...
+
+    @abstractmethod
+    def detect_frame(self, groups, coordinates, frame, time_ps) -> List[Interaction]: ...
+```
+
+### 扩展性设计
+
+| 扩展场景 | 实现方式 |
+|:----|:----|
+| **新力场识别器** | 继承 `GroupIdentifier`，实现 `identify()` |
+| **新相互作用类型** | 继承 `InteractionDetector`，实现 `detect_frame()` |
+| **新判据** | 同一类型可有多个 Detector（如 `HBondStrict`, `HBondLoose`） |
+| **新输出格式** | 在 `utils/output.py` 添加新函数 |
+| **新可视化** | 在 `visualize/plotter.py` 添加新方法 |
+
+### 使用示例
+
+```python
+from DuIvyInteractions.identifiers.amber import AmberGroupIdentifier
+from DuIvyInteractions.detectors.hydrogen_bond import HydrogenBondDetector
+from DuIvyInteractions.detectors.pi_stacking import PiStackingDetector
+from DuIvyInteractions.pipeline import Pipeline
+
+# 配置
+identifier = AmberGroupIdentifier()
+detectors = [
+    HydrogenBondDetector(distance_cutoff=3.5, angle_cutoff=150),
+    PiStackingDetector(distance_cutoff=5.0, angle_cutoff=30),
+]
+
+# 运行
+pipeline = Pipeline(identifier, detectors)
+results = pipeline.run("md.tpr", "md.xtc")
+
+# 输出
+from DuIvyInteractions.utils.output import save_results_csv
+save_results_csv(results, "interactions.csv")
+
+# 可视化
+from DuIvyInteractions.visualize.plotter import InteractionPlotter
+plotter = InteractionPlotter(results)
+plotter.plot_timeline("hydrogen_bond")
+plotter.plot_heatmap("pi_stacking")
+```
+
+### 当前代码状态（2026-08-12）
+
+已完成第一阶段（基团鉴定）的 D927 体系验证：
+- ✅ `parse_tpr_dump.py` — tpr dump 解析器（200行）
+- ✅ `functional_groups.py` — 特征映射 + 环检测 + 官能团鉴定（470行）
+- ✅ `verify_type_mapping.py` — 映射表自动验证器（312行）
+- ✅ 已使用全局原子索引（跨分子类型唯一）
+
+待迁移：将现有代码重构到新架构中
