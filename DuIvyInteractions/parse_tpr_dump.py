@@ -56,6 +56,7 @@ class AtomInfo:
     type_name: str = ""   # 类型名（如 c3 / ca / N3）
     resname: str = ""
     resid: int = 0     # 原始残基号 nr
+    global_idx: int = 0   # 全局原子索引（跨所有分子类型）
 
 
 @dataclass

@@ -1,0 +1,117 @@
+"""
+This module is part of DuIvyProcedures.procedures, designed for dealing Hydrophobic Interaction. 
+Written by 杜艾维.
+"""
+
+import os
+import sys
+import numpy as np
+import MDAnalysis as mda
+from MDAnalysis.analysis import distances as mda_dist
+from DuIvyTools.DuIvyTools.FileParser.xvgParser import XVG
+
+base = os.path.dirname(os.path.realpath(os.path.join(__file__, "..")))
+if base not in sys.path:
+    sys.path.insert(0, base)
+
+from utils import log
+from framework.confParser import Config
+
+
+class Hydrophobic(log):
+    def __init__(self, config: Config) -> None:
+        self.conf = config
+
+    @log.module_decorator
+    def __call__(self) -> None:
+
+        tpr = self.conf["tpr"]
+        xtc = self.conf["xtc"]
+        dist_max_cutoff = self.conf["dist_max_cutoff"]
+        dist_min_cutoff = self.conf["dist_min_cutoff"]
+        group1 = self.conf["group1"]
+        group2 = self.conf["group2"]
+
+        fstart = self.conf.get("frame_start", None)
+        fend = self.conf.get("frame_end", None)
+        fstep = self.conf.get("frame_step", None)
+        for key in [fstart, fend, fstep]:
+            if key is None:
+                continue
+            if isinstance(key, int):
+                if key < 0:
+                    self.critical(
+                        f"frame_start, frame_end, frame_step should not be negative integers, but got {key}"
+                    )
+            else:
+                self.critical(
+                    f"frame_start, frame_end, frame_step should be integers or leave blank, but got {key} of type {type(key)}"
+                )
+        self.info(f"Analyzing on trajectory[{fstart}:{fend}:{fstep}]")
+
+
+        ## As hydrophobic interactions result from entropic changes rather than attractive forces between atoms, there are no clear geometries of hydrophobic association. The observed attraction between hydrophobic atoms decays exponentionally with the distance between them. A generous cutoff was chosen, identifying a prime set of hydrophobic interactions between all pairs of hydrophobic atoms within a distance of HYDROPH_DIST_MAX == 4.0 A. 
+        ## Since the number of hydrophobic interactions with such an one-step approach can easily surpass all other interaction types combined, it may strongly influence subsequent evaluation or applications as interaction fingerprinting. To overcome this problem, the number of hydrophobic interactions is reduced in several steps. First, hydrophobic interactions between rings interacting via π-stacking are removed. This is done because stacking already involves hydrophobic interactions. Second, two clustering steps are applied. If a ligand atom interacts with several binding site atoms in the same residue, only the interaction with the closest distance is kept. Subsequently, the set of hydrophobic interactions is checked from the opposite perspective: if a protein atom interacts with several neighboring ligand atoms, just the interaction with the closest distance is kept. Together, these reduction steps help to report only the most representative hydrophobic interactions.
+
+        u = mda.Universe(f"../{tpr}", f"../{xtc}")
+        elements = [mda.topology.guessers.guess_atom_element(n) for n in u.atoms.names]
+        u.add_TopologyAttr("elements", elements)
+
+        ## group1
+        g1_atoms = u.select_atoms(f"{group1} and element C")
+        g1_atoms.write("group1_allC4hydrophobic.pdb")
+
+        ## group2
+        g2_atoms = u.select_atoms(f"{group2} and element C")
+        g2_atoms.write("group2_allC4hydrophobic.pdb")
+
+        time_list, cc_num_count, cc_num_reduced = [], [], []
+        cc_dict = {}
+        for ts in u.trajectory[fstart:fend:fstep]:
+            dist_matrix = mda_dist.distance_array(g1_atoms.positions, g2_atoms.positions, box=ts.dimensions)
+            dist_matrix *= 0.1  # convert to nm
+            cc_index_matrix = np.logical_and((dist_matrix <= dist_max_cutoff), (dist_matrix > dist_min_cutoff))
+            cc_reduced = []
+            x_inds, y_inds = np.where(cc_index_matrix)
+            for i, j in zip(x_inds, y_inds):
+                cc_name = f"{g1_atoms[i].resname}_{g1_atoms[i].resid}-{g2_atoms[j].resname}_{g2_atoms[j].resid}"
+                cc_reduced.append(cc_name)
+            cc_num_reduced.append(len(set(cc_reduced)))
+            for cc_name in set(cc_reduced):
+                if cc_name not in cc_dict:
+                    cc_dict[cc_name] = [ts.time]
+                else:
+                    cc_dict[cc_name].append(ts.time)
+            cc_num_count.append(np.sum(cc_index_matrix))
+            time_list.append(ts.time)
+
+        xvg = XVG("CC_Num_Count.xvg", new_file=True)
+        xvg.title = "C-C Hydrophobic Interaction Count"
+        xvg.xlabel = "Time(ps)"
+        xvg.ylabel = "Count"
+        xvg.data_heads = ["C-C Count"]
+        xvg.data_columns = [time_list, cc_num_count]
+        xvg.row_num = len(time_list)
+        xvg.column_num = len(xvg.data_columns)
+        xvg.comments = "## generated by DIP Hydrophobic module"
+        xvg.save("CC_Num_Count.xvg")
+        cmd = f"""dit xvg_show -f CC_Num_Count.xvg -ns -x "Time(ns)" -xs 0.001 -o CC_Num_Count.{self.conf["fig"]}"""
+        status, output, error = self.run_terminal(cmd)
+
+        xvg = XVG("CC_Num_Count_reduced.xvg", new_file=True)
+        xvg.title = "C-C Hydrophobic Interaction Count Reduced"
+        xvg.xlabel = "Time(ps)"
+        xvg.ylabel = "Count"
+        xvg.data_heads = ["C-C Count reduced"]
+        xvg.data_columns = [time_list, cc_num_reduced]
+        xvg.row_num = len(time_list)
+        xvg.column_num = len(xvg.data_columns)
+        xvg.comments = "## generated by DIP Hydrophobic module"
+        xvg.save("CC_Num_Count_reduced.xvg")
+        cmd = f"""dit xvg_show -f CC_Num_Count_reduced.xvg -ns -x "Time(ns)" -xs 0.001 -o CC_Num_Count_reduced.{self.conf["fig"]}"""
+        status, output, error = self.run_terminal(cmd)
+
+        with open("CC_reduced_occupancy.txt", "w") as fo:
+            fo.write("CC_name, Occupancy, frames/total_frames\n")
+            for key, value in cc_dict.items():
+                fo.write(f"{key}, {len(value)/len(time_list)*100:.2f}%, {len(value)}/{len(time_list)}\n")

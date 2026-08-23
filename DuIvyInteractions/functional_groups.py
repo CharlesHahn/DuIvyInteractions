@@ -172,8 +172,21 @@ def get_feature(type_name: str) -> Optional[Tuple]:
     return TYPE_FEATURES.get(type_name)
 
 
+def assign_global_indices(moltypes: List[MolType]) -> None:
+    """给所有分子类型的原子分配全局索引。
+
+    全局索引 = 该分子类型之前的原子总数 + 分子内索引
+    例如：RBD_pro(2355原子) + D927(53原子) → D927的第一个原子全局索引=2355
+    """
+    cumul = 0
+    for mt in moltypes:
+        for a in mt.atoms:
+            a.global_idx = cumul + a.idx
+        cumul += len(mt.atoms)
+
+
 # ============================================================
-# 2. 图论环检测（SSSR 最小环）
+# 3. 图论环检测（SSSR 最小环）
 # ============================================================
 def find_rings(bonds: List[Tuple[int, int]], max_ring_size: int = 12) -> List[List[int]]:
     """用深度优先搜索找最小环（SSSR 近似：对每个边找最短回路）。"""
@@ -355,7 +368,9 @@ def identify_functional_groups(mt: MolType) -> Dict:
                 atom_arom[idx] = strong >= 4
         elems = [mt.atoms[idx].type_name for idx in r]
         aromatic = all(atom_arom.values())
-        rings_out.append(AromaticRing(atoms=r, aromatic=aromatic, elements=elems))
+        # 转换为全局索引
+        global_r = [mt.atoms[idx].global_idx for idx in r]
+        rings_out.append(AromaticRing(atoms=global_r, aromatic=aromatic, elements=elems))
 
     # 供体：D-H 键且 H 带正电（q(H) > 0）
     # 化学本质：供体的 H 是酸性氢，必须带 δ+；D 通常带 δ-（吸电子使 H 变正）
@@ -369,7 +384,7 @@ def identify_functional_groups(mt: MolType) -> Dict:
         else:
             continue
         if d_atom.z in (7, 8, 16, 9) and h_atom.charge > 0:
-            donors.append(Donor(atom=d_atom.idx, h_atom=h_atom.idx, type_name=d_atom.type_name))
+            donors.append(Donor(atom=d_atom.global_idx, h_atom=h_atom.global_idx, type_name=d_atom.type_name))
 
     # 受体：N/O/F/S 原子本身带负电（或负电环境），有孤对可接受氢键
     # 化学本质：受体是富电子端（δ-），孤对电子与供体的 δ+ H 作用
@@ -382,14 +397,14 @@ def identify_functional_groups(mt: MolType) -> Dict:
             continue
         # 负电荷或电负性环境才有孤对可共享（排除正电 N 等）
         if feat[3] and a.charge < 0:  # 有孤对 + 负电
-            acceptors.append(Acceptor(atom=a.idx, type_name=a.type_name))
+            acceptors.append(Acceptor(atom=a.global_idx, type_name=a.type_name))
 
     # 带电基团
     charged = []
     for a in mt.atoms:
         if abs(a.charge) > 0.3 and a.z != 1:  # 重原子强电荷
             sign = "+" if a.charge > 0 else "-"
-            charged.append(ChargedGroup(atom=a.idx, charge=a.charge, sign=sign, type_name=a.type_name))
+            charged.append(ChargedGroup(atom=a.global_idx, charge=a.charge, sign=sign, type_name=a.type_name))
 
     # 卤素（σ-hole 潜在卤键）
     halogens = [a for a in mt.atoms if a.z in (9, 17, 35, 53)]
@@ -408,35 +423,36 @@ def identify_functional_groups(mt: MolType) -> Dict:
     }
 
 
-def format_report(mt: MolType, result: Dict, offset: int = 0) -> str:
-    """格式化输出官能团报告。offset 为全局原子索引偏移（moltype 内 idx → 全局 idx）。"""
+def format_report(mt: MolType, result: Dict) -> str:
+    """格式化输出官能团报告。使用全局原子索引。"""
+    # 创建全局索引到原子信息的映射
+    atom_by_global = {a.global_idx: a for a in mt.atoms}
+
     lines = []
     lines.append(f"=== {mt.name} ({len(mt.atoms)} atoms) ===")
     lines.append(f"  芳香环 ({sum(1 for r in result['rings'] if r.aromatic)}):")
     for r in result["rings"]:
         if r.aromatic:
-            names = [f"{mt.atoms[i].name}[{offset + i}]" for i in r.atoms]
+            names = [f"{atom_by_global[i].name}[{i}]" for i in r.atoms]
             lines.append(f"    ring{len(r.atoms)}: {'-'.join(names)}")
     lines.append(f"  H键供体 ({len(result['donors'])}):")
     for d in result["donors"]:
-        d_q = mt.atoms[d.atom].charge
-        h_q = mt.atoms[d.h_atom].charge
-        d_idx = offset + d.atom
-        h_idx = offset + d.h_atom
-        lines.append(f"    {mt.atoms[d.atom].name}({d.type_name})[{d_idx}] -H{mt.atoms[d.h_atom].name}[{h_idx}]  qD={d_q:.3f} qH={h_q:.3f}")
+        d_atom = atom_by_global[d.atom]
+        h_atom = atom_by_global[d.h_atom]
+        lines.append(f"    {d_atom.name}({d.type_name})[{d.atom}] -H{h_atom.name}[{d.h_atom}]  qD={d_atom.charge:.3f} qH={h_atom.charge:.3f}")
     lines.append(f"  H键受体 ({len(result['acceptors'])}):")
     for a in result["acceptors"]:
-        a_idx = offset + a.atom
-        lines.append(f"    {mt.atoms[a.atom].name}({a.type_name})[{a_idx}]  q={mt.atoms[a.atom].charge:.3f}")
+        atom = atom_by_global[a.atom]
+        lines.append(f"    {atom.name}({a.type_name})[{a.atom}]  q={atom.charge:.3f}")
     lines.append(f"  强电荷基团 ({len(result['charged'])}):")
     for c in result["charged"]:
-        c_idx = offset + c.atom
-        lines.append(f"    {mt.atoms[c.atom].name}({c.type_name})[{c_idx}] {c.sign}{c.charge:.2f}")
+        atom = atom_by_global[c.atom]
+        lines.append(f"    {atom.name}({c.type_name})[{c.atom}] {c.sign}{c.charge:.2f}")
     if result["halogens"]:
-        hal = [f"{h.name}({h.type_name})[{offset + h.idx}]" for h in result["halogens"]]
+        hal = [f"{h.name}({h.type_name})[{h.global_idx}]" for h in result["halogens"]]
         lines.append(f"  卤素: {', '.join(hal)}")
     if result["metals"]:
-        met = [f"{m.name}[{offset + m.idx}]" for m in result["metals"]]
+        met = [f"{m.name}[{m.global_idx}]" for m in result["metals"]]
         lines.append(f"  金属: {', '.join(met)}")
     return "\n".join(lines)
 
@@ -445,15 +461,11 @@ if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else "dump_md_D927.tpr.txt"
     mts = parse_dump(path)
-    # 计算全局原子偏移
-    offsets = {}
-    cumul = 0
-    for mt in mts:
-        offsets[mt.name] = cumul
-        cumul += len(mt.atoms)
+    # 分配全局原子索引
+    assign_global_indices(mts)
     for mt in mts:
         fill_residues(mt)
         if mt.name in ("RBD_pro", "D927", "KRAS_pro", "GNP_neg"):
             result = identify_functional_groups(mt)
-            print(format_report(mt, result, offsets.get(mt.name, 0)))
+            print(format_report(mt, result))
             print()
