@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""核心数据结构定义：Group（基团）和 Interaction（相互作用）。"""
+"""核心数据结构定义：Group、Interaction、SystemData。"""
 
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict
 import numpy as np
 
-from .constants import GROUP_TYPES
+from .constants import GROUP_TYPES, BOND_TYPES
 
 
 @dataclass
@@ -203,3 +203,65 @@ class WaterBridge(Interaction):
     def name(self) -> str:
         """水桥名称：供体-水-受体。"""
         return f"waterbridge_{self.groups[1].residue_name}{self.groups[1].residue_id}-{self.groups[0].residue_name}{self.groups[0].residue_id}-{self.groups[2].residue_name}{self.groups[2].residue_id}"
+
+
+# ============================================================
+# SystemData 体系分子数据结构
+# ============================================================
+
+@dataclass
+class AtomData:
+    """单个原子的信息。"""
+    atom_global_idx: int        # 全局原子索引（整个体系唯一）
+    atom_idx_in_residue: int    # 残基内索引（用于残基内键连接）
+    atom_name: str              # 原子名（如 "CG"）
+    atom_type: str              # 力场类型（如 "ca"）
+    atom_element: str           # 元素符号（如 "C"）
+    atom_charge: float          # 电荷
+
+
+@dataclass
+class BondData:
+    """残基内的一个键。"""
+    atom1_idx_in_residue: int   # 残基内索引
+    atom2_idx_in_residue: int   # 残基内索引
+    bond_type: str              # 键类型，见 BOND_TYPES
+
+    def __post_init__(self):
+        """验证键类型。"""
+        if self.bond_type not in BOND_TYPES:
+            raise ValueError(f"Invalid bond_type: '{self.bond_type}'")
+
+
+@dataclass
+class ResidueData:
+    """一个残基的数据。"""
+    residue_name: str                   # 残基名（如 "TYR"）
+    residue_global_idx: int             # 全局残基索引（整个体系唯一）
+    residue_idx_in_molecule: int        # 分子内残基编号（PDB 编号）
+    molecule_name: str                  # 所属分子名（如 "RBD_pro"）
+    atoms: List[AtomData]               # 残基内的原子
+    bonds: List[BondData]               # 残基内的键
+
+
+@dataclass
+class InterResidueBond:
+    """残基间的共价键（如肽键、二硫键）。"""
+    residue1_global_idx: int            # 残基 1 的全局索引
+    atom_idx_in_residue1: int           # 原子在残基 1 内的索引
+    residue2_global_idx: int            # 残基 2 的全局索引
+    atom_idx_in_residue2: int           # 原子在残基 2 内的索引
+    bond_type: str                      # 键类型
+
+    def __post_init__(self):
+        """验证键类型。"""
+        if self.bond_type not in BOND_TYPES:
+            raise ValueError(f"Invalid bond_type: '{self.bond_type}'")
+
+
+@dataclass
+class SystemData:
+    """体系数据，连接 Reader 和 Identifier。"""
+    system_name: str
+    residues: List[ResidueData]
+    inter_residue_bonds: List[InterResidueBond]

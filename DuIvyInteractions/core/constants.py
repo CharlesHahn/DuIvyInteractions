@@ -9,8 +9,8 @@ GROUP_TYPES = frozenset({
     "halogen", "metal", "water", "hydrophobic",  # 其他
 })
 
-# 键级类型
-BOND_ORDERS = frozenset({
+# 键类型
+BOND_TYPES = frozenset({
     "single", "double", "triple", "aromatic",  # 化学键
     "constrained", "virtual",                   # 特殊
 })
