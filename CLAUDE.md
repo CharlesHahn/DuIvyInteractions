@@ -2,6 +2,49 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 编程哲学（项目规范）
+
+### 核心三原则
+
+1. **KISS（Keep It Simple, Stupid）**
+   - 代码行数硬约束：函数 ≤ 20 行，类 ≤ 100 行
+   - 不做"可能有用"的功能，只做当前需要的
+   - 简单方案优先，复杂方案需论证
+
+2. **显式优于隐式**
+   - 数据流必须清晰可见，不隐藏复杂度
+   - 不使用魔法数字，全部定义为常量
+   - 类型注解必加，提高可读性
+
+3. **可读性即文档**
+   - 代码即文档，docstring 只写"是什么"，不解释"为什么"
+   - "为什么"属于设计文档（doc/），不属于代码
+   - 美丽优于丑陋，简单优于复杂
+
+### Python 之禅（最相关 5 条）
+
+```python
+import this
+# 1. Beautiful is better than ugly.
+# 2. Simple is better than complex.
+# 3. Complex is better than complicated.
+# 4. Explicit is better than implicit.
+# 5. Readability counts.
+```
+
+### 实践规矩
+
+| 规矩 | 说明 |
+|:----|:----|
+| 函数 ≤ 20 行 | 强制拆分复杂逻辑 |
+| 类 ≤ 100 行 | 单一职责 |
+| 无魔法数字 | 全部定义为常量 |
+| 类型注解必加 | `def func(x: int) -> str:` |
+| docstring 简洁 | 只写"是什么"，不写"为什么" |
+| 不重复设计文档 | 设计决策在 doc/，不在代码 |
+
+---
+
 ## 项目：基于 MD 拓扑力场参数的相互作用判定工具
 
 ### 项目目标
