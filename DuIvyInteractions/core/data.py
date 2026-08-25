@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Group 基团数据结构定义。"""
+"""核心数据结构定义：Group（基团）和 Interaction（相互作用）。"""
 
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Tuple, Dict
+import numpy as np
 
 from .constants import GROUP_TYPES
 
@@ -67,3 +68,138 @@ def get_bonds_for_atom(group: Group, atom_idx: int) -> Dict[str, str]:
     """获取指定原子在 Group 中的所有键。"""
     bonds = group.metadata.get("bonds", {})
     return {k: v for k, v in bonds.items() if str(atom_idx) in k.split("_")}
+
+
+# ============================================================
+# Interaction 相互作用数据结构
+# ============================================================
+
+@dataclass
+class Interaction:
+    """一组基团之间的相互作用记录（全帧）。
+
+    Attributes:
+        interaction_type: 相互作用类型
+        groups: 参与的基团元组（2个或更多）
+        existence: bool 数组，每帧是否存在
+        metrics: 几何指标字典，键为指标名，值为 numpy 数组
+    """
+
+    interaction_type: str
+    groups: Tuple[Group, ...]
+    existence: np.ndarray
+    metrics: Dict[str, np.ndarray]
+
+    def __post_init__(self):
+        """验证数据完整性。"""
+        n_frames = len(self.existence)
+        for name, arr in self.metrics.items():
+            if len(arr) != n_frames:
+                raise ValueError(
+                    f"{name} length {len(arr)} != existence length {n_frames}"
+                )
+
+    @property
+    def n_frames(self) -> int:
+        """帧数。"""
+        return len(self.existence)
+
+    @property
+    def occupancy(self) -> float:
+        """存在比例。"""
+        return np.sum(self.existence) / self.n_frames
+
+    @property
+    def name(self) -> str:
+        """相互作用名称，由基团信息组合而成。"""
+        groups_str = "-".join(
+            f"{g.molecule}_{g.residue_name}{g.residue_id}"
+            for g in self.groups
+        )
+        return f"{self.interaction_type}_{groups_str}"
+
+    def __repr__(self) -> str:
+        groups_str = ", ".join(g.group_type for g in self.groups)
+        return (f"Interaction(type='{self.interaction_type}', "
+                f"groups=({groups_str}), frames={self.n_frames})")
+
+
+@dataclass
+class HydrogenBond(Interaction):
+    """氢键相互作用。"""
+
+    @classmethod
+    def create(cls, donor: Group, acceptor: Group,
+               existence: np.ndarray, distance: np.ndarray,
+               angle: np.ndarray) -> "HydrogenBond":
+        """创建氢键实例。"""
+        return cls(
+            interaction_type="hydrogen_bond",
+            groups=(donor, acceptor),
+            existence=existence,
+            metrics={"distance": distance, "angle": angle}
+        )
+
+    @property
+    def donor(self) -> Group:
+        """供体基团。"""
+        return self.groups[0]
+
+    @property
+    def acceptor(self) -> Group:
+        """受体基团。"""
+        return self.groups[1]
+
+    @property
+    def name(self) -> str:
+        """氢键名称：供体→受体。"""
+        return f"hbond_{self.donor.residue_name}{self.donor.residue_id}→{self.acceptor.residue_name}{self.acceptor.residue_id}"
+
+
+@dataclass
+class PiStacking(Interaction):
+    """π-π 堆积相互作用。"""
+
+    @classmethod
+    def create(cls, ring1: Group, ring2: Group,
+               existence: np.ndarray, distance: np.ndarray,
+               angle: np.ndarray, offset: np.ndarray) -> "PiStacking":
+        """创建 π-π 堆积实例。"""
+        return cls(
+            interaction_type="pi_stacking",
+            groups=(ring1, ring2),
+            existence=existence,
+            metrics={"distance": distance, "angle": angle, "offset": offset}
+        )
+
+    @property
+    def name(self) -> str:
+        """π-π堆积名称：环1-环2。"""
+        return f"pistack_{self.groups[0].residue_name}{self.groups[0].residue_id}-{self.groups[1].residue_name}{self.groups[1].residue_id}"
+
+
+@dataclass
+class WaterBridge(Interaction):
+    """水桥相互作用。"""
+
+    @classmethod
+    def create(cls, water: Group, donor: Group, acceptor: Group,
+               existence: np.ndarray, distance_donor_water: np.ndarray,
+               distance_water_acceptor: np.ndarray,
+               angle: np.ndarray) -> "WaterBridge":
+        """创建水桥实例。"""
+        return cls(
+            interaction_type="water_bridge",
+            groups=(water, donor, acceptor),
+            existence=existence,
+            metrics={
+                "distance_donor_water": distance_donor_water,
+                "distance_water_acceptor": distance_water_acceptor,
+                "angle": angle
+            }
+        )
+
+    @property
+    def name(self) -> str:
+        """水桥名称：供体-水-受体。"""
+        return f"waterbridge_{self.groups[1].residue_name}{self.groups[1].residue_id}-{self.groups[0].residue_name}{self.groups[0].residue_id}-{self.groups[2].residue_name}{self.groups[2].residue_id}"
