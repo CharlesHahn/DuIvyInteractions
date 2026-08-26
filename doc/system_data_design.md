@@ -69,6 +69,7 @@ PDBReader    ──┘                                └── SmartsIdentifier
 | 残基信息 | 输出定位 | 必须 |
 | 电荷 | 供受体/带电基团判定 | 必须 |
 | 元素符号 | 元素识别 | 必须 |
+| 原子质量 | 质心计算、质量加权分析 | 建议有 |
 | 残基间键 | 骨架连接（未来扩展） | 建议有 |
 
 ### 2.4 索引设计
@@ -97,6 +98,7 @@ class AtomData:
     atom_type: str              # 力场类型（如 "ca"）
     atom_element: str           # 元素符号（如 "C"）
     atom_charge: float          # 电荷
+    atom_mass: float            # 原子质量（原子质量单位，-1.0 表示未设置）
 ```
 
 **设计决策**：
@@ -106,6 +108,7 @@ class AtomData:
 | 两个索引 | `atom_global_idx` + `atom_idx_in_residue` | 全局用于距离计算，局部用于键连接 |
 | 无 atomic_number | 删除 | 与 element 冗余，可推导 |
 | 字段前缀 `atom_` | 统一 | 与残基字段区分，避免混淆 |
+| mass 默认值 | `-1.0` | 区分"未设置"与虚拟粒子（mass=0） |
 
 ### 3.2 BondData
 
@@ -238,10 +241,12 @@ SystemData(
             atoms=[
                 AtomData(atom_global_idx=0, atom_idx_in_residue=0,
                          atom_name="N", atom_type="N",
-                         atom_element="N", atom_charge=-0.416),
+                         atom_element="N", atom_charge=-0.416,
+                         atom_mass=14.007),
                 AtomData(atom_global_idx=1, atom_idx_in_residue=1,
                          atom_name="CA", atom_type="CX",
-                         atom_element="C", atom_charge=0.023),
+                         atom_element="C", atom_charge=0.023,
+                         atom_mass=12.011),
                 # ...
             ],
             bonds=[
@@ -259,7 +264,8 @@ SystemData(
             atoms=[
                 AtomData(atom_global_idx=2355, atom_idx_in_residue=0,
                          atom_name="C3", atom_type="c3",
-                         atom_element="C", atom_charge=-0.46),
+                         atom_element="C", atom_charge=-0.46,
+                         atom_mass=12.011),
                 # ...
             ],
             bonds=[
@@ -310,7 +316,8 @@ SystemData
 │     │     │     │     ├── atom_name: "N"
 │     │     │     │     ├── atom_type: "N"
 │     │     │     │     ├── atom_element: "N"
-│     │     │     │     └── atom_charge: -0.416
+│     │     │     │     ├── atom_charge: -0.416
+│     │     │     │     └── atom_mass: 14.007
 │     │     │     ├── AtomData (CA)
 │     │     │     └── ...
 │     │     └── bonds: List[BondData]

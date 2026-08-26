@@ -218,6 +218,7 @@ class AtomData:
     atom_type: str              # 力场类型（如 "ca"）
     atom_element: str           # 元素符号（如 "C"）
     atom_charge: float          # 电荷
+    atom_mass: float            # 原子质量（原子质量单位，-1.0 表示未设置）
 
 
 @dataclass
