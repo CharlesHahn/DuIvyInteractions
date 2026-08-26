@@ -6,7 +6,7 @@ GROUP_TYPES = frozenset({
     "H_donor", "H_acceptor",           # H键
     "aromatic_ring",                    # π 相关
     "charged_positive", "charged_negative",  # 电荷
-    "halogen", "halogen_acceptor",      # 卤键
+    "halogen_donor", "halogen_acceptor",  # 卤键
     "metal", "water", "hydrophobic",   # 其他
 })
 

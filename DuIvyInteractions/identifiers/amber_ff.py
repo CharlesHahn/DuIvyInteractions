@@ -389,7 +389,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
             if not self._is_bonded_to_element(atom, res, bond_graph, 'C'):
                 continue
             groups.append(Group(
-                group_id=gid, group_type="halogen",
+                group_id=gid, group_type="halogen_donor",
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
