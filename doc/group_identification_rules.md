@@ -48,4 +48,20 @@
 
 ---
 
+## 3. 金属离子（metal）
+
+**定义**：元素在金属离子列表中的单个原子。
+
+**METAL_IONS 列表**（来自 PLIP config.py）：
+
+| 类别 | 元素 |
+|------|------|
+| 碱金属 | Li, Na, K, Rb, Cs |
+| 碱土金属 | Mg, Ca, Sr, Ba |
+| 过渡金属 | Cr, Mn, Fe, Co, Ni, Cu, Zn, Ru, Rh, Pd, Ag, Cd, W, Os, Ir, Pt, Au, Hg |
+| 镧系 | La, Ce, Pr, Sm, Eu, Gd, Tb, Yb, Lu |
+| 其他 | Al, Ga, In, Sb, Tl, Pb |
+
+---
+
 *文档结束*

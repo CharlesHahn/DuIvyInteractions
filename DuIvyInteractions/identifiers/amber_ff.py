@@ -45,6 +45,17 @@ ACCEPTOR_TYPES = frozenset({
 })
 
 
+# 金属离子（来自 PLIP config.py）
+METAL_IONS = frozenset({
+    "Ca", "Co", "Mg", "Mn", "Fe", "Cu", "Zn",
+    "Li", "Na", "K", "Rb", "Sr", "Cs", "Ba",
+    "Cr", "Ni", "Ru", "Rh", "Pd", "Ag", "Cd",
+    "La", "W", "Os", "Ir", "Pt", "Au", "Hg",
+    "Ce", "Pr", "Sm", "Eu", "Gd", "Tb", "Yb", "Lu",
+    "Al", "Ga", "In", "Sb", "Tl", "Pb"
+})
+
+
 class AmberFFGroupIdentifier(GroupIdentifier):
     """Amber 力场基团识别器。"""
 
@@ -384,7 +395,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         gid = start_id
 
         for atom in res.atoms:
-            if atom.atom_element in ('Mg', 'Na', 'Ca', 'Zn', 'Fe', 'Mn', 'Cu', 'K'):
+            if atom.atom_element in METAL_IONS:
                 groups.append(Group(
                     group_id=gid, group_type="metal",
                     molecule=res.molecule_name,
