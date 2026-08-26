@@ -265,3 +265,43 @@ class SystemData:
     system_name: str
     residues: List[ResidueData]
     inter_residue_bonds: List[InterResidueBond]
+
+    def __post_init__(self):
+        """验证数据完整性。"""
+        # 验证 residue_global_idx 唯一性
+        res_indices = [r.residue_global_idx for r in self.residues]
+        if len(res_indices) != len(set(res_indices)):
+            raise ValueError("Duplicate residue_global_idx found")
+
+        # 验证 atom_global_idx 唯一性
+        atom_indices = []
+        for r in self.residues:
+            for a in r.atoms:
+                atom_indices.append(a.atom_global_idx)
+        if len(atom_indices) != len(set(atom_indices)):
+            raise ValueError("Duplicate atom_global_idx found")
+
+    @property
+    def n_residues(self) -> int:
+        """残基数量。"""
+        return len(self.residues)
+
+    def get_residue_by_global_idx(self, idx: int) -> ResidueData:
+        """根据全局索引获取残基。"""
+        for r in self.residues:
+            if r.residue_global_idx == idx:
+                return r
+        raise KeyError(f"Residue with global_idx={idx} not found")
+
+    def get_atoms_by_molecule(self, molecule_name: str) -> List[AtomData]:
+        """获取指定分子的所有原子。"""
+        atoms = []
+        for r in self.residues:
+            if r.molecule_name == molecule_name:
+                atoms.extend(r.atoms)
+        return atoms
+
+    def __repr__(self) -> str:
+        return (f"SystemData(name='{self.system_name}', "
+                f"residues={self.n_residues}, "
+                f"inter_residue_bonds={len(self.inter_residue_bonds)})")

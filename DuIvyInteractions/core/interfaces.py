@@ -1,11 +1,33 @@
 # -*- coding: utf-8 -*-
-"""核心接口定义：GroupIdentifier（识别器）和 InteractionDetector（检测器）。"""
+"""核心接口定义：Reader（读取器）、GroupIdentifier（识别器）、InteractionDetector（检测器）。"""
 
 from abc import ABC, abstractmethod
 from typing import List
 import numpy as np
 
-from .data import Group, Interaction
+from .data import Group, Interaction, SystemData
+
+
+class Reader(ABC):
+    """数据读取器接口。"""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """读取器名称。"""
+        ...
+
+    @abstractmethod
+    def read(self, source: str) -> SystemData:
+        """从文件读取数据。
+
+        Args:
+            source: 文件路径
+
+        Returns:
+            SystemData 实例
+        """
+        ...
 
 
 class GroupIdentifier(ABC):
