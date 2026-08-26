@@ -126,9 +126,13 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         charged, gid = self._find_charged(res, gid)
         groups.extend(charged)
 
-        # 卤素
-        halogens, gid = self._find_halogens(res, gid)
+        # 卤键供体
+        halogens, gid = self._find_halogens(res, bond_graph, gid)
         groups.extend(halogens)
+
+        # 卤键受体
+        hal_acceptors, gid = self._find_halogen_acceptors(res, bond_graph, gid)
+        groups.extend(hal_acceptors)
 
         # 金属
         metals, gid = self._find_metals(res, gid)
@@ -372,26 +376,83 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         return groups, gid
 
     def _find_halogens(self, res: ResidueData,
+                       bond_graph: Dict[int, Set[int]],
                        start_id: int) -> Tuple[List[Group], int]:
-        """检测卤素。"""
+        """检测卤键供体（卤素连接到碳）。"""
         groups: List[Group] = []
         gid = start_id
+        local_to_global = {a.atom_idx_in_residue: a.atom_global_idx for a in res.atoms}
 
         for atom in res.atoms:
-            if atom.atom_element in ('F', 'Cl', 'Br', 'I'):
-                groups.append(Group(
-                    group_id=gid, group_type="halogen",
-                    molecule=res.molecule_name,
-                    residue_name=res.residue_name,
-                    residue_id=res.residue_global_idx,
-                    atom_indices=[atom.atom_global_idx],
-                    atom_types=[atom.atom_type],
-                    elements=[atom.atom_element],
-                    charges=[atom.atom_charge]
-                ))
-                gid += 1
+            if atom.atom_element not in ('F', 'Cl', 'Br', 'I'):
+                continue
+            if not self._is_bonded_to_element(atom, res, bond_graph, 'C'):
+                continue
+            groups.append(Group(
+                group_id=gid, group_type="halogen",
+                molecule=res.molecule_name,
+                residue_name=res.residue_name,
+                residue_id=res.residue_global_idx,
+                atom_indices=[atom.atom_global_idx],
+                atom_types=[atom.atom_type],
+                elements=[atom.atom_element],
+                charges=[atom.atom_charge]
+            ))
+            gid += 1
 
         return groups, gid
+
+    def _find_halogen_acceptors(self, res: ResidueData,
+                                bond_graph: Dict[int, Set[int]],
+                                start_id: int) -> Tuple[List[Group], int]:
+        """检测卤键受体（C/P/S 连接到 O/P/N/S）。"""
+        groups: List[Group] = []
+        gid = start_id
+        ACCEPTOR_ELEMENTS = ('C', 'P', 'S')
+        NEIGHBOR_ELEMENTS = ('O', 'P', 'N', 'S')
+
+        for atom in res.atoms:
+            if atom.atom_element not in ACCEPTOR_ELEMENTS:
+                continue
+            if not self._is_bonded_to_any_element(atom, res, bond_graph, NEIGHBOR_ELEMENTS):
+                continue
+            groups.append(Group(
+                group_id=gid, group_type="halogen_acceptor",
+                molecule=res.molecule_name,
+                residue_name=res.residue_name,
+                residue_id=res.residue_global_idx,
+                atom_indices=[atom.atom_global_idx],
+                atom_types=[atom.atom_type],
+                elements=[atom.atom_element],
+                charges=[atom.atom_charge]
+            ))
+            gid += 1
+
+        return groups, gid
+
+    def _is_bonded_to_element(self, atom: AtomData, res: ResidueData,
+                              bond_graph: Dict[int, Set[int]],
+                              target_elem: str) -> bool:
+        """检查原子是否连接到指定元素。"""
+        g_idx = atom.atom_global_idx
+        neighbors = bond_graph.get(g_idx, set())
+        for n_idx in neighbors:
+            for a in res.atoms:
+                if a.atom_global_idx == n_idx and a.atom_element == target_elem:
+                    return True
+        return False
+
+    def _is_bonded_to_any_element(self, atom: AtomData, res: ResidueData,
+                                  bond_graph: Dict[int, Set[int]],
+                                  target_elems: Tuple[str, ...]) -> bool:
+        """检查原子是否连接到任一指定元素。"""
+        g_idx = atom.atom_global_idx
+        neighbors = bond_graph.get(g_idx, set())
+        for n_idx in neighbors:
+            for a in res.atoms:
+                if a.atom_global_idx == n_idx and a.atom_element in target_elems:
+                    return True
+        return False
 
     def _find_metals(self, res: ResidueData,
                      start_id: int) -> Tuple[List[Group], int]:
