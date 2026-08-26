@@ -127,8 +127,8 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         groups.extend(charged)
 
         # 卤键供体
-        halogens, gid = self._find_halogens(res, bond_graph, gid)
-        groups.extend(halogens)
+        hal_donors, gid = self._find_halogen_donors(res, bond_graph, gid)
+        groups.extend(hal_donors)
 
         # 卤键受体
         hal_acceptors, gid = self._find_halogen_acceptors(res, bond_graph, gid)
@@ -375,7 +375,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
         return groups, gid
 
-    def _find_halogens(self, res: ResidueData,
+    def _find_halogen_donors(self, res: ResidueData,
                        bond_graph: Dict[int, Set[int]],
                        start_id: int) -> Tuple[List[Group], int]:
         """检测卤键供体（卤素连接到碳）。"""
