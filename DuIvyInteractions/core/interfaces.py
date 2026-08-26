@@ -40,11 +40,11 @@ class GroupIdentifier(ABC):
         ...
 
     @abstractmethod
-    def identify(self, source: str) -> List[Group]:
-        """从数据源识别基团。
+    def identify(self, system_data: SystemData) -> List[Group]:
+        """从 SystemData 识别基团。
 
         Args:
-            source: 数据源（文件路径、SMILES 等）
+            system_data: 体系数据
 
         Returns:
             识别到的基团列表
