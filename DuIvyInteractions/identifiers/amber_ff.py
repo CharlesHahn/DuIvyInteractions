@@ -31,7 +31,8 @@ HALOGEN_ATOMIC_NUMBERS = frozenset({9, 17, 35, 53})
 # 金属原子序数（常见生物金属）
 METAL_ATOMIC_NUMBERS = frozenset({3, 11, 12, 19, 20, 25, 26, 29, 30})
 
-# 受体类型特征（有孤对电子）
+# 水分子残基名
+WATER_RESIDUES = frozenset({"SOL", "HOH", "WAT"})
 ACCEPTOR_TYPES = frozenset({
     "o", "o2", "oh", "os", "oe", "o1", "ow",  # GAFF 氧
     "n", "n2", "n3",                            # GAFF 氮（酰胺/胺）
@@ -132,6 +133,10 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         # 金属
         metals, gid = self._find_metals(res, gid)
         groups.extend(metals)
+
+        # 水
+        water, gid = self._find_water(res, gid)
+        groups.extend(water)
 
         return groups, gid
 
@@ -407,5 +412,26 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                     charges=[atom.atom_charge]
                 ))
                 gid += 1
+
+        return groups, gid
+
+    def _find_water(self, res: ResidueData,
+                    start_id: int) -> Tuple[List[Group], int]:
+        """检测水分子。"""
+        groups: List[Group] = []
+        gid = start_id
+
+        if res.residue_name in WATER_RESIDUES:
+            groups.append(Group(
+                group_id=gid, group_type="water",
+                molecule=res.molecule_name,
+                residue_name=res.residue_name,
+                residue_id=res.residue_global_idx,
+                atom_indices=[a.atom_global_idx for a in res.atoms],
+                atom_types=[a.atom_type for a in res.atoms],
+                elements=[a.atom_element for a in res.atoms],
+                charges=[a.atom_charge for a in res.atoms]
+            ))
+            gid += 1
 
         return groups, gid
