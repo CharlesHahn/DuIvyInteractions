@@ -127,17 +127,19 @@ class BondData:
 |:----|:----|:----|
 | 合并 constraints | 是 | 约束也是一种"键"，统一存储 |
 | 使用局部索引 | `atom_idx_in_residue` | 残基内键，局部索引足够 |
-| 键类型字段 | `bond_type` | 区分单键、双键、芳香键、约束，见 BOND_TYPES |
+| 键类型字段 | `bond_type` | 区分来源：常规键、约束、SETTLE |
 
 **BOND_TYPES 取值**：
 
 | bond_type | 说明 | 来源 |
 |:----|:----|:----|
+| `"bond"` | 常规键（键级未知） | dump Bond 段 |
+| `"constrained"` | LINCS 约束 | dump Constraint 段（如 N-H 键） |
+| `"settle"` | SETTLE 水约束 | dump Settle 段（如 O-H、H-H 距离） |
 | `"single"` | 单键 | tpr func=1, b0≈1.5Å |
 | `"double"` | 双键 | tpr func=1, b0≈1.3Å |
 | `"triple"` | 三键 | tpr func=1, b0≈1.2Å |
 | `"aromatic"` | 芳香键 | tpr func=1, b0≈1.4Å + 芳香类型 |
-| `"constrained"` | LINCS 约束 | tpr func=2（如 N-H 键） |
 | `"virtual"` | 虚拟位点 | tpr func=3+ |
 
 ### 3.3 ResidueData

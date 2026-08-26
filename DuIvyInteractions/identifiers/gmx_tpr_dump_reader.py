@@ -152,16 +152,17 @@ class GmxTprDumpReader(Reader):
                         current_moltype['residues'].append(residue)
                 
                 elif section == "ilist" and self._is_ilist_entry(line):
-                    if ilist_section in ("Bond", "Constraint"):
+                    if ilist_section == "Bond":
                         bond = self._parse_ilist_entry(line)
                         if bond:
-                            if ilist_section == "Bond":
-                                current_moltype['bonds'].append(bond)
-                            else:
-                                current_moltype['constraints'].append(bond)
+                            current_moltype['bonds'].append((*bond, "bond"))
+                    elif ilist_section == "Constraint":
+                        bond = self._parse_ilist_entry(line)
+                        if bond:
+                            current_moltype['bonds'].append((*bond, "constrained"))
                     elif ilist_section == "Settle":
                         for bond in self._parse_settle_entry(line):
-                            current_moltype['constraints'].append(bond)
+                            current_moltype['bonds'].append((*bond, "settle"))
         
         return moltypes
 
@@ -171,15 +172,12 @@ class GmxTprDumpReader(Reader):
 
     def _create_moltype(self, line: str) -> dict:
         """创建新的 moltype 字典。"""
-        # 提取 moltype 索引
-        # 格式: "   moltype (0):"
         idx_str = line.split("(")[1].split(")")[0]
         return {
             'idx': int(idx_str),
             'name': "",
             'atoms': [],
-            'bonds': [],
-            'constraints': [],
+            'bonds': [],      # [(a1, a2, bond_type), ...]
             'residues': []
         }
 
@@ -391,15 +389,15 @@ class GmxTprDumpReader(Reader):
         template_intra = {i: [] for i in range(len(mt['residues']))}
         template_inter = []
         
-        for a1, a2 in mt['bonds'] + mt['constraints']:
+        for a1, a2, bond_type in mt['bonds']:
             r1, l1 = atom_to_local.get(a1, (None, None))
             r2, l2 = atom_to_local.get(a2, (None, None))
             if r1 is None or r2 is None:
                 continue
             if r1 == r2:
-                template_intra[r1].append(BondData(l1, l2, "bond"))
+                template_intra[r1].append(BondData(l1, l2, bond_type))
             else:
-                template_inter.append((r1, l1, r2, l2))
+                template_inter.append((r1, l1, r2, l2, bond_type))
         
         # 4. 按分子数量复制
         atoms_per_mol = len(mt['atoms'])
@@ -438,10 +436,10 @@ class GmxTprDumpReader(Reader):
                 ))
             
             # 复制残基间键
-            for r1, l1, r2, l2 in template_inter:
+            for r1, l1, r2, l2, bond_type in template_inter:
                 all_inter_bonds.append(InterResidueBond(
                     mol_residue_offset + r1, l1,
-                    mol_residue_offset + r2, l2, "bond"))
+                    mol_residue_offset + r2, l2, bond_type))
         
         new_atom_offset = atom_offset + num_mol * atoms_per_mol
         new_residue_offset = residue_offset + num_mol * residues_per_mol

@@ -13,7 +13,7 @@ GROUP_TYPES = frozenset({
 BOND_TYPES = frozenset({
     "bond",                                     # 未知键级（默认值）
     "single", "double", "triple", "aromatic",  # 化学键
-    "constrained", "virtual",                   # 特殊
+    "constrained", "settle", "virtual",         # 特殊
 })
 
 # 原子序数到元素符号的映射（完整周期表）
