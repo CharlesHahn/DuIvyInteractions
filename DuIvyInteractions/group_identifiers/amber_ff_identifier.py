@@ -48,14 +48,14 @@ ACCEPTOR_TYPES = frozenset({
 })
 
 
-# 金属离子（来自 PLIP config.py，全大写匹配 atom_element）
+# 金属离子（来自 PLIP config.py，格式与 ATOMIC_NUMBER_TO_ELEMENT 一致：首字母大写）
 METAL_IONS = frozenset({
-    "CA", "CO", "MG", "MN", "FE", "CU", "ZN",
-    "LI", "NA", "K", "RB", "SR", "CS", "BA",
-    "CR", "NI", "RU", "RH", "PD", "AG", "CD",
-    "LA", "W", "OS", "IR", "PT", "AU", "HG",
-    "CE", "PR", "SM", "EU", "GD", "TB", "YB", "LU",
-    "AL", "GA", "IN", "SB", "TL", "PB",
+    "Ca", "Co", "Mg", "Mn", "Fe", "Cu", "Zn",
+    "Li", "Na", "K", "Rb", "Sr", "Cs", "Ba",
+    "Cr", "Ni", "Ru", "Rh", "Pd", "Ag", "Cd",
+    "La", "W", "Os", "Ir", "Pt", "Au", "Hg",
+    "Ce", "Pr", "Sm", "Eu", "Gd", "Tb", "Yb", "Lu",
+    "Al", "Ga", "In", "Sb", "Tl", "Pb",
 })
 
 # 电荷验证阈值
@@ -207,19 +207,23 @@ class AmberFFGroupIdentifier(GroupIdentifier):
     def _filter_aromatic_rings(self, rings: List[List[int]],
                                res: ResidueData) -> List[List[int]]:
         """过滤出满足芳香性两条件的环（平面性在相互作用检测阶段计算）。"""
+        # 沙箱环境下列表推导式无法直接访问模块级常量，先绑定到局部变量
+        strong_aromatic = STRONG_AROMATIC
+        compatible_types = COMPATIBLE_TYPES
+
         aromatic_rings = []
         for ring_atoms in rings:
             n = len(ring_atoms)
             types = [res.atoms[i].atom_type for i in ring_atoms]
 
             # 条件1：至少 n-1 个原子在 STRONG_AROMIC 中
-            strong_count = sum(1 for t in types if t in STRONG_AROMIC)
+            strong_count = len([t for t in types if t in strong_aromatic])
             if strong_count < n - 1:
                 continue
 
             # 条件2：不在 STRONG_AROMIC 中的原子必须在 COMPATIBLE 中
-            non_aromatic = [t for t in types if t not in STRONG_AROMIC]
-            if not all(t in COMPATIBLE_TYPES for t in non_aromatic):
+            non_aromatic = [t for t in types if t not in strong_aromatic]
+            if not all(t in compatible_types for t in non_aromatic):
                 continue
 
             aromatic_rings.append(ring_atoms)
