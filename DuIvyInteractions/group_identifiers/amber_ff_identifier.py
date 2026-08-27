@@ -148,7 +148,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         groups.extend(rings)
 
         # H 键供体/受体
-        donors, gid = self._find_donors(res, bond_graph, gid)
+        donors, gid = self._find_donors(res, gid)
         groups.extend(donors)
 
         acceptors, gid = self._find_acceptors(res, gid)
@@ -175,7 +175,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         groups.extend(water)
 
         # 疏水原子
-        hydrophobic, gid = self._find_hydrophobic(res, bond_graph, gid)
+        hydrophobic, gid = self._find_hydrophobic(res, bond_graph, gid, atom_map)
         groups.extend(hydrophobic)
 
         return groups, gid
@@ -207,13 +207,6 @@ class AmberFFGroupIdentifier(GroupIdentifier):
     def _filter_aromatic_rings(self, rings: List[List[int]],
                                res: ResidueData) -> List[List[int]]:
         """过滤出满足芳香性两条件的环（平面性在相互作用检测阶段计算）。"""
-        # 构建残基内局部连接图
-        local_graph: Dict[int, Set[int]] = defaultdict(set)
-        for b in res.bonds:
-            i1, i2 = b.atom1_idx_in_residue, b.atom2_idx_in_residue
-            local_graph[i1].add(i2)
-            local_graph[i2].add(i1)
-
         aromatic_rings = []
         for ring_atoms in rings:
             n = len(ring_atoms)
@@ -295,7 +288,6 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         return accepted
 
     def _find_donors(self, res: ResidueData,
-                     bond_graph: Dict[int, Set[int]],
                      start_id: int) -> Tuple[List[Group], int]:
         """检测 H 键供体（D-H 键且 q(H)>0）。"""
         groups: List[Group] = []
@@ -739,13 +731,11 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
     def _find_hydrophobic(self, res: ResidueData,
                           bond_graph: Dict[int, Set[int]],
-                          start_id: int) -> Tuple[List[Group], int]:
+                          start_id: int,
+                          atom_map: Dict[int, AtomData]) -> Tuple[List[Group], int]:
         """检测疏水原子（C + 所有邻居是 C/H）。"""
         groups: List[Group] = []
         gid = start_id
-
-        # 构建 atom_global_idx → atom 映射
-        atom_map = {a.atom_global_idx: a for a in res.atoms}
 
         for atom in res.atoms:
             # 条件1：必须是碳
