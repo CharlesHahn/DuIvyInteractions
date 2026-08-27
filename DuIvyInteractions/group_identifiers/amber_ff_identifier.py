@@ -6,7 +6,6 @@
 
 from typing import List, Dict, Set, Tuple
 from collections import defaultdict
-import numpy as np
 
 from ..core.interfaces import GroupIdentifier
 from ..core.datas import Group, SystemData, ResidueData, AtomData
@@ -33,9 +32,6 @@ COMPATIBLE_TYPES = frozenset({
     "cc", "cd",         # GAFF 非纯芳香共轭环碳
     "pc", "pd",         # GAFF 共轭环内 sp2 磷
 })
-
-# 平面性阈值（来源：PLIP AROMATIC_PLANARITY）
-AROMATIC_PLANARITY = 5.0  # 度
 
 # H 键供体的 D 原子原子序数（N, O, S, F）
 DONOR_ATOMIC_NUMBERS = frozenset({7, 8, 16, 9})
@@ -198,7 +194,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
     def _find_aromatic_rings(self, res: ResidueData,
                              bond_graph: Dict[int, Set[int]],
                              start_id: int) -> Tuple[List[Group], int]:
-        """检测芳香环（三条件：n-1芳香 + 兼容原子 + 平面性）。"""
+        """检测芳香环（两条件：n-1芳香 + 兼容原子）。"""
         rings = self._detect_rings(res, bond_graph)
         aromatic_rings = self._filter_aromatic_rings(rings, res)
         aromatic_rings = self._deduplicate_aromatic_rings(aromatic_rings)
@@ -221,7 +217,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
     def _filter_aromatic_rings(self, rings: List[List[int]],
                                res: ResidueData) -> List[List[int]]:
-        """过滤出满足芳香性三条件的环。"""
+        """过滤出满足芳香性两条件的环（平面性在相互作用检测阶段计算）。"""
         # 构建残基内局部连接图
         local_graph: Dict[int, Set[int]] = defaultdict(set)
         for b in res.bonds:
@@ -243,9 +239,6 @@ class AmberFFGroupIdentifier(GroupIdentifier):
             non_aromatic = [t for t in types if t not in STRONG_AROMIC]
             if not all(t in COMPATIBLE_TYPES for t in non_aromatic):
                 continue
-
-            # 条件3：平面性（暂不检查，需要坐标数据）
-            # TODO: 当有坐标数据时，调用 _is_ring_planar 检查平面性
 
             aromatic_rings.append(ring_atoms)
 
@@ -296,48 +289,6 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                     q.append((nb, path + [nb]))
 
         return rings
-
-    @staticmethod
-    def _is_ring_planar(ring_atoms: List[int],
-                        local_graph: Dict[int, Set[int]],
-                        coordinates: np.ndarray) -> bool:
-        """检查环是否平面（法向量夹角阈值 5°）。
-
-        Args:
-            ring_atoms: 环内原子的残基内索引列表
-            local_graph: 残基内局部连接图
-            coordinates: 原子坐标数组 (N, 3)
-
-        Returns:
-            True 如果环是平面的
-        """
-        normals = []
-        ring_set = set(ring_atoms)
-
-        for idx in ring_atoms:
-            neighbors_in_ring = [nb for nb in local_graph[idx]
-                                 if nb in ring_set]
-            if len(neighbors_in_ring) < 2:
-                continue
-            n1, n2 = neighbors_in_ring[0], neighbors_in_ring[1]
-            a_pos = coordinates[idx]
-            v1 = coordinates[n1] - a_pos
-            v2 = coordinates[n2] - a_pos
-            normal = np.cross(v1, v2)
-            norm = np.linalg.norm(normal)
-            if norm > 1e-10:
-                normals.append(normal / norm)
-
-        if len(normals) < 3:
-            return False
-
-        for i in range(len(normals)):
-            for j in range(i + 1, len(normals)):
-                cos_angle = np.clip(np.dot(normals[i], normals[j]), -1.0, 1.0)
-                angle = np.degrees(np.arccos(cos_angle))
-                if AROMATIC_PLANARITY < angle < 180.0 - AROMATIC_PLANARITY:
-                    return False
-        return True
 
     def _deduplicate_aromatic_rings(self, rings: List[List[int]]
                                     ) -> List[List[int]]:
