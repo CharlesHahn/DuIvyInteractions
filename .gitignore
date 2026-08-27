@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Sphinx build output
+docs/_build/
+docs_en/_build/
