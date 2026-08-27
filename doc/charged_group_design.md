@@ -68,6 +68,8 @@ tpr 文件中的部分电荷是力场参数化时的**化学判决的留存记�
 | **ARG** | +1 | CZ, NE, NH1, NH2, HE, HH11, HH12, HH21, HH22 | 胍基，永久正电 |
 | **LYS** | +1 | NZ, HZ1, HZ2, HZ3 | 氨基，永久正电 |
 | **HIP** | +1 | ND1, NE2, HD1, HE2 | 双质子化咪唑，正电 |
+| **ORN** | +1 | NE, HE1, HE2, HE3 | 鸟氨酸，伯胺 |
+| **DAB** | +1 | ND, HD1, HD2, HD3 | 二氨基丁酸，伯胺 |
 | **M3L** | +1 | NZ, CE, CD, 所有甲基 H | 三甲基化 Lys |
 | **MLY** | +1 | NZ, CE, CD, 甲基 H | 甲基化 Lys |
 
@@ -481,6 +483,8 @@ POSITIVE_RESIDUES = {
     "ARG": {"center_atoms": ["CZ", "NE", "NH1", "NH2", "HE", "HH11", "HH12", "HH21", "HH22"], "charge": +1},
     "LYS": {"center_atoms": ["NZ", "HZ1", "HZ2", "HZ3"], "charge": +1},
     "HIP": {"center_atoms": ["ND1", "NE2", "HD1", "HE2"], "charge": +1},
+    "ORN": {"center_atoms": ["NE", "HE1", "HE2", "HE3"], "charge": +1},  # 鸟氨酸
+    "DAB": {"center_atoms": ["ND", "HD1", "HD2", "HD3"], "charge": +1},  # 二氨基丁酸
     # 修饰正电残基
     "M3L": {"center_atoms": ["NZ", "CE", "CD"], "charge": +1},  # 三甲基化 Lys
     "MLY": {"center_atoms": ["NZ", "CE", "CD"], "charge": +1},  # 甲基化 Lys
