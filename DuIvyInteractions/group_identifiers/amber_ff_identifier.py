@@ -33,18 +33,6 @@ COMPATIBLE_TYPES = frozenset({
     "pc", "pd",         # GAFF 共轭环内 sp2 磷
 })
 
-# H 键供体的 D 原子原子序数（N, O, S, F）
-DONOR_ATOMIC_NUMBERS = frozenset({7, 8, 16, 9})
-
-# H 键受体的原子序数（N, O, F, S）
-ACCEPTOR_ATOMIC_NUMBERS = frozenset({7, 8, 9, 16})
-
-# 卤素原子序数
-HALOGEN_ATOMIC_NUMBERS = frozenset({9, 17, 35, 53})
-
-# 金属原子序数（常见生物金属）
-METAL_ATOMIC_NUMBERS = frozenset({3, 11, 12, 19, 20, 25, 26, 29, 30})
-
 # 水分子残基名
 WATER_RESIDUES = frozenset({"SOL", "HOH", "WAT"})
 ACCEPTOR_TYPES = frozenset({
@@ -60,14 +48,14 @@ ACCEPTOR_TYPES = frozenset({
 })
 
 
-# 金属离子（来自 PLIP config.py）
+# 金属离子（来自 PLIP config.py，全大写匹配 atom_element）
 METAL_IONS = frozenset({
-    "Ca", "Co", "Mg", "Mn", "Fe", "Cu", "Zn",
-    "Li", "Na", "K", "Rb", "Sr", "Cs", "Ba",
-    "Cr", "Ni", "Ru", "Rh", "Pd", "Ag", "Cd",
-    "La", "W", "Os", "Ir", "Pt", "Au", "Hg",
-    "Ce", "Pr", "Sm", "Eu", "Gd", "Tb", "Yb", "Lu",
-    "Al", "Ga", "In", "Sb", "Tl", "Pb"
+    "CA", "CO", "MG", "MN", "FE", "CU", "ZN",
+    "LI", "NA", "K", "RB", "SR", "CS", "BA",
+    "CR", "NI", "RU", "RH", "PD", "AG", "CD",
+    "LA", "W", "OS", "IR", "PT", "AU", "HG",
+    "CE", "PR", "SM", "EU", "GD", "TB", "YB", "LU",
+    "AL", "GA", "IN", "SB", "TL", "PB",
 })
 
 # 电荷验证阈值
@@ -153,6 +141,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         """识别一个残基内的所有基团。"""
         groups: List[Group] = []
         gid = start_id
+        atom_map = {a.atom_global_idx: a for a in res.atoms}
 
         # 芳香环
         rings, gid = self._find_aromatic_rings(res, bond_graph, gid)
@@ -170,11 +159,11 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         groups.extend(charged)
 
         # 卤键供体
-        hal_donors, gid = self._find_halogen_donors(res, bond_graph, gid)
+        hal_donors, gid = self._find_halogen_donors(res, bond_graph, gid, atom_map)
         groups.extend(hal_donors)
 
         # 卤键受体
-        hal_acceptors, gid = self._find_halogen_acceptors(res, bond_graph, gid)
+        hal_acceptors, gid = self._find_halogen_acceptors(res, bond_graph, gid, atom_map)
         groups.extend(hal_acceptors)
 
         # 金属
@@ -641,16 +630,16 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
     def _find_halogen_donors(self, res: ResidueData,
                        bond_graph: Dict[int, Set[int]],
-                       start_id: int) -> Tuple[List[Group], int]:
+                       start_id: int,
+                       atom_map: Dict[int, AtomData]) -> Tuple[List[Group], int]:
         """检测卤键供体（卤素连接到碳）。"""
         groups: List[Group] = []
         gid = start_id
-        local_to_global = {a.atom_idx_in_residue: a.atom_global_idx for a in res.atoms}
 
         for atom in res.atoms:
             if atom.atom_element not in ('F', 'Cl', 'Br', 'I'):
                 continue
-            if not self._is_bonded_to_element(atom, res, bond_graph, 'C'):
+            if not self._is_bonded_to_element(atom, bond_graph, 'C', atom_map):
                 continue
             groups.append(Group(
                 group_id=gid, group_type="halogen_donor",
@@ -665,7 +654,8 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
     def _find_halogen_acceptors(self, res: ResidueData,
                                 bond_graph: Dict[int, Set[int]],
-                                start_id: int) -> Tuple[List[Group], int]:
+                                start_id: int,
+                                atom_map: Dict[int, AtomData]) -> Tuple[List[Group], int]:
         """检测卤键受体（C/P/S 连接到 O/P/N/S）。"""
         groups: List[Group] = []
         gid = start_id
@@ -675,7 +665,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         for atom in res.atoms:
             if atom.atom_element not in ACCEPTOR_ELEMENTS:
                 continue
-            if not self._is_bonded_to_any_element(atom, res, bond_graph, NEIGHBOR_ELEMENTS):
+            if not self._is_bonded_to_any_element(atom, bond_graph, NEIGHBOR_ELEMENTS, atom_map):
                 continue
             groups.append(Group(
                 group_id=gid, group_type="halogen_acceptor",
@@ -688,28 +678,26 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
         return groups, gid
 
-    def _is_bonded_to_element(self, atom: AtomData, res: ResidueData,
+    def _is_bonded_to_element(self, atom: AtomData,
                               bond_graph: Dict[int, Set[int]],
-                              target_elem: str) -> bool:
+                              target_elem: str,
+                              atom_map: Dict[int, AtomData]) -> bool:
         """检查原子是否连接到指定元素。"""
-        g_idx = atom.atom_global_idx
-        neighbors = bond_graph.get(g_idx, set())
-        for n_idx in neighbors:
-            for a in res.atoms:
-                if a.atom_global_idx == n_idx and a.atom_element == target_elem:
-                    return True
+        for n_idx in bond_graph.get(atom.atom_global_idx, set()):
+            neighbor = atom_map.get(n_idx)
+            if neighbor and neighbor.atom_element == target_elem:
+                return True
         return False
 
-    def _is_bonded_to_any_element(self, atom: AtomData, res: ResidueData,
+    def _is_bonded_to_any_element(self, atom: AtomData,
                                   bond_graph: Dict[int, Set[int]],
-                                  target_elems: Tuple[str, ...]) -> bool:
+                                  target_elems: Tuple[str, ...],
+                                  atom_map: Dict[int, AtomData]) -> bool:
         """检查原子是否连接到任一指定元素。"""
-        g_idx = atom.atom_global_idx
-        neighbors = bond_graph.get(g_idx, set())
-        for n_idx in neighbors:
-            for a in res.atoms:
-                if a.atom_global_idx == n_idx and a.atom_element in target_elems:
-                    return True
+        for n_idx in bond_graph.get(atom.atom_global_idx, set()):
+            neighbor = atom_map.get(n_idx)
+            if neighbor and neighbor.atom_element in target_elems:
+                return True
         return False
 
     def _find_metals(self, res: ResidueData,
