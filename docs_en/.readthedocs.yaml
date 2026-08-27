@@ -1,4 +1,4 @@
-# Read the Docs 构建配置
+# Read the Docs build configuration — English documentation
 # https://docs.readthedocs.io/en/stable/config-file/v2.html
 
 version: 2
@@ -9,10 +9,8 @@ build:
     python: "3.11"
 
 sphinx:
-  configuration: docs/conf.py
+  configuration: conf.py
 
 python:
   install:
-    - requirements: docs/requirements.txt
-    - method: pip
-      path: .
+    - requirements: requirements.txt
