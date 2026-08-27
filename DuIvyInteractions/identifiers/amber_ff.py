@@ -6,18 +6,36 @@
 
 from typing import List, Dict, Set, Tuple
 from collections import defaultdict
+import numpy as np
 
 from ..core.interfaces import GroupIdentifier
 from ..core.data import Group, SystemData, ResidueData, AtomData
 
 
-# 强芳香类型（直接由类型名确定的芳香原子）
+# 芳香类型（直接由类型名确定的芳香原子）
 STRONG_AROMATIC = frozenset({
+    # GAFF 芳香碳
     "ca", "cg", "ch", "cm", "cn", "cp", "cq", "c1",
-    "n1", "n2", "na", "nb", "nh", "ni", "nj",
+    # GAFF 芳香氮
+    "na", "nb", "nh", "ni", "nj", "n1", "n2",
+    # GAFF 芳香磷
+    "pb",
+    # Amber 蛋白芳香碳
     "CA", "CB", "CC", "CK", "CM", "C5", "C6", "C7", "C*", "CW", "CR", "CN", "CV", "CQ",
-    "NA", "NB", "NC", "N*"
+    # Amber 蛋白芳香氮
+    "NA", "NB", "NC", "N*",
 })
+
+# 兼容原子类型（非芳香，但在 n-1 个芳香原子"强制"下可参与共轭）
+COMPATIBLE_TYPES = frozenset({
+    "C", "N",           # Amber14sb 歧义类型
+    "os", "ss",         # GAFF 呋喃 O / 噻吩 S
+    "cc", "cd",         # GAFF 非纯芳香共轭环碳
+    "pc", "pd",         # GAFF 共轭环内 sp2 磷
+})
+
+# 平面性阈值（来源：PLIP AROMATIC_PLANARITY）
+AROMATIC_PLANARITY = 5.0  # 度
 
 # H 键供体的 D 原子原子序数（N, O, S, F）
 DONOR_ATOMIC_NUMBERS = frozenset({7, 8, 16, 9})
@@ -176,19 +194,15 @@ class AmberFFGroupIdentifier(GroupIdentifier):
     def _find_aromatic_rings(self, res: ResidueData,
                              bond_graph: Dict[int, Set[int]],
                              start_id: int) -> Tuple[List[Group], int]:
-        """检测芳香环。"""
+        """检测芳香环（三条件：n-1芳香 + 兼容原子 + 平面性）。"""
         rings = self._detect_rings(res, bond_graph)
+        aromatic_rings = self._filter_aromatic_rings(rings, res)
+        aromatic_rings = self._deduplicate_aromatic_rings(aromatic_rings)
+
         groups: List[Group] = []
         gid = start_id
 
-        for ring_atoms in rings:
-            types = [res.atoms[i].atom_type for i in ring_atoms]
-            strong = sum(1 for t in types if t in STRONG_AROMATIC)
-            aromatic = strong >= len(ring_atoms) - 1
-
-            if not aromatic:
-                continue
-
+        for ring_atoms in aromatic_rings:
             ring_atom_data = [res.atoms[i] for i in ring_atoms]
             groups.append(Group(
                 group_id=gid, group_type="aromatic_ring",
@@ -201,18 +215,45 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
         return groups, gid
 
-    def _detect_rings(self, res: ResidueData,
-                      bond_graph: Dict[int, Set[int]]) -> List[List[int]]:
-        """检测残基内的环（边删除 + BFS）。"""
+    def _filter_aromatic_rings(self, rings: List[List[int]],
+                               res: ResidueData) -> List[List[int]]:
+        """过滤出满足芳香性三条件的环。"""
         # 构建残基内局部连接图
         local_graph: Dict[int, Set[int]] = defaultdict(set)
-        global_to_local = {}
-        for i, atom in enumerate(res.atoms):
-            global_to_local[atom.atom_global_idx] = i
-
         for b in res.bonds:
-            i1 = b.atom1_idx_in_residue
-            i2 = b.atom2_idx_in_residue
+            i1, i2 = b.atom1_idx_in_residue, b.atom2_idx_in_residue
+            local_graph[i1].add(i2)
+            local_graph[i2].add(i1)
+
+        aromatic_rings = []
+        for ring_atoms in rings:
+            n = len(ring_atoms)
+            types = [res.atoms[i].atom_type for i in ring_atoms]
+
+            # 条件1：至少 n-1 个原子在 STRONG_AROMIC 中
+            strong_count = sum(1 for t in types if t in STRONG_AROMIC)
+            if strong_count < n - 1:
+                continue
+
+            # 条件2：不在 STRONG_AROMIC 中的原子必须在 COMPATIBLE 中
+            non_aromatic = [t for t in types if t not in STRONG_AROMIC]
+            if not all(t in COMPATIBLE_TYPES for t in non_aromatic):
+                continue
+
+            # 条件3：平面性（暂不检查，需要坐标数据）
+            # TODO: 当有坐标数据时，调用 _is_ring_planar 检查平面性
+
+            aromatic_rings.append(ring_atoms)
+
+        return aromatic_rings
+
+    def _detect_rings(self, res: ResidueData,
+                      bond_graph: Dict[int, Set[int]]) -> List[List[int]]:
+        """检测残基内的所有环（BFS，无大小限制）。"""
+        # 构建残基内局部连接图
+        local_graph: Dict[int, Set[int]] = defaultdict(set)
+        for b in res.bonds:
+            i1, i2 = b.atom1_idx_in_residue, b.atom2_idx_in_residue
             local_graph[i1].add(i2)
             local_graph[i2].add(i1)
 
@@ -221,18 +262,18 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         edges = [(i, j) for i in local_graph for j in local_graph[i] if i < j]
 
         for u, v in edges:
-            found = self._bfs_ring(local_graph, u, v, max_size=8)
+            found = self._bfs_ring(local_graph, u, v)
             for ring in found:
                 key = tuple(sorted(ring))
                 if key not in seen:
                     seen.add(key)
                     rings.append(ring)
 
-        return self._remove_redundant_rings(rings)
+        return rings
 
     def _bfs_ring(self, graph: Dict[int, Set[int]],
-                  u: int, v: int, max_size: int) -> List[List[int]]:
-        """从边 (u,v) 出发找环。"""
+                  u: int, v: int) -> List[List[int]]:
+        """从边 (u,v) 出发找环（无大小限制）。"""
         from collections import deque
         rings: List[List[int]] = []
         q = deque([(v, [v])])
@@ -240,8 +281,6 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
         while q:
             node, path = q.popleft()
-            if len(path) > max_size:
-                continue
             for nb in graph[node]:
                 if (node == u and nb == v) or (node == v and nb == u):
                     continue
@@ -254,25 +293,62 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
         return rings
 
-    def _remove_redundant_rings(self, rings: List[List[int]]
-                                ) -> List[List[int]]:
-        """去除稠合冗余环。"""
-        def ring_edges(r):
-            n = len(r)
-            return {(min(r[i], r[(i+1) % n]), max(r[i], r[(i+1) % n]))
-                    for i in range(n)}
+    @staticmethod
+    def _is_ring_planar(ring_atoms: List[int],
+                        local_graph: Dict[int, Set[int]],
+                        coordinates: np.ndarray) -> bool:
+        """检查环是否平面（法向量夹角阈值 5°）。
 
-        rings_sorted = sorted(rings, key=len)
-        final: List[List[int]] = []
-        coverage: Set[Tuple[int, int]] = set()
+        Args:
+            ring_atoms: 环内原子的残基内索引列表
+            local_graph: 残基内局部连接图
+            coordinates: 原子坐标数组 (N, 3)
 
-        for r in rings_sorted:
-            e = ring_edges(r)
-            if not e.issubset(coverage):
-                final.append(r)
-                coverage |= e
+        Returns:
+            True 如果环是平面的
+        """
+        normals = []
+        ring_set = set(ring_atoms)
 
-        return final
+        for idx in ring_atoms:
+            neighbors_in_ring = [nb for nb in local_graph[idx]
+                                 if nb in ring_set]
+            if len(neighbors_in_ring) < 2:
+                continue
+            n1, n2 = neighbors_in_ring[0], neighbors_in_ring[1]
+            a_pos = coordinates[idx]
+            v1 = coordinates[n1] - a_pos
+            v2 = coordinates[n2] - a_pos
+            normal = np.cross(v1, v2)
+            norm = np.linalg.norm(normal)
+            if norm > 1e-10:
+                normals.append(normal / norm)
+
+        if len(normals) < 3:
+            return False
+
+        for i in range(len(normals)):
+            for j in range(i + 1, len(normals)):
+                cos_angle = np.clip(np.dot(normals[i], normals[j]), -1.0, 1.0)
+                angle = np.degrees(np.arccos(cos_angle))
+                if AROMATIC_PLANARITY < angle < 180.0 - AROMATIC_PLANARITY:
+                    return False
+        return True
+
+    def _deduplicate_aromatic_rings(self, rings: List[List[int]]
+                                    ) -> List[List[int]]:
+        """去重：按原子数排序，排除被小环覆盖的大环。"""
+        sorted_rings = sorted(rings, key=len)
+        accepted: List[List[int]] = []
+        covered_atoms: Set[int] = set()
+
+        for ring in sorted_rings:
+            ring_set = set(ring)
+            if not ring_set.issubset(covered_atoms):
+                accepted.append(ring)
+                covered_atoms.update(ring_set)
+
+        return accepted
 
     def _find_donors(self, res: ResidueData,
                      bond_graph: Dict[int, Set[int]],
