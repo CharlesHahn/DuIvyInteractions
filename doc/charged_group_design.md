@@ -61,15 +61,51 @@ tpr 文件中的部分电荷是力场参数化时的**化学判决的留存记�
 
 ## 3. 第一层：蛋白残基名 → 带电基团
 
-### 3.1 正电残基
+### 3.1 正电残基（+1）
 
-| 残基 | 电荷 | 电荷中心原子 | 说明 |
-|------|------|-------------|------|
-| **ARG** | +1 | CZ, NE, NH1, NH2 | 胍基，永久正电 |
-| **LYS** | +1 | NZ | 氨基，永久正电 |
-| **HIP** | +1 | ND1, NE2 | 双质子化咪唑，正电 |
+| 残基名 | 电荷 | 电荷中心原子 | 说明 |
+|--------|------|-------------|------|
+| **ARG** | +1 | CZ, NE, NH1, NH2, HE, HH11, HH12, HH21, HH22 | 胍基，永久正电 |
+| **LYS** | +1 | NZ, HZ1, HZ2, HZ3 | 氨基，永久正电 |
+| **HIP** | +1 | ND1, NE2, HD1, HE2 | 双质子化咪唑，正电 |
+| **M3L** | +1 | NZ, CE, CD, 所有甲基 H | 三甲基化 Lys |
+| **MLY** | +1 | NZ, CE, CD, 甲基 H | 甲基化 Lys |
 
-**HIS 质子化态说明**（Amber 力场）：
+### 3.2 负电残基（-1）
+
+| 残基名 | 电荷 | 电荷中心原子 | 说明 |
+|--------|------|-------------|------|
+| **ASP** | -1 | CG, OD1, OD2 | 羧基，永久负电 |
+| **GLU** | -1 | CD, OE1, OE2 | 羧基，永久负电 |
+| **CYM** | -1 | SG | 去质子化 Cys（硫醇盐） |
+| **KCX** | -1 | NZ, CE, CD, 羧基 O | 羧基化 Lys |
+| **PCA** | -1 | CA, C, O, N, CD, CG | 焦谷氨酸 |
+
+### 3.3 磷酸化残基（-2 或 -1）
+
+| 残基名 | 电荷 | 电荷中心原子 | 说明 |
+|--------|------|-------------|------|
+| **SEP** | -2/-1 | OG, P, O1P, O2P, O3P | 磷酸化 Ser |
+| **TPO** | -2/-1 | OG1, P, O1P, O2P, O3P | 磷酸化 Thr |
+| **PTR** | -2/-1 | OH, P, O1P, O2P, O3P | 磷酸化 Tyr |
+
+磷酸化残基的电荷取决于质子化态：
+- 完全去质子化：-2（两个 H 被移除）
+- 部分质子化：-1（一个 H 保留）
+
+### 3.4 不纳入的残基
+
+| 残基 | 原因 |
+|------|------|
+| GLN / ASN | 酰胺基，中性 |
+| TYR | 酚羟基 pKa ~10，生理 pH 下中性 |
+| HID / HIE | 单质子化 His，中性 |
+| LYN | 去质子化 Lys，中性 |
+| ASH | 质子化 ASP，中性 |
+| GLH | 质子化 GLU，中性 |
+| CYS | 标准 Cys，中性 |
+
+### 3.5 HIS 质子化态说明（Amber 力场）
 
 | 残基名 | 质子化态 | 电荷 | 能否形成盐桥 |
 |--------|---------|------|-------------|
@@ -77,24 +113,9 @@ tpr 文件中的部分电荷是力场参数化时的**化学判决的留存记�
 | **HID** | δ-质子化（ND1-H，NE2 中性） | 0 | ❌ 不能 |
 | **HIE** | ε-质子化（NE2-H，ND1 中性） | 0 | ❌ 不能 |
 
-tpr 文件通过残基名（HIP/HID/HIE）直接编码质子化态，无需推断。这比 PLIP（用 reduce 程序加 H 判断）更精确。
+tpr 文件通过残基名（HIP/HID/HIE）直接编码质子化态，无需推断。
 
-### 3.2 负电残基
-
-| 残基 | 电荷 | 电荷中心原子 | 说明 |
-|------|------|-------------|------|
-| **ASP** | -1 | CG, OD1, OD2 | 羧基，永久负电 |
-| **GLU** | -1 | CD, OE1, OE2 | 羧基，永久负电 |
-
-### 3.3 不纳入的残基
-
-| 残基 | 原因 |
-|------|------|
-| GLN / ASN | 酰胺基，中性（PLIP 列为 polar 但非 charged） |
-| TYR | 酚羟基 pKa ~10，生理 pH 下中性 |
-| HID / HIE | 单质子化 His，中性 |
-
-### 3.4 N/C 末端
+### 3.6 N/C 末端
 
 蛋白链的 N-末端（NH3+）和 C-末端（COO-）在 Amber 力场中：
 - N-末端：残基名仍为标准名（如 ALA），但氨基已被质子化 → 会被**第二层官能团模式**（叔胺/季铵）自动捕获
@@ -106,71 +127,184 @@ tpr 文件通过残基名（HIP/HID/HIE）直接编码质子化态，无需推�
 
 ## 4. 第二层：官能团模式匹配（非蛋白残基）
 
-适用于配体、辅因子、非标准残基等无残基名字典的分子。
+适用于配配体、辅因子、非标准残基等无残基名字典的分子。
 
-判据：**原子类型 + 键连接图（邻居原子的元素和数量）**。
+判据：**元素 + 邻居元素 + 邻居数量**（严格参照 PLIP `is_functional_group`）。
 
 ### 4.1 正电官能团
 
-| 官能团 | 模式 | 涉及原子 | 来源 |
-|--------|------|---------|------|
-| **季铵** `quartamine` | N 连 4 个非 H 邻居 | N + 4 邻居 | PLIP |
-| **叔胺** `tertamine` | sp3 N 连 ≥3 个非 H 邻居 | N + 邻居 | PLIP |
-| **胍基** `guanidine` | C 连 3 个 N，且至少一个 N 只连该 C | C + 3N | PLIP |
-| **锍** `sulfonium` | S 连 3 个非 H 邻居 | S + 3 邻居 | PLIP |
+#### quartamine（季铵）
+
+**定义**：N 有 4 个邻居，且**没有一个邻居是 H**。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 7` | `atom.atom_element == 'N'` |
+| 邻居数 | `len(n_atoms) == 4` | `len(neighbors) == 4` |
+| 无 H 邻居 | `'1' not in n_atoms` | `all(n.atom_element != 'H' for n in neighbors)` |
+
+**物理意义**：NR4+（季铵盐），永远带正电。
+
+---
+
+#### tertamine（叔胺 / 质子化胺）
+
+**定义**：N 有 **≥3 个邻居（包括 H）**。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 7` | `atom.atom_element == 'N'` |
+| sp3 杂化 | `GetHyb() == 3` | 不检查（无此信息） |
+| 邻居数 | `len(n_atoms) >= 3` | `len(neighbors) >= 3` |
+
+**物理意义**：sp3 N 有 ≥3 个邻居 → NH3、NH4+、NR3、NR3H+ 等。包含 H 邻居，因为 NH4+（4 个 H）是正电。需要第三层电荷验证过滤中性胺。
+
+**PLIP 设计意图**：在晶体结构中，质子化态不确定，所以标记所有 sp3 N ≥3 邻居为候选。在 MD 中，力场已确定质子化态，电荷验证会过滤中性胺。
+
+---
+
+#### guanidine（胍基）
+
+**定义**：C 有 3 个 N 邻居，且**至少一个 N 只连了该 C**（可质子化）。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 6` | `atom.atom_element == 'C'` |
+| N 邻居数 | `n_atoms.count(7) == 3` | N 邻居数 = 3 |
+| 总邻居数 | `len(n_atoms) == 3` | 总邻居数 = 3 |
+| 可质子化 N | `min(nitro_partners) == 1` | 至少一个 N 只连该 C |
+
+**物理意义**：胍基（如 ARG 侧链）的中心 C 连 3 个 N，其中一个 N 是终端 NH2，可质子化形成正电。
+
+---
+
+#### sulfonium（锍）
+
+**定义**：S 有 3 个邻居，且**没有一个邻居是 H**。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 16` | `atom.atom_element == 'S'` |
+| 邻居数 | `len(n_atoms) == 3` | `len(neighbors) == 3` |
+| 无 H 邻居 | `'1' not in n_atoms` | `all(n.atom_element != 'H' for n in neighbors)` |
+
+**物理意义**：R3S+（锍盐），永远带正电。排除亚砜（R2S=O）和巯基（R-SH）。
+
+---
 
 ### 4.2 负电官能团
 
-| 官能团 | 模式 | 涉及原子 | 来源 |
-|--------|------|---------|------|
-| **羧酸盐** `carboxylate` | C 连 2 个 O + 1 个 C | C + 2O | PLIP |
-| **磷酸盐** `phosphate` | P 的邻居全是 O | P + 所有 O | PLIP |
-| **磺酸** `sulfonicacid` | S 连 3 个 O | S + 3O | PLIP |
-| **硫酸盐** `sulfate` | S 连 4 个 O | S + 4O | PLIP |
+#### phosphate（磷酸盐）
 
-### 4.3 判定函数参考（源自 PLIP `is_functional_group`）
+**定义**：P 的**邻居全是 O**。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 15` | `atom.atom_element == 'P'` |
+| 邻居 | `set(n_atoms) == {8}` | 所有邻居都是 O |
+
+**物理意义**：PO4^3-、PO3^2- 等磷酸基，永远带负电。
+
+---
+
+#### sulfonicacid（磺酸）
+
+**定义**：S 有 **3 个 O 邻居**。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 16` | `atom.atom_element == 'S'` |
+| O 邻居数 | `n_atoms.count(8) == 3` | O 邻居数 = 3 |
+
+**物理意义**：R-SO3-（磺酸基），带负电。
+
+---
+
+#### sulfate（硫酸盐）
+
+**定义**：S 有 **4 个 O 邻居**。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 16` | `atom.atom_element == 'S'` |
+| O 邻居数 | `n_atoms.count(8) == 4` | O 邻居数 = 4 |
+
+**物理意义**：R-SO4^2-（硫酸基），带负电。
+
+---
+
+#### carboxylate（羧酸盐）
+
+**定义**：C 有 **2 个 O 邻居**和**恰好 1 个 C 邻居**。
+
+| 条件 | PLIP | 我们 |
+|------|------|------|
+| 元素 | `atom.atomicnum == 6` | `atom.atom_element == 'C'` |
+| O 邻居数 | `n_atoms.count(8) == 2` | O 邻居数 = 2 |
+| C 邻居数 | `n_atoms.count(6) == 1` | C 邻居数 = **恰好 1** |
+
+**物理意义**：R-COO-（羧酸盐），带负电。
+
+**关键**：PLIP 要求**恰好 1 个 C**，不是 ≥1 个。这排除了酯（R-COOR'，有 2 个 C 邻居）和酰胺（R-CONH2，有 2 个 C 邻居）。
+
+---
+
+### 4.3 完整判定函数
 
 ```python
-# 季铵：N 有 4 个非 H 邻居
+# 季铵：N 有 4 个邻居，且无 H 邻居
 def is_quartamine(atom, neighbors):
-    return atom.element == 'N' and len(neighbors) == 4 and 'H' not in [n.element for n in neighbors]
+    return (atom.atom_element == 'N'
+            and len(neighbors) == 4
+            and all(n.atom_element != 'H' for n in neighbors))
 
-# 叔胺：sp3 N 有 ≥3 邻居
+# 叔胺：N 有 ≥3 个邻居（包括 H）
 def is_tertamine(atom, neighbors):
-    return atom.element == 'N' and len(neighbors) >= 3
+    return (atom.atom_element == 'N'
+            and len(neighbors) >= 3)
 
-# 羧酸盐：C 连 2 个 O + 1 个 C
-def is_carboxylate(atom, neighbors):
-    if atom.element != 'C':
+# 胍基：C 有 3 个 N 邻居，且至少一个 N 只连该 C
+def is_guanidine(atom, neighbors, bond_graph):
+    if atom.atom_element != 'C' or len(neighbors) != 3:
         return False
-    o_count = sum(1 for n in neighbors if n.element == 'O')
-    c_count = sum(1 for n in neighbors if n.element == 'C')
-    return o_count == 2 and c_count >= 1
+    if not all(n.atom_element == 'N' for n in neighbors):
+        return False
+    for n in neighbors:
+        n_neighbors = bond_graph.get(n.atom_global_idx, set())
+        if len(n_neighbors) == 1:
+            return True
+    return False
+
+# 锍：S 有 3 个邻居，且无 H 邻居
+def is_sulfonium(atom, neighbors):
+    return (atom.atom_element == 'S'
+            and len(neighbors) == 3
+            and all(n.atom_element != 'H' for n in neighbors))
 
 # 磷酸盐：P 的邻居全是 O
 def is_phosphate(atom, neighbors):
-    return atom.element == 'P' and all(n.element == 'O' for n in neighbors)
+    return (atom.atom_element == 'P'
+            and all(n.atom_element == 'O' for n in neighbors))
 
-# 胍基：C 连 3 个 N，至少一个 N 只连 C
-def is_guanidine(atom, neighbors):
-    if atom.element != 'C' or len(neighbors) != 3:
-        return False
-    if not all(n.element == 'N' for n in neighbors):
-        return False
-    # 至少一个 N 只连该 C（可质子化）
-    return any(len(n_neighbors) == 1 for n_neighbors in neighbor_neighbor_counts)
-
-# 锍：S 连 3 个非 H 邻居
-def is_sulfonium(atom, neighbors):
-    return atom.element == 'S' and len(neighbors) == 3
-
-# 磺酸：S 连 3 个 O
+# 磺酸：S 有 3 个 O 邻居
 def is_sulfonicacid(atom, neighbors):
-    return atom.element == 'S' and len(neighbors) == 3 and all(n.element == 'O' for n in neighbors)
+    o_count = sum(1 for n in neighbors if n.atom_element == 'O')
+    return (atom.atom_element == 'S'
+            and o_count == 3)
 
-# 硫酸盐：S 连 4 个 O
+# 硫酸盐：S 有 4 个 O 邻居
 def is_sulfate(atom, neighbors):
-    return atom.element == 'S' and len(neighbors) == 4 and all(n.element == 'O' for n in neighbors)
+    o_count = sum(1 for n in neighbors if n.atom_element == 'O')
+    return (atom.atom_element == 'S'
+            and o_count == 4)
+
+# 羧酸盐：C 有 2 个 O + 恰好 1 个 C
+def is_carboxylate(atom, neighbors):
+    if atom.atom_element != 'C':
+        return False
+    o_count = sum(1 for n in neighbors if n.atom_element == 'O')
+    c_count = sum(1 for n in neighbors if n.atom_element == 'C')
+    return o_count == 2 and c_count == 1
 ```
 
 ---
@@ -181,12 +315,20 @@ def is_sulfate(atom, neighbors):
 
 | 官能团 | 预期净电荷 | 验证条件 |
 |--------|-----------|---------|
-| 季铵 / 叔胺 / 胍基 / 锍 | 正 | $\sum q_i > 0$ |
-| 羧酸盐 / 磷酸盐 / 磺酸 / 硫酸盐 | 负 | $\sum q_i < 0$ |
+| quartamine | +1 | $\sum q_i > 0.1$ |
+| tertamine | +1 或 0 | $\sum q_i > 0.1$（过滤中性胺） |
+| guanidine | +1 | $\sum q_i > 0.1$ |
+| sulfonium | +1 | $\sum q_i > 0.1$ |
+| phosphate | -1/-2/-3 | $\sum q_i < -0.1$ |
+| sulfonicacid | -1 | $\sum q_i < -0.1$ |
+| sulfate | -2 | $\sum q_i < -0.1$ |
+| carboxylate | -1 | $\sum q_i < -0.1$ |
 
-**第三层不是主判据，而是交叉验证**。化学模式匹配是主判据，电荷验证是辅判据。
+**阈值**：$|\sum q_i| > 0.1$（排除数值误差）
 
-若化学模式匹配但电荷验证不通过（如一个羧酸盐的净电荷 ≈ 0），说明力场参数化时该基团可能未被去质子化，应**以力场为准**（不标记为带电基团）。
+**设计原则**：第二层是"候选生成"（可能有假阳性），第三层是"电荷验证"（过滤假阳性）。化学模式匹配是主判据，电荷验证是辅判据。
+
+若化学模式匹配但电荷验证不通过，说明力场参数化时该基团可能未被去质子化，应**以力场为准**（不标记为带电基团）。
 
 ---
 
@@ -269,6 +411,16 @@ Group(
 | ASP | ✅ 第一层 | 无 |
 | GLU | ✅ 第一层 | 无 |
 
+**我们额外支持的带电残基**（PLIP 不支持或需推断）：
+
+| 残基 | 电荷 | PLIP 支持 | 我们 |
+|------|------|----------|------|
+| CYM | -1 | ❌ | ✅ 第一层 |
+| SEP/TPO/PTR | -2/-1 | ❌ | ✅ 第一层 |
+| M3L/MLY | +1 | ❌ | ✅ 第一层 |
+| KCX | -1 | ❌ | ✅ 第一层 |
+| PCA | -1 | ❌ | ✅ 第一层 |
+
 ### 8.2 配体侧
 
 | PLIP 配体正电 | 我们的设计 | 差异 |
@@ -325,13 +477,26 @@ _charge_weighted_center(atoms, positions)   # 电荷加权中心
 ```python
 # 蛋白带电残基（第一层）
 POSITIVE_RESIDUES = {
-    "ARG": {"center_atoms": ["CZ", "NE", "NH1", "NH2"], "charge": +1},
-    "LYS": {"center_atoms": ["NZ"], "charge": +1},
-    "HIP": {"center_atoms": ["ND1", "NE2"], "charge": +1},
+    # 标准正电残基
+    "ARG": {"center_atoms": ["CZ", "NE", "NH1", "NH2", "HE", "HH11", "HH12", "HH21", "HH22"], "charge": +1},
+    "LYS": {"center_atoms": ["NZ", "HZ1", "HZ2", "HZ3"], "charge": +1},
+    "HIP": {"center_atoms": ["ND1", "NE2", "HD1", "HE2"], "charge": +1},
+    # 修饰正电残基
+    "M3L": {"center_atoms": ["NZ", "CE", "CD"], "charge": +1},  # 三甲基化 Lys
+    "MLY": {"center_atoms": ["NZ", "CE", "CD"], "charge": +1},  # 甲基化 Lys
 }
 NEGATIVE_RESIDUES = {
+    # 标准负电残基
     "ASP": {"center_atoms": ["CG", "OD1", "OD2"], "charge": -1},
     "GLU": {"center_atoms": ["CD", "OE1", "OE2"], "charge": -1},
+    "CYM": {"center_atoms": ["SG"], "charge": -1},              # 去质子化 Cys
+    # 修饰负电残基
+    "KCX": {"center_atoms": ["NZ", "CE", "CD"], "charge": -1},  # 羧基化 Lys
+    "PCA": {"center_atoms": ["CA", "C", "O", "N", "CD", "CG"], "charge": -1},  # 焦谷氨酸
+    # 磷酸化残基
+    "SEP": {"center_atoms": ["OG", "P", "O1P", "O2P", "O3P"], "charge": -2},  # 磷酸化 Ser
+    "TPO": {"center_atoms": ["OG1", "P", "O1P", "O2P", "O3P"], "charge": -2}, # 磷酸化 Thr
+    "PTR": {"center_atoms": ["OH", "P", "O1P", "O2P", "O3P"], "charge": -2},  # 磷酸化 Tyr
 }
 ```
 
