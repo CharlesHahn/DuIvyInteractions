@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import List
 import numpy as np
 
-from .data import Group, Interaction, SystemData
+from .datas import Group, Interaction, SystemData
 
 
 class Reader(ABC):

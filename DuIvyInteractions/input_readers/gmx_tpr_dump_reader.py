@@ -6,7 +6,7 @@
 
 from typing import List, Tuple, Optional
 from ..core.interfaces import Reader
-from ..core.data import (
+from ..core.datas import (
     SystemData, ResidueData, AtomData, BondData, InterResidueBond
 )
 from ..core.constants import ATOMIC_NUMBER_TO_ELEMENT

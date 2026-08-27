@@ -9,7 +9,7 @@ from collections import defaultdict
 import numpy as np
 
 from ..core.interfaces import GroupIdentifier
-from ..core.data import Group, SystemData, ResidueData, AtomData
+from ..core.datas import Group, SystemData, ResidueData, AtomData
 
 
 # 芳香类型（直接由类型名确定的芳香原子）

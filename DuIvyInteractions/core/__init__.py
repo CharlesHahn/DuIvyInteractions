@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
-"""core - 领域模型 + 接口定义。"""
+"""core - 核心基础：数据类 + 接口定义 + 常量。"""
 
 from .constants import GROUP_TYPES, BOND_TYPES
-from .data import Group, AtomData
+from .datas import (
+    Group, AtomData, BondData, ResidueData, InterResidueBond,
+    SystemData, Interaction, HydrogenBond, PiStacking, WaterBridge
+)
 from .interfaces import Reader, GroupIdentifier, InteractionDetector
 
 __all__ = [
+    # 常量
     "GROUP_TYPES", "BOND_TYPES",
-    "Group", "AtomData",
+    # 数据类
+    "Group", "AtomData", "BondData", "ResidueData", "InterResidueBond",
+    "SystemData", "Interaction", "HydrogenBond", "PiStacking", "WaterBridge",
+    # 接口
     "Reader", "GroupIdentifier", "InteractionDetector",
 ]

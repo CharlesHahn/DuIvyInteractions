@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "DuIvyInteractions"
+version = "0.1.0"
+description = "基于 MD 拓扑力场参数的分子间相互作用判定工具"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.20",
+    "MDAnalysis>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["DuIvyInteractions*"]
+exclude = ["tests*", "archive*", "docs*"]
