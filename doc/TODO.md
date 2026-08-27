@@ -19,7 +19,7 @@
 - 所有法向量两两夹角 ≤ 5.0°（PLIP `AROMATIC_PLANARITY`）
 - 不满足 → 该帧此环不参与 π-π 堆积
 
-**参考**：`docs/aromatic_ring_definition.md` §3.3
+**参考**：`doc/aromatic_ring_definition.md` §3.3
 
 ### 2. 疏水-芳香去重
 
@@ -32,7 +32,7 @@
 - 再检测疏水相互作用
 - 移除与 π-π 堆积重叠的疏水接触（两个芳香环的原子之间的疏水接触）
 
-**参考**：`docs/hydrophobic_definition.md` §4
+**参考**：`doc/hydrophobic_definition.md` §4
 
 ---
 

@@ -34,7 +34,7 @@ DuIvyInteraction/
 │   ├── utils/                          # 无状态工具函数
 │   └── pipeline.py                     # 主流程编排（待实现）
 │
-├── docs/                               # 设计文档
+├── doc/                                # 项目规划文档（开发辅助）
 ├── pyproject.toml                      # 包管理配置
 ├── CLAUDE.md                           # 项目规范
 └── README.md
