@@ -189,6 +189,10 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         water, gid = self._find_water(res, gid)
         groups.extend(water)
 
+        # 疏水原子
+        hydrophobic, gid = self._find_hydrophobic(res, bond_graph, gid)
+        groups.extend(hydrophobic)
+
         return groups, gid
 
     def _find_aromatic_rings(self, res: ResidueData,
@@ -789,6 +793,39 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
                 atoms=res.atoms
+            ))
+            gid += 1
+
+        return groups, gid
+
+    def _find_hydrophobic(self, res: ResidueData,
+                          bond_graph: Dict[int, Set[int]],
+                          start_id: int) -> Tuple[List[Group], int]:
+        """检测疏水原子（C + 所有邻居是 C/H）。"""
+        groups: List[Group] = []
+        gid = start_id
+
+        # 构建 atom_global_idx → atom 映射
+        atom_map = {a.atom_global_idx: a for a in res.atoms}
+
+        for atom in res.atoms:
+            # 条件1：必须是碳
+            if atom.atom_element != 'C':
+                continue
+
+            # 条件2：所有邻居必须是 C 或 H
+            neighbor_indices = bond_graph.get(atom.atom_global_idx, set())
+            neighbors = [atom_map[idx] for idx in neighbor_indices
+                         if idx in atom_map]
+            if not all(n.atom_element in ('C', 'H') for n in neighbors):
+                continue
+
+            groups.append(Group(
+                group_id=gid, group_type="hydrophobic",
+                molecule=res.molecule_name,
+                residue_name=res.residue_name,
+                residue_id=res.residue_global_idx,
+                atoms=[atom]
             ))
             gid += 1
 
