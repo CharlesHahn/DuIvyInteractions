@@ -56,6 +56,35 @@ METAL_IONS = frozenset({
     "Al", "Ga", "In", "Sb", "Tl", "Pb"
 })
 
+# 电荷验证阈值
+CHARGE_THRESHOLD = 0.1
+
+# 蛋白正电残基（第一层：残基名字典）
+POSITIVE_RESIDUES = {
+    "ARG": ["CZ", "NE", "NH1", "NH2", "HE", "HH11", "HH12", "HH21", "HH22"],
+    "LYS": ["NZ", "HZ1", "HZ2", "HZ3"],
+    "HIP": ["ND1", "NE2", "HD1", "HE2"],
+    "ORN": ["NE", "HE1", "HE2", "HE3"],
+    "DAB": ["ND", "HD1", "HD2", "HD3"],
+    "M3L": ["NZ", "CM1", "CM2", "CM3",
+            "HM11", "HM12", "HM13", "HM21", "HM22", "HM23",
+            "HM31", "HM32", "HM33"],
+    "MLY": ["NZ", "CH1", "CH2",
+            "HH11", "HH12", "HH13", "HH21", "HH22", "HH23"],
+}
+
+# 蛋白负电残基（第一层：残基名字典）
+NEGATIVE_RESIDUES = {
+    "ASP": ["CG", "OD1", "OD2"],
+    "GLU": ["CD", "OE1", "OE2"],
+    "CYM": ["SG"],
+    "KCX": ["NZ", "CX", "OQ1", "OQ2", "HZ"],
+    "PCA": ["CA", "C", "O", "N", "CD", "CG"],
+    "SEP": ["OG", "P", "O1P", "O2P", "O3P"],
+    "TPO": ["OG1", "P", "O1P", "O2P", "O3P"],
+    "PTR": ["OH", "P", "O1P", "O2P", "O3P"],
+}
+
 
 class AmberFFGroupIdentifier(GroupIdentifier):
     """Amber 力场基团识别器。"""
@@ -123,7 +152,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         groups.extend(acceptors)
 
         # 带电基团
-        charged, gid = self._find_charged(res, gid)
+        charged, gid = self._find_charged(res, bond_graph, gid)
         groups.extend(charged)
 
         # 卤键供体
@@ -160,17 +189,13 @@ class AmberFFGroupIdentifier(GroupIdentifier):
             if not aromatic:
                 continue
 
-            global_indices = [res.atoms[i].atom_global_idx
-                              for i in ring_atoms]
+            ring_atom_data = [res.atoms[i] for i in ring_atoms]
             groups.append(Group(
                 group_id=gid, group_type="aromatic_ring",
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atom_indices=global_indices,
-                atom_types=[res.atoms[i].atom_type for i in ring_atoms],
-                elements=[res.atoms[i].atom_element for i in ring_atoms],
-                charges=[res.atoms[i].atom_charge for i in ring_atoms]
+                atoms=ring_atom_data
             ))
             gid += 1
 
@@ -267,11 +292,8 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atom_indices=[d_atom.atom_global_idx],
-                atom_types=[d_atom.atom_type],
-                elements=[d_atom.atom_element],
-                charges=[d_atom.atom_charge],
-                metadata={"h_atom": h_atom.atom_global_idx}
+                atoms=[d_atom],
+                metadata={"h_atom": h_atom}
             ))
             gid += 1
 
@@ -298,11 +320,8 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 molecule=d_res.molecule_name,
                 residue_name=d_res.residue_name,
                 residue_id=d_res.residue_global_idx,
-                atom_indices=[d_atom.atom_global_idx],
-                atom_types=[d_atom.atom_type],
-                elements=[d_atom.atom_element],
-                charges=[d_atom.atom_charge],
-                metadata={"h_atom": h_atom.atom_global_idx}
+                atoms=[d_atom],
+                metadata={"h_atom": h_atom}
             ))
             gid += 1
 
@@ -340,40 +359,254 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                     molecule=res.molecule_name,
                     residue_name=res.residue_name,
                     residue_id=res.residue_global_idx,
-                    atom_indices=[atom.atom_global_idx],
-                    atom_types=[atom.atom_type],
-                    elements=[atom.atom_element],
-                    charges=[atom.atom_charge]
+                    atoms=[atom]
                 ))
                 gid += 1
 
         return groups, gid
 
     def _find_charged(self, res: ResidueData,
+                      bond_graph: Dict[int, Set[int]],
                       start_id: int) -> Tuple[List[Group], int]:
-        """检测带电基团。"""
+        """检测带电基团（三层递进）。
+
+        第一层：残基名字典（蛋白残基 R 基团）
+        第二层：官能团模式匹配（N/C 端 + 非蛋白残基）
+        第三层：部分电荷交叉验证
+        """
         groups: List[Group] = []
         gid = start_id
 
-        for atom in res.atoms:
-            if abs(atom.atom_charge) <= 0.3:
-                continue
-            if atom.atom_element == 'H':
-                continue
-            sign = "charged_positive" if atom.atom_charge > 0 else "charged_negative"
-            groups.append(Group(
-                group_id=gid, group_type=sign,
-                molecule=res.molecule_name,
-                residue_name=res.residue_name,
-                residue_id=res.residue_global_idx,
-                atom_indices=[atom.atom_global_idx],
-                atom_types=[atom.atom_type],
-                elements=[atom.atom_element],
-                charges=[atom.atom_charge]
-            ))
-            gid += 1
+        # 第一层：残基名字典
+        layer1_groups, gid = self._identify_protein_charged(res, gid)
+        groups.extend(layer1_groups)
+
+        # 第二层：官能团模式匹配
+        layer2_groups, gid = self._identify_functional_group_charged(
+            res, bond_graph, gid)
+        groups.extend(layer2_groups)
+
+        # 去重：同一残基+同类型，优先保留第一层结果
+        groups = self._deduplicate_charged(groups)
 
         return groups, gid
+
+    def _deduplicate_charged(self, groups: List[Group]) -> List[Group]:
+        """去重：基于原子集合去重，优先保留第一层结果。"""
+        seen = {}
+        result = []
+
+        for g in groups:
+            # 用 frozenset(atom_indices) 作为去重 key
+            key = frozenset(g.atom_indices)
+            if key not in seen:
+                seen[key] = g
+                result.append(g)
+            else:
+                # 已存在，优先保留 residue_name 来源
+                existing = seen[key]
+                if existing.metadata.get('source') != 'residue_name' and g.metadata.get('source') == 'residue_name':
+                    result.remove(existing)
+                    seen[key] = g
+                    result.append(g)
+
+        return result
+
+    def _identify_protein_charged(self, res: ResidueData,
+                                  start_id: int) -> Tuple[List[Group], int]:
+        """第一层：残基名字典识别带电残基。"""
+        groups: List[Group] = []
+        gid = start_id
+
+        # 正电残基
+        if res.residue_name in POSITIVE_RESIDUES:
+            atom_names = POSITIVE_RESIDUES[res.residue_name]
+            atoms = [a for a in res.atoms if a.atom_name in atom_names]
+            if atoms:
+                groups.append(self._build_charged_group(
+                    atoms, "charged_positive", res, gid, "residue_name"))
+                gid += 1
+
+        # 负电残基
+        if res.residue_name in NEGATIVE_RESIDUES:
+            atom_names = NEGATIVE_RESIDUES[res.residue_name]
+            atoms = [a for a in res.atoms if a.atom_name in atom_names]
+            if atoms:
+                groups.append(self._build_charged_group(
+                    atoms, "charged_negative", res, gid, "residue_name"))
+                gid += 1
+
+        return groups, gid
+
+    def _identify_functional_group_charged(self, res: ResidueData,
+                                           bond_graph: Dict[int, Set[int]],
+                                           start_id: int) -> Tuple[List[Group], int]:
+        """第二层：官能团模式匹配识别带电基团。"""
+        groups: List[Group] = []
+        gid = start_id
+
+        # 构建 atom_global_idx → atom 映射
+        atom_map = {a.atom_global_idx: a for a in res.atoms}
+
+        for atom in res.atoms:
+            # 获取邻居
+            neighbor_indices = bond_graph.get(atom.atom_global_idx, set())
+            neighbors = [atom_map[idx] for idx in neighbor_indices if idx in atom_map]
+
+            # 正电官能团
+            if self._is_quartamine(atom, neighbors):
+                g, gid = self._verify_and_build_group(
+                    [atom], "charged_positive", res, gid, "quartamine")
+                if g:
+                    groups.append(g)
+            elif self._is_tertamine(atom, neighbors):
+                g, gid = self._verify_and_build_group(
+                    [atom], "charged_positive", res, gid, "tertamine")
+                if g:
+                    groups.append(g)
+            elif self._is_guanidine(atom, neighbors, bond_graph, atom_map):
+                n_atoms = [n for n in neighbors if n.atom_element == 'N']
+                g, gid = self._verify_and_build_group(
+                    [atom] + n_atoms, "charged_positive", res, gid, "guanidine")
+                if g:
+                    groups.append(g)
+            elif self._is_sulfonium(atom, neighbors):
+                g, gid = self._verify_and_build_group(
+                    [atom], "charged_positive", res, gid, "sulfonium")
+                if g:
+                    groups.append(g)
+
+            # 负电官能团
+            elif self._is_phosphate(atom, neighbors):
+                o_atoms = [n for n in neighbors if n.atom_element == 'O']
+                g, gid = self._verify_and_build_group(
+                    [atom] + o_atoms, "charged_negative", res, gid, "phosphate")
+                if g:
+                    groups.append(g)
+            elif self._is_sulfonicacid(atom, neighbors):
+                o_atoms = [n for n in neighbors if n.atom_element == 'O']
+                g, gid = self._verify_and_build_group(
+                    [atom] + o_atoms, "charged_negative", res, gid, "sulfonicacid")
+                if g:
+                    groups.append(g)
+            elif self._is_sulfate(atom, neighbors):
+                o_atoms = [n for n in neighbors if n.atom_element == 'O']
+                g, gid = self._verify_and_build_group(
+                    [atom] + o_atoms, "charged_negative", res, gid, "sulfate")
+                if g:
+                    groups.append(g)
+            elif self._is_carboxylate(atom, neighbors):
+                o_atoms = [n for n in neighbors if n.atom_element == 'O']
+                g, gid = self._verify_and_build_group(
+                    [atom] + o_atoms, "charged_negative", res, gid, "carboxylate")
+                if g:
+                    groups.append(g)
+
+        return groups, gid
+
+    def _verify_and_build_group(self, atoms: List[AtomData],
+                                group_type: str, res: ResidueData,
+                                gid: int, func_group: str
+                                ) -> Tuple[Group, int]:
+        """第三层：电荷验证 + 构建 Group。"""
+        # 计算净电荷
+        net_charge = sum(a.atom_charge for a in atoms)
+
+        # 验证电荷方向
+        if group_type == "charged_positive" and net_charge <= CHARGE_THRESHOLD:
+            return None, gid
+        if group_type == "charged_negative" and net_charge >= -CHARGE_THRESHOLD:
+            return None, gid
+
+        # 构建 Group
+        group = Group(
+            group_id=gid,
+            group_type=group_type,
+            molecule=res.molecule_name,
+            residue_name=res.residue_name,
+            residue_id=res.residue_global_idx,
+            atoms=atoms,
+            metadata={
+                "source": "functional_group",
+                "func_group": func_group
+            }
+        )
+        return group, gid + 1
+
+    def _build_charged_group(self, atoms: List[AtomData],
+                             group_type: str, res: ResidueData,
+                             gid: int, source: str) -> Group:
+        """构建带电基团 Group。"""
+        return Group(
+            group_id=gid,
+            group_type=group_type,
+            molecule=res.molecule_name,
+            residue_name=res.residue_name,
+            residue_id=res.residue_global_idx,
+            atoms=atoms,
+            metadata={
+                "source": source,
+                "func_group": None
+            }
+        )
+
+    # 第二层官能团模式匹配函数（严格参照 PLIP is_functional_group）
+
+    def _is_quartamine(self, atom: AtomData, neighbors: List[AtomData]) -> bool:
+        """季铵：N 有 4 个邻居，且无 H 邻居。"""
+        return (atom.atom_element == 'N'
+                and len(neighbors) == 4
+                and all(n.atom_element != 'H' for n in neighbors))
+
+    def _is_tertamine(self, atom: AtomData, neighbors: List[AtomData]) -> bool:
+        """叔胺：N 有 ≥3 个邻居（包括 H）。"""
+        return (atom.atom_element == 'N'
+                and len(neighbors) >= 3)
+
+    def _is_guanidine(self, atom: AtomData, neighbors: List[AtomData],
+                      bond_graph: Dict[int, Set[int]],
+                      atom_map: Dict[int, AtomData]) -> bool:
+        """胍基：C 有 3 个 N 邻居，且至少一个 N 只连该 C（非 H 邻居）。"""
+        if atom.atom_element != 'C' or len(neighbors) != 3:
+            return False
+        if not all(n.atom_element == 'N' for n in neighbors):
+            return False
+        for n in neighbors:
+            n_all = bond_graph.get(n.atom_global_idx, set())
+            n_heavy = sum(1 for idx in n_all
+                          if idx in atom_map and atom_map[idx].atom_element != 'H')
+            if n_heavy == 1:
+                return True
+        return False
+
+    def _is_sulfonium(self, atom: AtomData, neighbors: List[AtomData]) -> bool:
+        """锍：S 有 3 个邻居，且无 H 邻居。"""
+        return (atom.atom_element == 'S'
+                and len(neighbors) == 3
+                and all(n.atom_element != 'H' for n in neighbors))
+
+    def _is_phosphate(self, atom: AtomData, neighbors: List[AtomData]) -> bool:
+        """磷酸盐：P 的邻居全是 O。"""
+        return (atom.atom_element == 'P'
+                and all(n.atom_element == 'O' for n in neighbors))
+
+    def _is_sulfonicacid(self, atom: AtomData, neighbors: List[AtomData]) -> bool:
+        """磺酸：S 有 3 个 O 邻居。"""
+        o_count = sum(1 for n in neighbors if n.atom_element == 'O')
+        return (atom.atom_element == 'S' and o_count == 3)
+
+    def _is_sulfate(self, atom: AtomData, neighbors: List[AtomData]) -> bool:
+        """硫酸盐：S 有 4 个 O 邻居。"""
+        o_count = sum(1 for n in neighbors if n.atom_element == 'O')
+        return (atom.atom_element == 'S' and o_count == 4)
+
+    def _is_carboxylate(self, atom: AtomData, neighbors: List[AtomData]) -> bool:
+        """羧酸盐：C 有 2 个 O + 恰好 1 个 C。"""
+        if atom.atom_element != 'C':
+            return False
+        o_count = sum(1 for n in neighbors if n.atom_element == 'O')
+        c_count = sum(1 for n in neighbors if n.atom_element == 'C')
+        return o_count == 2 and c_count == 1
 
     def _find_halogen_donors(self, res: ResidueData,
                        bond_graph: Dict[int, Set[int]],
@@ -393,10 +626,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atom_indices=[atom.atom_global_idx],
-                atom_types=[atom.atom_type],
-                elements=[atom.atom_element],
-                charges=[atom.atom_charge]
+                atoms=[atom]
             ))
             gid += 1
 
@@ -421,10 +651,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atom_indices=[atom.atom_global_idx],
-                atom_types=[atom.atom_type],
-                elements=[atom.atom_element],
-                charges=[atom.atom_charge]
+                atoms=[atom]
             ))
             gid += 1
 
@@ -467,10 +694,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                     molecule=res.molecule_name,
                     residue_name=res.residue_name,
                     residue_id=res.residue_global_idx,
-                    atom_indices=[atom.atom_global_idx],
-                    atom_types=[atom.atom_type],
-                    elements=[atom.atom_element],
-                    charges=[atom.atom_charge]
+                    atoms=[atom]
                 ))
                 gid += 1
 
@@ -488,10 +712,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atom_indices=[a.atom_global_idx for a in res.atoms],
-                atom_types=[a.atom_type for a in res.atoms],
-                elements=[a.atom_element for a in res.atoms],
-                charges=[a.atom_charge for a in res.atoms]
+                atoms=res.atoms
             ))
             gid += 1
 

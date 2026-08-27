@@ -35,16 +35,11 @@
 
 ## 2. 设计策略：三层递进
 
-```
-第一层：残基名字典（蛋白残基）
-   → 已知化学事实，零推断，100% 确定
-
-第二层：官能团模式匹配（非蛋白残基）
-   → 原子类型 + 键连接 → 识别带电官能团
-
-第三层：部分电荷交叉验证（通用）
-   → 识别出的官能团的净电荷是否符合预期
-```
+| 层级 | 适用范围 | 方法 | 确定性 |
+|------|---------|------|--------|
+| 第一层 | 蛋白残基 | 残基名字典 | 100%（零推断） |
+| 第二层 | 非蛋白残基 | 官能团模式匹配（元素+邻居） | 高 |
+| 第三层 | 通用 | 部分电荷交叉验证（\|Σq\| > 0.1） | 辅助过滤 |
 
 ### 2.1 为什么不用部分电荷阈值？
 
@@ -70,8 +65,8 @@ tpr 文件中的部分电荷是力场参数化时的**化学判决的留存记�
 | **HIP** | +1 | ND1, NE2, HD1, HE2 | 双质子化咪唑，正电 |
 | **ORN** | +1 | NE, HE1, HE2, HE3 | 鸟氨酸，伯胺 |
 | **DAB** | +1 | ND, HD1, HD2, HD3 | 二氨基丁酸，伯胺 |
-| **M3L** | +1 | NZ, CE, CD, 所有甲基 H | 三甲基化 Lys |
-| **MLY** | +1 | NZ, CE, CD, 甲基 H | 甲基化 Lys |
+| **M3L** | +1 | NZ, CM1, CM2, CM3, HM11-33 | 三甲基化 Lys（季铵） |
+| **MLY** | +1 | NZ, CH1, CH2, HH11-23 | 二甲基化 Lys（叔胺） |
 
 ### 3.2 负电残基（-1）
 
@@ -80,7 +75,7 @@ tpr 文件中的部分电荷是力场参数化时的**化学判决的留存记�
 | **ASP** | -1 | CG, OD1, OD2 | 羧基，永久负电 |
 | **GLU** | -1 | CD, OE1, OE2 | 羧基，永久负电 |
 | **CYM** | -1 | SG | 去质子化 Cys（硫醇盐） |
-| **KCX** | -1 | NZ, CE, CD, 羧基 O | 羧基化 Lys |
+| **KCX** | -1 | NZ, CX, OQ1, OQ2, HZ | 羧基化 Lys（氨基甲酸） |
 | **PCA** | -1 | CA, C, O, N, CD, CG | 焦谷氨酸 |
 
 ### 3.3 磷酸化残基（-2 或 -1）
@@ -251,64 +246,6 @@ tpr 文件通过残基名（HIP/HID/HIE）直接编码质子化态，无需推�
 
 ---
 
-### 4.3 完整判定函数
-
-```python
-# 季铵：N 有 4 个邻居，且无 H 邻居
-def is_quartamine(atom, neighbors):
-    return (atom.atom_element == 'N'
-            and len(neighbors) == 4
-            and all(n.atom_element != 'H' for n in neighbors))
-
-# 叔胺：N 有 ≥3 个邻居（包括 H）
-def is_tertamine(atom, neighbors):
-    return (atom.atom_element == 'N'
-            and len(neighbors) >= 3)
-
-# 胍基：C 有 3 个 N 邻居，且至少一个 N 只连该 C
-def is_guanidine(atom, neighbors, bond_graph):
-    if atom.atom_element != 'C' or len(neighbors) != 3:
-        return False
-    if not all(n.atom_element == 'N' for n in neighbors):
-        return False
-    for n in neighbors:
-        n_neighbors = bond_graph.get(n.atom_global_idx, set())
-        if len(n_neighbors) == 1:
-            return True
-    return False
-
-# 锍：S 有 3 个邻居，且无 H 邻居
-def is_sulfonium(atom, neighbors):
-    return (atom.atom_element == 'S'
-            and len(neighbors) == 3
-            and all(n.atom_element != 'H' for n in neighbors))
-
-# 磷酸盐：P 的邻居全是 O
-def is_phosphate(atom, neighbors):
-    return (atom.atom_element == 'P'
-            and all(n.atom_element == 'O' for n in neighbors))
-
-# 磺酸：S 有 3 个 O 邻居
-def is_sulfonicacid(atom, neighbors):
-    o_count = sum(1 for n in neighbors if n.atom_element == 'O')
-    return (atom.atom_element == 'S'
-            and o_count == 3)
-
-# 硫酸盐：S 有 4 个 O 邻居
-def is_sulfate(atom, neighbors):
-    o_count = sum(1 for n in neighbors if n.atom_element == 'O')
-    return (atom.atom_element == 'S'
-            and o_count == 4)
-
-# 羧酸盐：C 有 2 个 O + 恰好 1 个 C
-def is_carboxylate(atom, neighbors):
-    if atom.atom_element != 'C':
-        return False
-    o_count = sum(1 for n in neighbors if n.atom_element == 'O')
-    c_count = sum(1 for n in neighbors if n.atom_element == 'C')
-    return o_count == 2 and c_count == 1
-```
-
 ---
 
 ## 5. 第三层：部分电荷交叉验证
@@ -368,33 +305,24 @@ $$\vec{r}_{center} = \frac{\sum_{i \in group} q_i \cdot \vec{r}_i}{\sum_{i \in g
 
 ## 7. 输出格式
 
-### 7.1 Group 数据结构
+### 7.1 Group 字段
 
-```python
-Group(
-    group_id=gid,
-    group_type="charged_positive",  # 或 "charged_negative"
-    molecule=res.molecule_name,
-    residue_name=res.residue_name,
-    residue_id=res.residue_global_idx,
-    atom_indices=[...],             # 官能团内所有原子的全局索引
-    atom_types=[...],
-    elements=[...],
-    charges=[...],                  # 各原子的部分电荷
-    center=(x, y, z),              # 电荷加权中心坐标
-    metadata={
-        "net_charge": -0.85,        # 净电荷
-        "source": "residue_name",   # "residue_name" 或 "functional_group"
-        "func_group": "carboxylate" # 官能团类型（第二层匹配时填写）
-    }
-)
-```
+每个带电基团生成一个 Group，包含以下信息：
+
+| 字段 | 说明 |
+|------|------|
+| group_type | `"charged_positive"` 或 `"charged_negative"` |
+| atoms | `List[AtomData]`，基团内的所有原子（单一数据源，无冗余） |
+| metadata.source | 来源：`"residue_name"`（第一层）或 `"functional_group"`（第二层） |
+| metadata.func_group | 官能团类型（第二层匹配时填写，如 `"carboxylate"`） |
+
+原子属性（索引、类型、元素、电荷）通过 `atoms` 列表中的 `AtomData` 对象访问，无需存储冗余副本。
 
 ### 7.2 每个带电残基/官能团生成一个 Group
 
-- ASP → 一个 `charged_negative` Group，`atom_indices=[CG, OD1, OD2]`
-- ARG → 一个 `charged_positive` Group，`atom_indices=[CZ, NE, NH1, NH2]`
-- 配体羧酸盐 → 一个 `charged_negative` Group，`atom_indices=[C, O1, O2]`
+- ASP → 一个 `charged_negative` Group，atoms 包含 CG, OD1, OD2
+- ARG → 一个 `charged_positive` Group，atoms 包含 CZ, NE, NH1, NH2
+- 配体羧酸盐 → 一个 `charged_negative` Group，atoms 包含 C, O1, O2
 
 ---
 
@@ -452,57 +380,50 @@ Group(
 
 ## 9. 实现路径
 
-### 9.1 函数结构
+### 9.1 架构概览
 
-```
-_find_charged(res, bond_graph, start_id)
-├── _identify_protein_charged(res)          # 第一层：残基名字典
-├── _identify_functional_group_charged(res, bond_graph)  # 第二层：官能团模式
-└── _verify_and_build_group(atoms, expected_sign, res, gid)  # 第三层：电荷验证 + 构建 Group
+带电基团识别采用三层递进架构：
 
-_charge_weighted_center(atoms, positions)   # 电荷加权中心
-```
+- **第一层**（残基名字典）：根据残基名直接查找已知带电残基，零推断
+- **第二层**（官能团模式匹配）：遍历残基内原子，用元素+邻居模式识别带电官能团
+- **第三层**（电荷验证）：对第二层结果计算净电荷，过滤假阳性
 
-### 9.2 改动范围
+第一层和第二层结果合并后进行去重。
 
-| 函数 | 改动 |
+### 9.2 模块职责
+
+| 模块 | 职责 |
 |------|------|
-| `_find_charged` | **重写**：删除 `\|q\|>0.3` 逻辑，改为三层递进 |
-| 新增 `_identify_protein_charged` | 第一层残基名字典 |
-| 新增 `_identify_functional_group_charged` | 第二层官能团模式匹配 |
-| 新增 `_verify_and_build_group` | 第三层电荷验证 + Group 构建 |
-| 新增 `_charge_weighted_center` | 电荷加权中心计算 |
-| `_build_bond_graph` | **复用**（已有的全局连接图） |
+| 带电基团主函数 | 三层递进调用 + 去重 |
+| 第一层模块 | 残基名字典查找 |
+| 第二层模块 | 官能团模式匹配 |
+| 第三层模块（嵌入第二层） | 电荷验证 + Group 构建 |
+| 键连接图 | 复用已有的全局连接图 |
 
-### 9.3 常量定义
+### 9.3 去重策略
 
-```python
-# 蛋白带电残基（第一层）
-POSITIVE_RESIDUES = {
-    # 标准正电残基
-    "ARG": {"center_atoms": ["CZ", "NE", "NH1", "NH2", "HE", "HH11", "HH12", "HH21", "HH22"], "charge": +1},
-    "LYS": {"center_atoms": ["NZ", "HZ1", "HZ2", "HZ3"], "charge": +1},
-    "HIP": {"center_atoms": ["ND1", "NE2", "HD1", "HE2"], "charge": +1},
-    "ORN": {"center_atoms": ["NE", "HE1", "HE2", "HE3"], "charge": +1},  # 鸟氨酸
-    "DAB": {"center_atoms": ["ND", "HD1", "HD2", "HD3"], "charge": +1},  # 二氨基丁酸
-    # 修饰正电残基
-    "M3L": {"center_atoms": ["NZ", "CE", "CD"], "charge": +1},  # 三甲基化 Lys
-    "MLY": {"center_atoms": ["NZ", "CE", "CD"], "charge": +1},  # 甲基化 Lys
-}
-NEGATIVE_RESIDUES = {
-    # 标准负电残基
-    "ASP": {"center_atoms": ["CG", "OD1", "OD2"], "charge": -1},
-    "GLU": {"center_atoms": ["CD", "OE1", "OE2"], "charge": -1},
-    "CYM": {"center_atoms": ["SG"], "charge": -1},              # 去质子化 Cys
-    # 修饰负电残基
-    "KCX": {"center_atoms": ["NZ", "CE", "CD"], "charge": -1},  # 羧基化 Lys
-    "PCA": {"center_atoms": ["CA", "C", "O", "N", "CD", "CG"], "charge": -1},  # 焦谷氨酸
-    # 磷酸化残基
-    "SEP": {"center_atoms": ["OG", "P", "O1P", "O2P", "O3P"], "charge": -2},  # 磷酸化 Ser
-    "TPO": {"center_atoms": ["OG1", "P", "O1P", "O2P", "O3P"], "charge": -2}, # 磷酸化 Thr
-    "PTR": {"center_atoms": ["OH", "P", "O1P", "O2P", "O3P"], "charge": -2},  # 磷酸化 Tyr
-}
-```
+第一层和第二层可能对同一基团产生重复识别。例如：
+- ARG 的胍基：第一层（残基名字典）和第二层（guanidine 模式）都会识别
+- ASP 的羧基：第一层（残基名字典）和第二层（carboxylate 模式）都会识别
+- N/C 末端：第二层会识别（tertamine/carboxylate），但第一层不会（残基名是标准名）
+
+**去重规则**：
+
+1. **去重 key**：`frozenset(atom_indices)`（原子全局索引集合）
+2. **优先级**：`residue_name` 来源 > `functional_group` 来源
+3. **逻辑**：
+   - 若同一原子集合只被一层识别 → 直接保留
+   - 若同一原子集合被两层识别 → 保留 `residue_name` 来源（第一层更确定）
+
+**示例**：
+
+- ARG 第一层识别：包含 CZ, NE, NH1, NH2 及所有 H 原子，来源为 residue_name
+- ARG 第二层识别（guanidine 模式）：仅包含 CZ, NE, NH1, NH2（不含 H），来源为 functional_group
+- 两个 Group 的原子集合不同，都保留
+
+### 9.4 常量定义
+
+常量定义见 §3.1（正电残基）、§3.2（负电残基）、§3.3（磷酸化残基）。每个残基名映射到其带电基团的原子名列表。
 
 ---
 
