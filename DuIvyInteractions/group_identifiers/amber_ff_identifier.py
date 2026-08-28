@@ -651,7 +651,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                                 bond_graph: Dict[int, Set[int]],
                                 start_id: int,
                                 atom_map: Dict[int, AtomData]) -> Tuple[List[Group], int]:
-        """检测卤键受体（C/P/S 连接到 O/P/N/S）。"""
+        """检测卤键受体。atoms=[A, R1, R2, ...]，A 是受体原子，R 是 A 的 O/P/N/S 邻居。"""
         groups: List[Group] = []
         gid = start_id
         ACCEPTOR_ELEMENTS = ('C', 'P', 'S')
@@ -660,14 +660,23 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         for atom in res.atoms:
             if atom.atom_element not in ACCEPTOR_ELEMENTS:
                 continue
-            if not self._is_bonded_to_any_element(atom, bond_graph, NEIGHBOR_ELEMENTS, atom_map):
+
+            # 找 A 的所有 O/P/N/S 邻居作为 R
+            r_neighbors = []
+            for n_idx in bond_graph.get(atom.atom_global_idx, set()):
+                neighbor = atom_map.get(n_idx)
+                if neighbor and neighbor.atom_element in NEIGHBOR_ELEMENTS:
+                    r_neighbors.append(neighbor)
+
+            if not r_neighbors:
                 continue
+
             groups.append(Group(
                 group_id=gid, group_type="halogen_acceptor",
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atoms=[atom]
+                atoms=[atom] + r_neighbors
             ))
             gid += 1
 

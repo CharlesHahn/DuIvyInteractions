@@ -86,11 +86,14 @@ C→X 方向定义了 σ-hole 的方向（卤键沿 C-X 键轴方向）。
 
 ### 2.6 halogen_acceptor
 
-`atoms = [受体原子]`（1 个原子）
+`atoms = [A, R1, R2, ...]`（1 + n 个原子）
 
-| 位置 | 语义 |
-|------|------|
-| atoms[0] | 受体原子（C、P 或 S，连接到 O/P/N/S） |
+| 位置 | 语义 | 元素 |
+|------|------|------|
+| atoms[0] | A（受体原子） | C、P 或 S |
+| atoms[1:] | R（A 的 O/P/N/S 邻居） | O、P、N 或 S |
+
+**说明**：A 可能有多个 R 邻居（如 ASP 的 CG 连接 OD1 和 OD2）。检测时取使 X···A-R 角度最接近 120° 的 R。
 
 **metadata**：`{}`
 
@@ -144,7 +147,7 @@ C→X 方向定义了 σ-hole 的方向（卤键沿 C-X 键轴方向）。
 | charged_positive | 1-13 | 电荷中心原子 | ... | ... | source, func_group |
 | charged_negative | 1-13 | 电荷中心原子 | ... | ... | source, func_group |
 | halogen_donor | 2 | C（碳） | X（卤素） | — | 空 |
-| halogen_acceptor | 1 | 受体原子 | — | — | 空 |
+| halogen_acceptor | 1+n | A（受体） | R1 | R2... | 空 |
 | metal | 1 | 金属离子 | — | — | 空 |
 | water | 3 | O（氧） | H1 | H2 | 空 |
 | hydrophobic | 1 | 疏水碳 | — | — | 空 |
