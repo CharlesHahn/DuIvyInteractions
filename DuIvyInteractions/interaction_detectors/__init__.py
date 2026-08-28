@@ -3,5 +3,6 @@
 
 from .saltbridge_detector import SaltBridgeDetector
 from .hydrogen_bond_detector import HydrogenBondDetector
+from .halogen_bond_detector import HalogenBondDetector
 
-__all__ = ["SaltBridgeDetector", "HydrogenBondDetector"]
+__all__ = ["SaltBridgeDetector", "HydrogenBondDetector", "HalogenBondDetector"]
