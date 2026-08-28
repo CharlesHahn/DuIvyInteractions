@@ -3,7 +3,6 @@
 
 from abc import ABC, abstractmethod
 from typing import List
-import numpy as np
 
 from .datas import Group, Interaction, SystemData
 
@@ -68,17 +67,16 @@ class InteractionDetector(ABC):
         ...
 
     @abstractmethod
-    def detect_frame(self, groups: List[Group], coordinates: np.ndarray,
-                     frame: int, time_ps: float) -> List[Interaction]:
-        """检测单帧的相互作用。
+    def detect(self, groups: List[Group], trajectory) -> List[Interaction]:
+        """对全部帧检测相互作用。
+
+        内部遍历轨迹，逐帧向量化计算，累积为 Interaction 对象。
 
         Args:
             groups: 所有基团列表
-            coordinates: 坐标数组
-            frame: 帧号
-            time_ps: 时间（皮秒）
+            trajectory: MDAnalysis 轨迹对象（支持迭代和随机访问）
 
         Returns:
-            检测到的相互作用列表
+            检测到的相互作用列表，每个 Interaction 包含全帧数据
         """
         ...

@@ -4,7 +4,7 @@
 from .constants import GROUP_TYPES, BOND_TYPES
 from .datas import (
     Group, AtomData, BondData, ResidueData, InterResidueBond,
-    SystemData, Interaction, HydrogenBond, PiStacking, WaterBridge
+    SystemData, Interaction
 )
 from .interfaces import Reader, GroupIdentifier, InteractionDetector
 
@@ -13,7 +13,7 @@ __all__ = [
     "GROUP_TYPES", "BOND_TYPES",
     # 数据类
     "Group", "AtomData", "BondData", "ResidueData", "InterResidueBond",
-    "SystemData", "Interaction", "HydrogenBond", "PiStacking", "WaterBridge",
+    "SystemData", "Interaction",
     # 接口
     "Reader", "GroupIdentifier", "InteractionDetector",
 ]

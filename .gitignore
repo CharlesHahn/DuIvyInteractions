@@ -5,4 +5,4 @@ __pycache__/
 
 # Sphinx build output
 docs/_build/
-docs_en/_build/
+docs_en/_build/*.npz
