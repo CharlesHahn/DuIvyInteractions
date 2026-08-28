@@ -2,7 +2,8 @@
 """核心接口定义：Reader（读取器）、GroupIdentifier（识别器）、InteractionDetector（检测器）。"""
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Tuple, Dict
+import numpy as np
 
 from .datas import Group, Interaction, SystemData
 
@@ -52,31 +53,119 @@ class GroupIdentifier(ABC):
 
 
 class InteractionDetector(ABC):
-    """相互作用检测器接口。"""
+    """相互作用检测器基类（模板方法模式）。
+
+    子类只需实现：name, required_group_types, metric_names,
+    get_candidate_tuples, compute_metrics, apply_threshold。
+
+    detect 方法由基类固化算法骨架：
+    遍历基团组 → 加载坐标 → 计算指标 → 过滤 → 构建 Interaction。
+    """
+
+    # ==================== 子类必须实现 ====================
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """检测器名称。"""
+        """检测器名称（如 "salt_bridge"）。"""
         ...
 
     @property
     @abstractmethod
     def required_group_types(self) -> List[str]:
-        """需要的基团类型列表。"""
+        """需要的基团类型列表，Pipeline 据此过滤传入的基团。"""
+        ...
+
+    @property
+    @abstractmethod
+    def metric_names(self) -> List[str]:
+        """指标名称列表（如 ["distance", "angle"]）。"""
         ...
 
     @abstractmethod
-    def detect(self, groups: List[Group], trajectory) -> List[Interaction]:
-        """对全部帧检测相互作用。
+    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, ...]]:
+        """生成候选基团组。子类实现具体的组合逻辑。"""
+        ...
 
-        内部遍历轨迹，逐帧向量化计算，累积为 Interaction 对象。
+    @abstractmethod
+    def compute_metrics(self, group_tuple: Tuple[Group, ...],
+                        coords: np.ndarray) -> Dict[str, np.ndarray]:
+        """计算单个基团组在全部帧的指标。
 
         Args:
-            groups: 所有基团列表
-            trajectory: MDAnalysis 轨迹对象（支持迭代和随机访问）
+            group_tuple: 基团组
+            coords: (F, n_atoms, 3) 这个基团组的原子在全部帧的坐标
 
         Returns:
-            检测到的相互作用列表，每个 Interaction 包含全帧数据
+            {name: (F,)} 每帧的指标值
         """
         ...
+
+    @abstractmethod
+    def apply_threshold(self, metrics: Dict[str, np.ndarray]) -> np.ndarray:
+        """根据指标判断每帧是否存在。
+
+        Args:
+            metrics: {name: (F,)} 每帧的指标值
+
+        Returns:
+            (F,) bool 每帧是否存在
+        """
+        ...
+
+    # ==================== 可选覆盖 ====================
+
+    def filter_candidate_tuples(self, tuples: List[Tuple[Group, ...]],
+                                coordinates: np.ndarray) -> List[Tuple[Group, ...]]:
+        """用一帧坐标过滤候选基团组。默认不过滤。"""
+        return tuples
+
+    # ==================== 基类固化（模板方法） ====================
+
+    def detect(self, groups: List[Group], trajectory) -> List[Interaction]:
+        """检测全部帧的相互作用。
+
+        Args:
+            groups: 基团列表（已由 Pipeline 按 required_group_types 过滤）
+            trajectory: MDAnalysis 轨迹对象
+
+        Returns:
+            检测到的相互作用列表
+        """
+        tuples = self.get_candidate_tuples(groups)
+        n_frames = trajectory.n_frames
+        results = []
+
+        for gt in tuples:
+            indices = self._get_atom_indices(gt)
+            coords = np.zeros((n_frames, len(indices), 3))
+            for f, ts in enumerate(trajectory):
+                coords[f] = ts.positions[indices]
+
+            metrics = self.compute_metrics(gt, coords)
+            existence = self.apply_threshold(metrics)
+            if np.any(existence):
+                results.append((gt, existence, metrics))
+
+        return self._build_interaction(results)
+
+    # ==================== 内部辅助方法 ====================
+
+    def _get_atom_indices(self, gt: Tuple[Group, ...]) -> np.ndarray:
+        """提取基团组中所有原子的全局索引。"""
+        return np.array([idx for g in gt for idx in g.atom_indices])
+
+    def _build_interaction(self, results: list) -> List[Interaction]:
+        """将结果列表构建为 Interaction 对象。"""
+        if not results:
+            return []
+        groups = [r[0] for r in results]
+        existence = np.array([r[1] for r in results])
+        metrics = {k: np.array([r[2][k] for r in results])
+                   for k in results[0][2]}
+        return [Interaction(
+            interaction_type=self.name,
+            groups=groups,
+            existence=existence,
+            metrics=metrics
+        )]
