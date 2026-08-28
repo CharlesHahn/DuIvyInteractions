@@ -133,6 +133,10 @@ class InteractionDetector(ABC):
             检测到的相互作用列表
         """
         tuples = self.get_candidate_tuples(groups)
+
+        # 可选预过滤：加载第一帧坐标
+        tuples = self.filter_candidate_tuples(tuples, trajectory[0].positions)
+
         n_frames = trajectory.n_frames
         results = []
 
