@@ -3,6 +3,7 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict
+from functools import partial
 import numpy as np
 
 from .datas import Group, Interaction, SystemData
@@ -122,38 +123,69 @@ class InteractionDetector(ABC):
 
     # ==================== 基类固化（模板方法） ====================
 
-    def detect(self, groups: List[Group], trajectory) -> List[Interaction]:
+    def detect(self, groups: List[Group], trajectory=None,
+               n_workers: int = 1,
+               topology_path: str = None,
+               trajectory_path: str = None) -> List[Interaction]:
         """检测全部帧的相互作用。
 
         Args:
             groups: 基团列表（已由 Pipeline 按 required_group_types 过滤）
-            trajectory: MDAnalysis 轨迹对象
+            trajectory: MDAnalysis 轨迹对象（串行时必填，与 trajectory_path 二选一）
+            n_workers: 并行 worker 数（1=串行）
+            topology_path: 拓扑文件路径（并行时必填）
+            trajectory_path: 轨迹文件路径（并行时必填）
 
         Returns:
             检测到的相互作用列表
         """
+        # 确定轨迹来源
+        if n_workers > 1:
+            if topology_path is None or trajectory_path is None:
+                raise ValueError(
+                    "Parallel execution requires topology_path and trajectory_path")
+            import MDAnalysis as mda
+            traj_for_filter = mda.Universe(topology_path, trajectory_path).trajectory
+        else:
+            if trajectory is None:
+                raise ValueError("Serial execution requires trajectory")
+            traj_for_filter = trajectory
+
         tuples = self.get_candidate_tuples(groups)
+        tuples = self.filter_candidate_tuples(tuples, traj_for_filter[0].positions)
 
-        # 可选预过滤：加载第一帧坐标
-        tuples = self.filter_candidate_tuples(tuples, trajectory[0].positions)
-
-        n_frames = trajectory.n_frames
-        results = []
-
-        for gt in tuples:
-            indices = self._get_atom_indices(gt)
-            coords = np.zeros((n_frames, len(indices), 3))
-            for f, ts in enumerate(trajectory):
-                coords[f] = ts.positions[indices]
-
-            metrics = self.compute_metrics(gt, coords)
-            existence = self.apply_threshold(metrics)
-            if np.any(existence):
-                results.append((gt, existence, metrics))
+        if n_workers <= 1:
+            results = [r for gt in tuples
+                       if (r := self._process_tuple(gt, trajectory)) is not None]
+        else:
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(
+                    max_workers=n_workers,
+                    initializer=_worker_init,
+                    initargs=(topology_path, trajectory_path)) as pool:
+                worker = partial(_worker_process_tuple, detector=self)
+                results = list(pool.map(worker, tuples))
+            results = [r for r in results if r is not None]
 
         return self._build_interaction(results)
 
     # ==================== 内部辅助方法 ====================
+
+    def _process_tuple(self, gt: Tuple[Group, ...],
+                       trajectory) -> tuple:
+        """处理单个基团组。返回 (gt, existence, metrics) 或 None。"""
+        n_frames = trajectory.n_frames
+        indices = self._get_atom_indices(gt)
+        coords = np.zeros((n_frames, len(indices), 3))
+        for f, ts in enumerate(trajectory):
+            coords[f] = ts.positions[indices]
+
+        metrics = self.compute_metrics(gt, coords)
+        existence = self.apply_threshold(metrics)
+
+        if np.any(existence):
+            return (gt, existence, metrics)
+        return None
 
     def _get_atom_indices(self, gt: Tuple[Group, ...]) -> np.ndarray:
         """提取基团组中所有原子的全局索引。"""
@@ -173,3 +205,22 @@ class InteractionDetector(ABC):
             existence=existence,
             metrics=metrics
         )]
+
+
+# ==================== 并行 worker（模块级函数，可 pickle） ====================
+
+_worker_trajectory = None  # 每个 worker 进程独立的轨迹对象
+
+
+def _worker_init(topology_path: str, trajectory_path: str):
+    """每个 worker 进程启动时执行一次，加载轨迹。"""
+    global _worker_trajectory
+    import MDAnalysis as mda
+    u = mda.Universe(topology_path, trajectory_path)
+    _worker_trajectory = u.trajectory
+
+
+def _worker_process_tuple(gt: Tuple[Group, ...],
+                          detector: InteractionDetector):
+    """并行 worker：用已加载的轨迹处理单个基团组。"""
+    return detector._process_tuple(gt, _worker_trajectory)
