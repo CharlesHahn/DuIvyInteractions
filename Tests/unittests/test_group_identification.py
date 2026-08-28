@@ -95,6 +95,15 @@ class TestGroupCounts:
     def test_H_donor(self, group_counts):
         assert group_counts["H_donor"] == 74623
 
+    def test_H_donor_structure(self, groups):
+        """H_donor atoms=[D, H]，第一个是 D，第二个是 H，metadata 为空。"""
+        donors = [g for g in groups if g.group_type == "H_donor"]
+        sample = donors[0]
+        assert len(sample.atoms) == 2
+        assert sample.atoms[0].atom_element in ("N", "O", "S", "F")  # D
+        assert sample.atoms[1].atom_element == "H"                    # H
+        assert sample.metadata == {}
+
     def test_H_acceptor(self, group_counts):
         assert group_counts["H_acceptor"] == 37954
 
@@ -152,11 +161,16 @@ class TestD927:
     def test_halogen_donor(self, mol_group_counts):
         assert mol_group_counts[MOL_D927]["halogen_donor"] == 1
 
-    def test_halogen_donor_is_fluorine(self, groups):
+    def test_halogen_donor_structure(self, groups):
+        """卤键供体 atoms=[C, X]，第一个是碳，第二个是卤素。"""
         donors = [g for g in groups
                   if g.molecule == MOL_D927 and g.group_type == "halogen_donor"]
         assert len(donors) == 1
-        assert donors[0].atoms[0].atom_element == "F"
+        d = donors[0]
+        assert len(d.atoms) == 2
+        assert d.atoms[0].atom_element == "C"   # 碳
+        assert d.atoms[1].atom_element == "F"   # 卤素
+        assert d.metadata == {}
 
     def test_hydrophobic(self, mol_group_counts):
         assert mol_group_counts[MOL_D927]["hydrophobic"] == 12

@@ -308,8 +308,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atoms=[d_atom],
-                metadata={"h_atom": h_atom}
+                atoms=[d_atom, h_atom]
             ))
             gid += 1
 
@@ -336,8 +335,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                 molecule=d_res.molecule_name,
                 residue_name=d_res.residue_name,
                 residue_id=d_res.residue_global_idx,
-                atoms=[d_atom],
-                metadata={"h_atom": h_atom}
+                atoms=[d_atom, h_atom]
             ))
             gid += 1
 
@@ -628,21 +626,22 @@ class AmberFFGroupIdentifier(GroupIdentifier):
                        bond_graph: Dict[int, Set[int]],
                        start_id: int,
                        atom_map: Dict[int, AtomData]) -> Tuple[List[Group], int]:
-        """检测卤键供体（卤素连接到碳）。"""
+        """检测卤键供体（卤素连接到碳）。atoms=[C, X]，第一个是碳，第二个是卤素。"""
         groups: List[Group] = []
         gid = start_id
 
         for atom in res.atoms:
             if atom.atom_element not in ('F', 'Cl', 'Br', 'I'):
                 continue
-            if not self._is_bonded_to_element(atom, bond_graph, 'C', atom_map):
+            carbon = self._find_bonded_element(atom, bond_graph, 'C', atom_map)
+            if carbon is None:
                 continue
             groups.append(Group(
                 group_id=gid, group_type="halogen_donor",
                 molecule=res.molecule_name,
                 residue_name=res.residue_name,
                 residue_id=res.residue_global_idx,
-                atoms=[atom]
+                atoms=[carbon, atom]
             ))
             gid += 1
 
@@ -684,6 +683,17 @@ class AmberFFGroupIdentifier(GroupIdentifier):
             if neighbor and neighbor.atom_element == target_elem:
                 return True
         return False
+
+    def _find_bonded_element(self, atom: AtomData,
+                             bond_graph: Dict[int, Set[int]],
+                             target_elem: str,
+                             atom_map: Dict[int, AtomData]) -> AtomData:
+        """查找连接到指定元素的第一个邻居原子。"""
+        for n_idx in bond_graph.get(atom.atom_global_idx, set()):
+            neighbor = atom_map.get(n_idx)
+            if neighbor and neighbor.atom_element == target_elem:
+                return neighbor
+        return None
 
     def _is_bonded_to_any_element(self, atom: AtomData,
                                   bond_graph: Dict[int, Set[int]],
