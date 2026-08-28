@@ -126,7 +126,8 @@ class InteractionDetector(ABC):
     def detect(self, groups: List[Group], trajectory=None,
                n_workers: int = 1,
                topology_path: str = None,
-               trajectory_path: str = None) -> List[Interaction]:
+               trajectory_path: str = None,
+               tuple_filter=None) -> List[Interaction]:
         """检测全部帧的相互作用。
 
         Args:
@@ -135,6 +136,7 @@ class InteractionDetector(ABC):
             n_workers: 并行 worker 数（1=串行）
             topology_path: 拓扑文件路径（并行时必填）
             trajectory_path: 轨迹文件路径（并行时必填）
+            tuple_filter: 可选的基团组过滤函数 (Tuple[Group,...]) -> bool
 
         Returns:
             检测到的相互作用列表
@@ -152,6 +154,11 @@ class InteractionDetector(ABC):
             traj_for_filter = trajectory
 
         tuples = self.get_candidate_tuples(groups)
+
+        # 用户自定义过滤（如只检测不同蛋白之间的相互作用）
+        if tuple_filter is not None:
+            tuples = [t for t in tuples if tuple_filter(t)]
+
         tuples = self.filter_candidate_tuples(tuples, traj_for_filter[0].positions)
 
         if n_workers <= 1:

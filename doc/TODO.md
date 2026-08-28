@@ -52,6 +52,30 @@
 - 是否启用由用户通过命令行参数自行判定
 - cutoff 应远大于相互作用距离阈值（如氢键 4.1 Å → 预过滤用 15 Å）
 
+### 5. 基团组用户自定义过滤（tuple_filter）
+
+**需求**：用户需要指定相互作用的基团来源，如"只检测 RBD 和 KRAS 之间的盐桥"。
+
+**实现**：`detect` 方法的 `tuple_filter` 参数，接受 `(Tuple[Group,...]) -> bool` 函数。
+
+**执行顺序**：
+```
+get_candidate_tuples → tuple_filter → filter_candidate_tuples(距离) → 遍历计算
+```
+
+**使用示例**：
+```python
+# 只检测不同蛋白之间的盐桥
+detector.detect(groups, trajectory,
+    tuple_filter=lambda gt: gt[0].molecule != gt[1].molecule)
+
+# 只检测 RBD 和 KRAS 之间的盐桥
+detector.detect(groups, trajectory,
+    tuple_filter=lambda gt: {gt[0].molecule, gt[1].molecule} == {"RBD_pro", "KRAS_pro"})
+```
+
+**状态**：已实现。
+
 ---
 
 *文档结束*
