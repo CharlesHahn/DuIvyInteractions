@@ -6,6 +6,7 @@ from .hydrogen_bond_detector import HydrogenBondDetector
 from .halogen_bond_detector import HalogenBondDetector
 from .pi_stacking_detector import PiStackingDetector
 from .pi_cation_detector import PiCationDetector
+from .hydrophobic_detector import HydrophobicDetector
 
 __all__ = [
     "SaltBridgeDetector",
@@ -13,4 +14,5 @@ __all__ = [
     "HalogenBondDetector",
     "PiStackingDetector",
     "PiCationDetector",
+    "HydrophobicDetector",
 ]

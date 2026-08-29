@@ -174,6 +174,7 @@ class InteractionDetector(ABC):
                 results = list(pool.map(worker, tuples))
             results = [r for r in results if r is not None]
 
+        results = self._post_process(results)
         return self._build_interaction(results)
 
     # ==================== 内部辅助方法 ====================
@@ -197,6 +198,19 @@ class InteractionDetector(ABC):
     def _get_atom_indices(self, gt: Tuple[Group, ...]) -> np.ndarray:
         """提取基团组中所有原子的全局索引。"""
         return np.array([idx for g in gt for idx in g.atom_indices])
+
+    def _post_process(self, results: list) -> list:
+        """后处理钩子：在检测完成后、构建 Interaction 之前调用。
+
+        子类可覆盖此方法实现跨对逻辑（如去重）。
+        默认不做任何处理。
+
+        Args:
+            results: [(gt, existence, metrics), ...] 列表
+        Returns:
+            处理后的 results 列表
+        """
+        return results
 
     def _build_interaction(self, results: list) -> List[Interaction]:
         """将结果列表构建为 Interaction 对象。"""
