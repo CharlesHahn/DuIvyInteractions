@@ -76,6 +76,24 @@ detector.detect(groups, trajectory,
 
 **状态**：已实现。
 
+### 6. 官能团分类粗糙问题
+
+**问题**：PLIP 的 `is_functional_group` 对氮基团分类粗糙。"tertamine" 实际包含所有 sp3 氮（NR₃、NR₃H⁺、NH₃⁺ 等），不是化学意义上的"叔胺"。当前代码复现了 PLIP 的定义，导致蛋白 N 末端 NH₃⁺ 被误判为 tertamine。
+
+**待改进**：需要更精细的氮基团分类，区分叔胺、伯胺、仲胺等不同化学基团。
+
+**影响**：pi-cation 检测的叔胺角度检查会误触发。
+
+### 7. PLIP 对 tertamine 的 pi-cation 特殊处理
+
+**现象**：PLIP 在 `pication()` 中对 tertamine 做了额外角度检查，其他正电基团（quartamine、guanidine、sulfonium）没有此检查。
+
+**PLIP 的操作**：计算胺的三个邻居平面的法向量（`amine_normal`），与环法向量（`ring.normal`）取夹角。若夹角 ≤ 30°，排除该 pi-cation 对。
+
+**PLIP 注释**：`"Special case here if the ligand has a tertiary amine, check an additional angle. Otherwise, we might have a pi-cation interaction 'through' the ligand."`
+
+**待理解**：为什么只有 tertamine 需要这个检查？这个角度条件（≤ 30°）的物理含义是什么？为什么它能防止"穿过配体"的假阳性？
+
 ---
 
 *文档结束*

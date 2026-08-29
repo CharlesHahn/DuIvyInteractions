@@ -65,7 +65,7 @@
 | distance | float | 正电荷中心到环心距离（Å） |
 | offset | float | 电荷中心投影偏移量（Å） |
 
-**阈值**：distance < 6.0 Å，offset < 2.0 Å
+**阈值**：0.5 Å < distance < 6.0 Å，offset < 2.0 Å
 
 ---
 
