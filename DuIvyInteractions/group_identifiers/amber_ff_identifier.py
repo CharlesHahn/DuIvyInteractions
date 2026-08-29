@@ -192,6 +192,8 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         gid = start_id
 
         for ring_atoms in aromatic_rings:
+            # atoms 必须按环顺序存储（BFS 路径顺序），PiStackingDetector 的
+            # _ring_normal 依赖 np.roll 取前后邻居计算法向量
             ring_atom_data = [res.atoms[i] for i in ring_atoms]
             groups.append(Group(
                 group_id=gid, group_type="aromatic_ring",

@@ -41,10 +41,20 @@
 | 键名 | 类型 | 说明 |
 |:-----|:-----|:-----|
 | distance | float | 两环环心距离（Å） |
-| angle | float | 两环法向量夹角（°），0°/180°=平行，90°=T 型 |
-| offset | float | 环心投影偏移量（Å） |
+| angle | float | 两环法向量夹角（°），已取 min(θ, 180-θ) |
+| offset | float | 环心投影偏移量（Å），双向取较小值 |
+| pistacking_type | str(U1) | 堆积类型：'N'（无）、'P'（平行）、'T'（T 型） |
+| planarity_ring1 | float | 环 1 法向量两两最大夹角（°），仅 check_planarity=True |
+| planarity_ring2 | float | 环 2 法向量两两最大夹角（°），仅 check_planarity=True |
 
-**阈值**：distance < 5.5 Å，角度偏差 ≤ 30°，offset < 2.0 Å
+**阈值**：
+- 0.5 Å < distance < 5.5 Å
+- P 型：angle ≤ 30° 且 offset < 2.0 Å
+- T 型：angle ≥ 60° 且 offset < 2.0 Å
+- 平面性（可选）：两个环的 planarity ≤ 5.0°
+
+**参数**：
+- `check_planarity: bool = False`：是否逐帧检验环平面性
 
 ---
 
