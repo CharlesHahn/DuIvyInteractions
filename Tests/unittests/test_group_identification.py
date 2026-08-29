@@ -90,7 +90,7 @@ class TestGroupCounts:
 
     def test_total_groups(self, group_counts):
         total = sum(group_counts.values())
-        assert total == 151971
+        assert total == 152385
 
     def test_H_donor(self, group_counts):
         assert group_counts["H_donor"] == 74623
@@ -354,34 +354,10 @@ class TestMetalBinding:
             assert g.atoms[0].atom_element in ("O", "N", "S")
 
     def test_metal_binding_source(self, groups):
-        """metadata.source 应为 protein_sidechain/protein_backbone/ligands。"""
+        """metadata.source 应为 element。"""
         bindings = [g for g in groups if g.group_type == "metal_binding"]
-        valid_sources = {"protein_sidechain", "protein_backbone", "ligands"}
         for g in bindings:
-            assert g.metadata["source"] in valid_sources
-
-    def test_protein_backbone_o(self, groups):
-        """蛋白主链 O 应被识别为 metal_binding。"""
-        backbone = [g for g in groups
-                    if g.group_type == "metal_binding"
-                    and g.metadata["source"] == "protein_backbone"]
-        # RBD (138) + KRAS (162) = 300 个主链 O
-        assert len(backbone) == 300
-
-    def test_protein_sidechain(self, groups):
-        """蛋白侧链配位原子应被识别。"""
-        sidechain = [g for g in groups
-                     if g.group_type == "metal_binding"
-                     and g.metadata["source"] == "protein_sidechain"]
-        # 至少应有 CYS-SG, HIS-ND1/NE2, ASP/GLU-O, SER/THR/TYR-O
-        assert len(sidechain) > 0
-
-    def test_ligand_binding(self, groups):
-        """配体分子的 O/N/S 应被识别为 metal_binding。"""
-        ligand = [g for g in groups
-                  if g.group_type == "metal_binding"
-                  and g.metadata["source"] == "ligands"]
-        assert len(ligand) > 0
+            assert g.metadata["source"] == "element"
 
     def test_water_excluded(self, groups):
         """水分子不应被识别为 metal_binding。"""

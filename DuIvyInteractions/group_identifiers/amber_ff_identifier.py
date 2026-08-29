@@ -59,48 +59,6 @@ METAL_IONS = frozenset({
 # 水分子残基名
 WATER_RESIDUES = frozenset({"SOL", "HOH", "WAT"})
 
-# 标准氨基酸残基名（Amber14SB 完整列表）
-# 来源：amber14sb.ff/aminoacids.rtp
-STANDARD_AMINO_ACIDS = frozenset({
-    # 标准 20 氨基酸
-    "ALA", "GLY", "SER", "THR", "LEU", "ILE", "VAL",
-    "ASN", "GLN", "ARG", "TRP", "PHE", "TYR",
-    "GLU", "ASP", "LYS", "PRO", "CYS", "MET",
-    # 非标准质子化态
-    "HID", "HIE", "HIP", "CYM", "CYX", "LYN", "ASH", "GLH",
-    # 修饰氨基酸
-    "ORN", "DAB", "HYP",
-    # C 末端变体
-    "CALA", "CGLY", "CSER", "CTHR", "CLEU", "CILE", "CVAL",
-    "CASN", "CGLN", "CARG", "CHID", "CHIE", "CHIP",
-    "CTRP", "CPHE", "CTYR", "CGLU", "CASP", "CLYS",
-    "CPRO", "CCYS", "CCYX", "CMET",
-    # N 末端变体
-    "NALA", "NGLY", "NSER", "NTHR", "NLEU", "NILE", "NVAL",
-    "NASN", "NGLN", "NARG", "NHID", "NHIE", "NHIP",
-    "NTRP", "NPHE", "NTYR", "NGLU", "NASP", "NLYS",
-    "NPRO", "NCYS", "NCYX", "NMET",
-})
-
-# 蛋白侧链金属配位原子（残基名 → 配位原子名列表）
-# 来源：PLIP metal_complexation
-PROTEIN_METAL_BINDING = {
-    "CYS": ["SG"],  "CYM": ["SG"],  "CYX": ["SG"],
-    "CCYS": ["SG"], "CCYX": ["SG"], "NCYS": ["SG"], "NCYX": ["SG"],
-    "HIS": ["ND1", "NE2"],  "HID": ["ND1"],  "HIE": ["NE2"],  "HIP": ["ND1", "NE2"],
-    "CHID": ["ND1"], "CHIE": ["NE2"], "CHIP": ["ND1", "NE2"],
-    "NHID": ["ND1"], "NHIE": ["NE2"], "NHIP": ["ND1", "NE2"],
-    "ASN": ["OD1"], "CASN": ["OD1"], "NASN": ["OD1"],
-    "GLN": ["OE1"], "CGLN": ["OE1"], "NGLN": ["OE1"],
-    "GLU": ["OE1", "OE2"], "GLH": ["OE1", "OE2"],
-    "CGLU": ["OE1", "OE2"], "NGLU": ["OE1", "OE2"],
-    "ASP": ["OD1", "OD2"], "ASH": ["OD1", "OD2"],
-    "CASP": ["OD1", "OD2"], "NASP": ["OD1", "OD2"],
-    "SER": ["OG"], "CSER": ["OG"], "NSER": ["OG"],
-    "THR": ["OG1"], "CTHR": ["OG1"], "NTHR": ["OG1"],
-    "TYR": ["OH"], "CTYR": ["OH"], "NTYR": ["OH"],
-}
-
 # 电荷验证阈值
 CHARGE_THRESHOLD = 0.1
 
@@ -834,53 +792,24 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
     def _find_metal_binding(self, res: ResidueData,
                             start_id: int) -> Tuple[List[Group], int]:
-        """检测金属配位原子。"""
+        """检测金属配位原子：元素 ∈ {O, N, S} 且非水。"""
         groups: List[Group] = []
         gid = start_id
 
-        # 水分子不参与金属配位识别
         if res.residue_name in WATER_RESIDUES:
             return groups, gid
 
-        if res.residue_name in STANDARD_AMINO_ACIDS:
-            # 蛋白残基：侧链 + 主链 O
-            binding_atoms = PROTEIN_METAL_BINDING.get(res.residue_name, [])
-            for atom in res.atoms:
-                is_sidechain = atom.atom_name in binding_atoms
-                is_backbone_o = atom.atom_name == "O" and atom.atom_element == "O"
-                if is_sidechain:
-                    groups.append(Group(
-                        group_id=gid, group_type="metal_binding",
-                        molecule=res.molecule_name,
-                        residue_name=res.residue_name,
-                        residue_id=res.residue_global_idx,
-                        atoms=[atom],
-                        metadata={"source": "protein_sidechain"}
-                    ))
-                    gid += 1
-                elif is_backbone_o:
-                    groups.append(Group(
-                        group_id=gid, group_type="metal_binding",
-                        molecule=res.molecule_name,
-                        residue_name=res.residue_name,
-                        residue_id=res.residue_global_idx,
-                        atoms=[atom],
-                        metadata={"source": "protein_backbone"}
-                    ))
-                    gid += 1
-        else:
-            # 非蛋白非水分子：O/N/S 原子
-            for atom in res.atoms:
-                if atom.atom_element in ("O", "N", "S"):
-                    groups.append(Group(
-                        group_id=gid, group_type="metal_binding",
-                        molecule=res.molecule_name,
-                        residue_name=res.residue_name,
-                        residue_id=res.residue_global_idx,
-                        atoms=[atom],
-                        metadata={"source": "ligands"}
-                    ))
-                    gid += 1
+        for atom in res.atoms:
+            if atom.atom_element in ("O", "N", "S"):
+                groups.append(Group(
+                    group_id=gid, group_type="metal_binding",
+                    molecule=res.molecule_name,
+                    residue_name=res.residue_name,
+                    residue_id=res.residue_global_idx,
+                    atoms=[atom],
+                    metadata={"source": "element"}
+                ))
+                gid += 1
 
         return groups, gid
 
