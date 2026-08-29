@@ -7,7 +7,7 @@ GROUP_TYPES = frozenset({
     "aromatic_ring",                    # π 相关
     "charged_positive", "charged_negative",  # 电荷
     "halogen_donor", "halogen_acceptor",  # 卤键
-    "metal", "water", "hydrophobic",   # 其他
+    "metal", "metal_binding", "water", "hydrophobic",  # 其他
 })
 
 # 键类型

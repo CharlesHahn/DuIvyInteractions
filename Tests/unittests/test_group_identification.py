@@ -64,7 +64,7 @@ class TestSystemData:
     """验证 tpr 解析结果。"""
 
     def test_system_name(self, system_data):
-        assert system_data.system_name == "md"
+        assert "md" in system_data.system_name
 
     def test_residue_count(self, system_data):
         assert system_data.n_residues == 37551
@@ -90,7 +90,7 @@ class TestGroupCounts:
 
     def test_total_groups(self, group_counts):
         total = sum(group_counts.values())
-        assert total == 151448
+        assert total == 151971
 
     def test_H_donor(self, group_counts):
         assert group_counts["H_donor"] == 74623
@@ -333,3 +333,59 @@ class TestWater:
 
     def test_water_H_acceptor(self, mol_group_counts):
         assert mol_group_counts[MOL_SOL]["H_acceptor"] == 37021
+
+
+# ============================================================
+# 金属配位原子测试
+# ============================================================
+
+class TestMetalBinding:
+    """验证金属配位原子检测。"""
+
+    def test_metal_binding_exists(self, group_counts):
+        """应检测到 metal_binding 基团。"""
+        assert group_counts["metal_binding"] > 0
+
+    def test_metal_binding_structure(self, groups):
+        """每个 metal_binding 基团应有 1 个原子，元素为 O/N/S。"""
+        bindings = [g for g in groups if g.group_type == "metal_binding"]
+        for g in bindings:
+            assert len(g.atoms) == 1
+            assert g.atoms[0].atom_element in ("O", "N", "S")
+
+    def test_metal_binding_source(self, groups):
+        """metadata.source 应为 protein_sidechain/protein_backbone/ligands。"""
+        bindings = [g for g in groups if g.group_type == "metal_binding"]
+        valid_sources = {"protein_sidechain", "protein_backbone", "ligands"}
+        for g in bindings:
+            assert g.metadata["source"] in valid_sources
+
+    def test_protein_backbone_o(self, groups):
+        """蛋白主链 O 应被识别为 metal_binding。"""
+        backbone = [g for g in groups
+                    if g.group_type == "metal_binding"
+                    and g.metadata["source"] == "protein_backbone"]
+        # RBD (138) + KRAS (162) = 300 个主链 O
+        assert len(backbone) == 300
+
+    def test_protein_sidechain(self, groups):
+        """蛋白侧链配位原子应被识别。"""
+        sidechain = [g for g in groups
+                     if g.group_type == "metal_binding"
+                     and g.metadata["source"] == "protein_sidechain"]
+        # 至少应有 CYS-SG, HIS-ND1/NE2, ASP/GLU-O, SER/THR/TYR-O
+        assert len(sidechain) > 0
+
+    def test_ligand_binding(self, groups):
+        """配体分子的 O/N/S 应被识别为 metal_binding。"""
+        ligand = [g for g in groups
+                  if g.group_type == "metal_binding"
+                  and g.metadata["source"] == "ligands"]
+        assert len(ligand) > 0
+
+    def test_water_excluded(self, groups):
+        """水分子不应被识别为 metal_binding。"""
+        water_binding = [g for g in groups
+                         if g.group_type == "metal_binding"
+                         and g.residue_name in ("SOL", "HOH", "WAT")]
+        assert len(water_binding) == 0

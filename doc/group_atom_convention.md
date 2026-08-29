@@ -111,7 +111,23 @@ C→X 方向定义了 σ-hole 的方向（卤键沿 C-X 键轴方向）。
 
 ---
 
-### 2.8 water
+### 2.8 metal_binding
+
+`atoms = [配位原子]`（1 个原子）
+
+| 位置 | 语义 | 元素 |
+|------|------|------|
+| atoms[0] | 配位原子 | O、N 或 S |
+
+**metadata**：
+
+| 键 | 值 | 说明 |
+|----|----|------|
+| source | `"protein_sidechain"` / `"protein_backbone"` / `"ligands"` | 识别来源 |
+
+---
+
+### 2.9 water
 
 `atoms = [O, H1, H2]`（3 个原子）
 
@@ -149,6 +165,7 @@ C→X 方向定义了 σ-hole 的方向（卤键沿 C-X 键轴方向）。
 | halogen_donor | 2 | C（碳） | X（卤素） | — | 空 |
 | halogen_acceptor | 1+n | A（受体） | R1 | R2... | 空 |
 | metal | 1 | 金属离子 | — | — | 空 |
+| metal_binding | 1 | 配位原子（O/N/S） | — | — | source |
 | water | 3 | O（氧） | H1 | H2 | 空 |
 | hydrophobic | 1 | 疏水碳 | — | — | 空 |
 
