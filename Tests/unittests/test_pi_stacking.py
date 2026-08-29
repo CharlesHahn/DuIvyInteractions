@@ -233,3 +233,101 @@ class TestPiStackingDetectorMeta:
         names = detector.metric_names
         assert "planarity_ring1" in names
         assert "planarity_ring2" in names
+
+
+# ============================================================
+# 结果数据测试
+# ============================================================
+
+class TestPiStackingResults:
+    """验证基于真实数据的检测结果。"""
+
+    def test_has_results(self, pi_stackings):
+        """应检测到 π-π 堆积。"""
+        assert len(pi_stackings) > 0
+
+    def test_n_pairs(self, pi_stackings):
+        """应检测到 10 对 π-π 堆积。"""
+        assert pi_stackings[0].n_pairs == 10
+
+    def test_aromatic_ring_count(self, aromatic_groups):
+        """体系应有 38 个芳香环。"""
+        assert len(aromatic_groups) == 38
+
+    def test_ring_distribution(self, aromatic_groups):
+        """各分子的芳香环数应正确。"""
+        from collections import Counter
+        mol_counts = Counter(g.molecule for g in aromatic_groups)
+        assert mol_counts[MOL_RBD] == 17
+        assert mol_counts[MOL_D927] == 3
+        assert mol_counts[MOL_KRAS] == 18
+
+    def test_top_pair(self, pi_stackings):
+        """最高占位率的堆积应为 KRAS:HIS237 ↔ KRAS:TYR238。"""
+        it = pi_stackings[0]
+        occ = it.occupancy()
+        top_idx = np.argmax(occ)
+        r1, r2 = it.groups[top_idx]
+        assert r1.residue_name == "HIS"
+        assert r1.residue_id == 237
+        assert r2.residue_name == "TYR"
+        assert r2.residue_id == 238
+        assert occ[top_idx] > 0.5
+
+    def test_top_pair_is_t_type(self, pi_stackings):
+        """最高占位率的堆积应以 T 型为主。"""
+        it = pi_stackings[0]
+        occ = it.occupancy()
+        top_idx = np.argmax(occ)
+        pt = it.metrics["pistacking_type"][top_idx]
+        t_count = np.sum(pt == 'T')
+        p_count = np.sum(pt == 'P')
+        assert t_count > p_count
+
+    def test_d927_participation(self, pi_stackings):
+        """D927 配体应参与 π-π 堆积。"""
+        it = pi_stackings[0]
+        d927_pairs = 0
+        for r1, r2 in it.groups:
+            if r1.molecule == MOL_D927 or r2.molecule == MOL_D927:
+                d927_pairs += 1
+        assert d927_pairs >= 3
+
+    def test_t_type_dominant(self, pi_stackings):
+        """T 型堆积帧次应多于 P 型。"""
+        it = pi_stackings[0]
+        pt = it.metrics["pistacking_type"]
+        t_count = int(np.sum(pt == 'T'))
+        p_count = int(np.sum(pt == 'P'))
+        assert t_count > p_count
+
+    def test_occupancy_range(self, pi_stackings):
+        """占位率应在 [0, 1] 范围内。"""
+        occ = pi_stackings[0].occupancy()
+        assert np.all(occ >= 0)
+        assert np.all(occ <= 1)
+
+    def test_metrics_shape(self, pi_stackings):
+        """metrics 数组形状应为 (n_pairs, n_frames)。"""
+        it = pi_stackings[0]
+        n_frames = it.n_frames
+        assert it.metrics["distance"].shape == (it.n_pairs, n_frames)
+        assert it.metrics["angle"].shape == (it.n_pairs, n_frames)
+        assert it.metrics["offset"].shape == (it.n_pairs, n_frames)
+        assert it.metrics["pistacking_type"].shape == (it.n_pairs, n_frames)
+
+    def test_active_distance_range(self, pi_stackings):
+        """活跃帧的环心距离应 ≤ 5.5 Å。"""
+        it = pi_stackings[0]
+        for i in range(it.n_pairs):
+            active_dist = it.metrics["distance"][i][it.existence[i]]
+            if len(active_dist) > 0:
+                assert np.all(active_dist <= 5.5)
+
+    def test_active_angle_range(self, pi_stackings):
+        """活跃帧的 angle 应 ≤ 30°（P 型）或 ≥ 60°（T 型）。"""
+        it = pi_stackings[0]
+        for i in range(it.n_pairs):
+            active_angle = it.metrics["angle"][i][it.existence[i]]
+            if len(active_angle) > 0:
+                assert np.all((active_angle <= 30.0) | (active_angle >= 60.0))
