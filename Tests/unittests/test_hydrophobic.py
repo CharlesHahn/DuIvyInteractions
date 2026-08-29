@@ -168,19 +168,28 @@ class TestHydrophobicResults:
         assert len(hydrophobic_interactions) > 0
 
     def test_n_pairs_reasonable(self, hydrophobic_interactions):
-        """去重后对数应少于预过滤后对数（~9536）。"""
+        """100 个原子子集，去重后对数应 < 4950（C(100,2)）。"""
         n_pairs = hydrophobic_interactions[0].n_pairs
         assert n_pairs > 0
-        assert n_pairs < 10000
+        assert n_pairs < 4950
 
     def test_hydrophobic_count(self, hydrophobic_groups):
         """体系应有 734 个疏水原子。"""
         assert len(hydrophobic_groups) == 734
 
-    def test_subset_hydrophobic_count(self):
-        """子集测试使用 100 个疏水原子。"""
-        # 此测试验证 fixture 中使用的子集大小
-        assert True  # 子集大小在 fixture 中定义
+    def test_deduplication(self, hydrophobic_interactions):
+        """去重后，同一原子不应与同残基多个原子同时保留。"""
+        inter = hydrophobic_interactions[0]
+        # 收集每个 (g1_id, r2_id) 对
+        seen = {}
+        for i, (g1, g2) in enumerate(inter.groups):
+            key1 = (g1.group_id, g2.residue_id)
+            key2 = (g2.group_id, g1.residue_id)
+            # 每个 (atom, residue) 对应最多一个接触
+            assert key1 not in seen, f"重复: g1={g1}, g2={g2}"
+            assert key2 not in seen, f"重复: g2={g2}, g1={g1}"
+            seen[key1] = i
+            seen[key2] = i
 
     def test_occupancy_range(self, hydrophobic_interactions):
         """占位率应在 [0, 1] 范围内。"""

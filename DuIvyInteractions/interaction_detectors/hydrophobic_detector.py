@@ -8,7 +8,6 @@
 import numpy as np
 from typing import List, Tuple, Dict
 from itertools import combinations
-from collections import defaultdict
 
 from ..core.interfaces import InteractionDetector
 from ..core.datas import Group
@@ -82,35 +81,33 @@ class HydrophobicDetector(InteractionDetector):
     def _post_process(self, results: list) -> list:
         """去重：同一原子与同残基多个原子的接触，只保留最近的。
 
-        PLIP 规则 2：配体原子与同残基多个蛋白原子 → 保留最近
-        PLIP 规则 3：蛋白原子与同残基多个配体原子 → 保留最近
-
-        我们泛化为：对于每个基团 A，如果它与残基 R 中的多个基团有接触，
-        只保留距离最近的那个。
+        对于每个 (group_id, residue_id) 对，只保留平均距离最近的那个接触。
+        一个 pair 必须是它所有 key 的最优解才会被保留。
         """
         if not results:
             return results
 
-        # 按 (group1_id, residue2_id) 和 (group2_id, residue1_id) 分组
-        # 找出每个 (atom, residue) 对中距离最小的那个
-        best_by_g1_r2 = {}  # (g1_id, r2_id) → index in results
-        best_by_g2_r1 = {}  # (g2_id, r1_id) → index in results
+        # 第一步：找出每个 key 的最优 pair index
+        best = {}  # (group_id, residue_id) → (index, avg_dist)
 
         for i, (gt, existence, metrics) in enumerate(results):
             g1, g2 = gt
-            avg_dist = np.mean(metrics["distance"][existence]) if np.any(existence) else float('inf')
+            avg_dist = float(np.mean(metrics["distance"][existence]))
 
             key1 = (g1.group_id, g2.residue_id)
             key2 = (g2.group_id, g1.residue_id)
 
-            if key1 not in best_by_g1_r2 or avg_dist < best_by_g1_r2[key1][1]:
-                best_by_g1_r2[key1] = (i, avg_dist)
+            for key in [key1, key2]:
+                if key not in best or avg_dist < best[key][1]:
+                    best[key] = (i, avg_dist)
 
-            if key2 not in best_by_g2_r1 or avg_dist < best_by_g2_r1[key2][1]:
-                best_by_g2_r1[key2] = (i, avg_dist)
+        # 第二步：只保留对所有 key 都是最优的 pair
+        keep = []
+        for i, (gt, existence, metrics) in enumerate(results):
+            g1, g2 = gt
+            key1 = (g1.group_id, g2.residue_id)
+            key2 = (g2.group_id, g1.residue_id)
+            if best[key1][0] == i and best[key2][0] == i:
+                keep.append(i)
 
-        # 取两个方向的交集
-        keep_indices = set(v[0] for v in best_by_g1_r2.values()) & \
-                       set(v[0] for v in best_by_g2_r1.values())
-
-        return [results[i] for i in sorted(keep_indices)]
+        return [results[i] for i in keep]
