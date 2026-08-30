@@ -84,8 +84,14 @@ class InteractionDetector(ABC):
         ...
 
     @abstractmethod
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, ...]]:
-        """生成候选基团组。子类实现具体的组合逻辑。"""
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, ...]]:
+        """生成候选基团组。子类实现具体的组合逻辑。
+
+        Args:
+            groups: 基团列表
+            coordinates: 第一帧坐标数组，可用于边生成边预筛选。默认 None。
+        """
         ...
 
     @abstractmethod
@@ -153,13 +159,14 @@ class InteractionDetector(ABC):
                 raise ValueError("Serial execution requires trajectory")
             traj_for_filter = trajectory
 
-        tuples = self.get_candidate_tuples(groups)
+        first_frame = traj_for_filter[0].positions
+        tuples = self.get_candidate_tuples(groups, first_frame)
 
         # 用户自定义过滤（如只检测不同蛋白之间的相互作用）
         if tuple_filter is not None:
             tuples = [t for t in tuples if tuple_filter(t)]
 
-        tuples = self.filter_candidate_tuples(tuples, traj_for_filter[0].positions)
+        tuples = self.filter_candidate_tuples(tuples, first_frame)
 
         if n_workers <= 1:
             results = [r for gt in tuples

@@ -35,7 +35,8 @@ class MetalCoordinationDetector(InteractionDetector):
     def metric_names(self) -> List[str]:
         return ["distance"]
 
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, Group]]:
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, Group]]:
         """生成所有金属-配位原子对。"""
         metals = [g for g in groups if g.group_type == "metal"]
         binding = [g for g in groups if g.group_type == "metal_binding"]

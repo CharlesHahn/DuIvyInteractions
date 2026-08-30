@@ -50,7 +50,8 @@ class PiStackingDetector(InteractionDetector):
             names.extend(["planarity_ring1", "planarity_ring2"])
         return names
 
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, Group]]:
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, Group]]:
         """生成所有环对（不重复）。"""
         rings = [g for g in groups if g.group_type == "aromatic_ring"]
         return list(combinations(rings, 2))

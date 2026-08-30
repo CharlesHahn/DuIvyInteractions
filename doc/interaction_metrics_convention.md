@@ -107,12 +107,12 @@
 
 | 键名 | 类型 | 说明 |
 |:-----|:-----|:-----|
-| dist_donor_water | float | 供体到水 O 距离（Å） |
-| dist_water_acceptor | float | 水 O 到受体距离（Å） |
-| omega | float | 受体-水O-供体H 角度（°） |
+| dist_dw | float | 供体 D 到水 O 距离（Å） |
+| dist_wa | float | 水 O 到受体 A 距离（Å） |
 | theta | float | 水O-供体H-供体D 角度（°） |
+| omega | float | 受体-水O-供体H 角度（°） |
 
-**阈值**：距离在 2.5~4.1 Å，omega 在 71°~140°，theta > 100°
+**阈值**：2.5 Å < dist_dw < 4.1 Å，2.5 Å < dist_wa < 4.1 Å，theta ≥ 100°，71° ≤ omega ≤ 140°
 
 ---
 

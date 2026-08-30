@@ -8,6 +8,7 @@ from .pi_stacking_detector import PiStackingDetector
 from .pi_cation_detector import PiCationDetector
 from .hydrophobic_detector import HydrophobicDetector
 from .metal_coordination_detector import MetalCoordinationDetector
+from .water_bridge_detector import WaterBridgeDetector
 
 __all__ = [
     "SaltBridgeDetector",
@@ -17,4 +18,5 @@ __all__ = [
     "PiCationDetector",
     "HydrophobicDetector",
     "MetalCoordinationDetector",
+    "WaterBridgeDetector",
 ]

@@ -37,7 +37,8 @@ class PiCationDetector(InteractionDetector):
     def metric_names(self) -> List[str]:
         return ["distance", "offset"]
 
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, Group]]:
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, Group]]:
         """生成所有环-正电荷对（笛卡尔积）。"""
         rings = [g for g in groups if g.group_type == "aromatic_ring"]
         pos = [g for g in groups if g.group_type == "charged_positive"]

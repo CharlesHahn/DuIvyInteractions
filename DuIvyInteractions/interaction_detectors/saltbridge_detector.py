@@ -35,7 +35,8 @@ class SaltBridgeDetector(InteractionDetector):
     def metric_names(self) -> List[str]:
         return ["distance"]
 
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, Group]]:
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, Group]]:
         """生成所有正电-负电基团组。"""
         pos = [g for g in groups if g.group_type == "charged_positive"]
         neg = [g for g in groups if g.group_type == "charged_negative"]

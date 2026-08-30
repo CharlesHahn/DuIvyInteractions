@@ -35,7 +35,8 @@ class HydrogenBondDetector(InteractionDetector):
     def metric_names(self) -> List[str]:
         return ["distance", "angle"]
 
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, Group]]:
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, Group]]:
         """生成所有供体-受体基团组。"""
         donors = [g for g in groups if g.group_type == "H_donor"]
         acceptors = [g for g in groups if g.group_type == "H_acceptor"]

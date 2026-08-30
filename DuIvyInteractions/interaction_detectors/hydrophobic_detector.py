@@ -36,7 +36,8 @@ class HydrophobicDetector(InteractionDetector):
     def metric_names(self) -> List[str]:
         return ["distance"]
 
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, Group]]:
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, Group]]:
         """生成所有疏水原子对（不重复）。"""
         hydro = [g for g in groups if g.group_type == "hydrophobic"]
         return list(combinations(hydro, 2))

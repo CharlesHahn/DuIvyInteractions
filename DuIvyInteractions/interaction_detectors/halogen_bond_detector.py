@@ -37,7 +37,8 @@ class HalogenBondDetector(InteractionDetector):
     def metric_names(self) -> List[str]:
         return ["distance", "don_angle", "acc_angle"]
 
-    def get_candidate_tuples(self, groups: List[Group]) -> List[Tuple[Group, Group]]:
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None) -> List[Tuple[Group, Group]]:
         """生成所有卤键供体-受体基团组。"""
         donors = [g for g in groups if g.group_type == "halogen_donor"]
         acceptors = [g for g in groups if g.group_type == "halogen_acceptor"]
