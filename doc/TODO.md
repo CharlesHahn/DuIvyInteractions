@@ -94,6 +94,20 @@ detector.detect(groups, trajectory,
 
 **待理解**：为什么只有 tertamine 需要这个检查？这个角度条件（≤ 30°）的物理含义是什么？为什么它能防止"穿过配体"的假阳性？
 
+### 8. 金属配位几何构型匹配
+
+**推迟原因**：第一版只做距离判据，几何构型匹配复杂度高。
+
+**PLIP 的操作**：按金属分组后，计算所有配位原子的角度，与已知几何构型（linear/trigonal/tetrahedral/octahedral 等）比较，选择 RMS 最小的构型，移除不符合该构型的多余配位原子。
+
+**实现位置**：`interaction_detectors/metal_coordination_detector.py`
+
+### 9. 金属配位排除纯水配位
+
+**推迟原因**：当前 `metal_binding` 基团已排除水分子，不需要额外处理。但如果未来改为不排除水，则需要此逻辑。
+
+**PLIP 的操作**：如果所有配位原子都来自水分子，不报告该金属配位。
+
 ---
 
 *文档结束*
