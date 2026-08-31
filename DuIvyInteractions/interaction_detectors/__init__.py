@@ -13,6 +13,7 @@ from .pi_cation_detector_per_frame import PiCationDetectorPerFrame
 from .hydrophobic_detector_per_tuple import HydrophobicDetectorPerTuple
 from .metal_coordination_detector_per_tuple import MetalCoordinationDetectorPerTuple
 from .water_bridge_detector_per_tuple import WaterBridgeDetectorPerTuple
+from .water_bridge_detector_per_frame import WaterBridgeDetectorPerFrame
 
 __all__ = [
     "SaltBridgeDetectorPerTuple",
@@ -27,4 +28,5 @@ __all__ = [
     "HydrophobicDetectorPerTuple",
     "MetalCoordinationDetectorPerTuple",
     "WaterBridgeDetectorPerTuple",
+    "WaterBridgeDetectorPerFrame",
 ]
