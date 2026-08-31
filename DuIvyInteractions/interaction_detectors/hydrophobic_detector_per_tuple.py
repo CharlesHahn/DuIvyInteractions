@@ -9,7 +9,7 @@ import numpy as np
 from typing import List, Tuple, Dict
 from itertools import combinations
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -18,7 +18,7 @@ HYDROPH_DIST_MAX = 4.0  # Å，疏水原子间最大距离
 HYDROPH_MIN_DIST = 0.5  # Å，最小距离
 
 
-class HydrophobicDetector(InteractionDetector):
+class HydrophobicDetectorPerTuple(InteractionDetectorPerTuple):
     """疏水相互作用检测器。"""
 
     # 预过滤 cutoff = 距离阈值 × 2。设为 None 禁用。

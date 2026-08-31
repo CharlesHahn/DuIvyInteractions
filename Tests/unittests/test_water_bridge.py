@@ -11,7 +11,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import WaterBridgeDetector
+from DuIvyInteractions.interaction_detectors import WaterBridgeDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -38,7 +38,7 @@ def groups(system_data):
 def water_bridges(groups):
     """运行水桥检测，返回 Interaction 列表。"""
     u = mda.Universe(str(TPR_FILE), str(XTC_FILE))
-    detector = WaterBridgeDetector()
+    detector = WaterBridgeDetectorPerTuple()
     return detector.detect(groups, trajectory=u.trajectory)
 
 
@@ -141,21 +141,21 @@ class TestWaterBridgeThreshold:
 # 检测器元信息测试
 # ============================================================
 
-class TestWaterBridgeDetectorMeta:
+class TestWaterBridgeDetectorPerTupleMeta:
     """验证检测器的元信息。"""
 
     def test_name(self):
-        detector = WaterBridgeDetector()
+        detector = WaterBridgeDetectorPerTuple()
         assert detector.name == "water_bridge"
 
     def test_required_group_types(self):
-        detector = WaterBridgeDetector()
+        detector = WaterBridgeDetectorPerTuple()
         assert "H_donor" in detector.required_group_types
         assert "water" in detector.required_group_types
         assert "H_acceptor" in detector.required_group_types
 
     def test_metric_names(self):
-        detector = WaterBridgeDetector()
+        detector = WaterBridgeDetectorPerTuple()
         names = detector.metric_names
         assert "dist_dw" in names
         assert "dist_wa" in names

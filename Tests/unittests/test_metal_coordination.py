@@ -11,7 +11,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import MetalCoordinationDetector
+from DuIvyInteractions.interaction_detectors import MetalCoordinationDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -38,7 +38,7 @@ def groups(system_data):
 def metal_coordination(groups):
     """运行金属配位检测，返回 Interaction 列表。"""
     u = mda.Universe(str(TPR_FILE), str(XTC_FILE))
-    detector = MetalCoordinationDetector()
+    detector = MetalCoordinationDetectorPerTuple()
     return detector.detect(groups, trajectory=u.trajectory)
 
 
@@ -113,18 +113,18 @@ class TestMetalCoordinationThreshold:
 # 检测器元信息测试
 # ============================================================
 
-class TestMetalCoordinationDetectorMeta:
+class TestMetalCoordinationDetectorPerTupleMeta:
     """验证检测器的元信息。"""
 
     def test_name(self):
-        detector = MetalCoordinationDetector()
+        detector = MetalCoordinationDetectorPerTuple()
         assert detector.name == "metal_coordination"
 
     def test_required_group_types(self):
-        detector = MetalCoordinationDetector()
+        detector = MetalCoordinationDetectorPerTuple()
         assert "metal" in detector.required_group_types
         assert "metal_binding" in detector.required_group_types
 
     def test_metric_names(self):
-        detector = MetalCoordinationDetector()
+        detector = MetalCoordinationDetectorPerTuple()
         assert "distance" in detector.metric_names

@@ -9,7 +9,7 @@ import numpy as np
 from typing import List, Tuple, Dict
 from itertools import combinations
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -21,7 +21,7 @@ PISTACK_PLANARITY = 5.0      # °，平面性检验阈值
 PISTACK_MIN_DIST = 0.5       # Å，最小距离（排除自身）
 
 
-class PiStackingDetector(InteractionDetector):
+class PiStackingDetectorPerTuple(InteractionDetectorPerTuple):
     """π-π 堆积检测器。"""
 
     # 预过滤 cutoff = 距离阈值 × 3。设为 None 禁用。

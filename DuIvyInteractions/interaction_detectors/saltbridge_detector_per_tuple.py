@@ -8,7 +8,7 @@
 import numpy as np
 from typing import List, Tuple, Dict
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -17,7 +17,7 @@ from ..core.datas import Group
 SALTBRIDGE_DIST_MAX = 5.5  # Å
 
 
-class SaltBridgeDetector(InteractionDetector):
+class SaltBridgeDetectorPerTuple(InteractionDetectorPerTuple):
     """盐桥检测器。"""
 
     # 预过滤 cutoff = 距离阈值 × 3。设为 None 禁用。

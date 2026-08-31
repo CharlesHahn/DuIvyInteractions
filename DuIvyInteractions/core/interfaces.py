@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""核心接口定义：Reader（读取器）、GroupIdentifier（识别器）、InteractionDetector（检测器）。"""
+"""核心接口定义：Reader（读取器）、GroupIdentifier（识别器）、InteractionDetectorPerTuple（检测器）。"""
 
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict
@@ -53,7 +53,7 @@ class GroupIdentifier(ABC):
         ...
 
 
-class InteractionDetector(ABC):
+class InteractionDetectorPerTuple(ABC):
     """相互作用检测器基类（模板方法模式）。
 
     子类只需实现：name, required_group_types, metric_names,
@@ -249,6 +249,6 @@ def _worker_init(topology_path: str, trajectory_path: str):
 
 
 def _worker_process_tuple(gt: Tuple[Group, ...],
-                          detector: InteractionDetector):
+                          detector: InteractionDetectorPerTuple):
     """并行 worker：用已加载的轨迹处理单个基团组。"""
     return detector._process_tuple(gt, _worker_trajectory)

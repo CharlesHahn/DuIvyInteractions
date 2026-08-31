@@ -11,7 +11,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import HalogenBondDetector
+from DuIvyInteractions.interaction_detectors import HalogenBondDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -43,7 +43,7 @@ def halogen_bonds(groups):
     filtered = [g for g in groups
                 if g.group_type in ("halogen_donor", "halogen_acceptor")]
     u = mda.Universe(str(TPR_FILE), str(XTC_FILE))
-    detector = HalogenBondDetector()
+    detector = HalogenBondDetectorPerTuple()
     return detector.detect(filtered, trajectory=u.trajectory)
 
 

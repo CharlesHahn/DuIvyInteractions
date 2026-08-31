@@ -12,7 +12,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import HydrogenBondDetector
+from DuIvyInteractions.interaction_detectors import HydrogenBondDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -56,7 +56,7 @@ def protein_groups(groups):
 @pytest.fixture(scope="module")
 def hydrogen_bonds(protein_groups):
     """运行氢键检测（仅蛋白间，排除水），返回 Interaction 列表。"""
-    detector = HydrogenBondDetector()
+    detector = HydrogenBondDetectorPerTuple()
     return detector.detect(
         protein_groups,
         n_workers=32,

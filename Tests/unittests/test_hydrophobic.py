@@ -12,7 +12,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import HydrophobicDetector
+from DuIvyInteractions.interaction_detectors import HydrophobicDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -49,7 +49,7 @@ def hydrophobic_groups(groups):
 @pytest.fixture(scope="module")
 def hydrophobic_interactions(hydrophobic_groups):
     """运行疏水检测（并行），返回 Interaction 列表。"""
-    detector = HydrophobicDetector()
+    detector = HydrophobicDetectorPerTuple()
 
     # 只取前 100 个疏水原子，减少候选对数量
     subset = hydrophobic_groups[:100]
@@ -140,19 +140,19 @@ class TestHydrophobicPairs:
 # 检测器元信息测试
 # ============================================================
 
-class TestHydrophobicDetectorMeta:
+class TestHydrophobicDetectorPerTupleMeta:
     """验证检测器的元信息。"""
 
     def test_name(self):
-        detector = HydrophobicDetector()
+        detector = HydrophobicDetectorPerTuple()
         assert detector.name == "hydrophobic"
 
     def test_required_group_types(self):
-        detector = HydrophobicDetector()
+        detector = HydrophobicDetectorPerTuple()
         assert detector.required_group_types == ["hydrophobic"]
 
     def test_metric_names(self):
-        detector = HydrophobicDetector()
+        detector = HydrophobicDetectorPerTuple()
         assert "distance" in detector.metric_names
 
 

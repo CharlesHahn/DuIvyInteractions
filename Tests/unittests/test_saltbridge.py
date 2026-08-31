@@ -11,7 +11,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import SaltBridgeDetector
+from DuIvyInteractions.interaction_detectors import SaltBridgeDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -39,7 +39,7 @@ def salt_bridges(groups):
     """运行盐桥检测，返回 Interaction 列表。"""
     filtered = [g for g in groups
                 if g.group_type in ("charged_positive", "charged_negative")]
-    detector = SaltBridgeDetector()
+    detector = SaltBridgeDetectorPerTuple()
     return detector.detect(
         filtered,
         n_workers=32,

@@ -6,7 +6,7 @@ from .datas import (
     Group, AtomData, BondData, ResidueData, InterResidueBond,
     SystemData, Interaction
 )
-from .interfaces import Reader, GroupIdentifier, InteractionDetector
+from .interfaces import Reader, GroupIdentifier, InteractionDetectorPerTuple
 
 __all__ = [
     # 常量
@@ -15,5 +15,5 @@ __all__ = [
     "Group", "AtomData", "BondData", "ResidueData", "InterResidueBond",
     "SystemData", "Interaction",
     # 接口
-    "Reader", "GroupIdentifier", "InteractionDetector",
+    "Reader", "GroupIdentifier", "InteractionDetectorPerTuple",
 ]

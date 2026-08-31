@@ -8,7 +8,7 @@
 import numpy as np
 from typing import List, Tuple, Dict
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -19,7 +19,7 @@ HALOGEN_ACC_ANGLE = 120.0     # °，X···A-R 最优角度
 HALOGEN_ANGLE_DEV = 30.0      # °，角度偏差上限
 
 
-class HalogenBondDetector(InteractionDetector):
+class HalogenBondDetectorPerTuple(InteractionDetectorPerTuple):
     """卤键检测器。"""
 
     # 预过滤 cutoff = 距离阈值 × 3。设为 None 禁用。

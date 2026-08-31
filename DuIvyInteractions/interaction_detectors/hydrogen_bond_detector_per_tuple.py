@@ -8,7 +8,7 @@
 import numpy as np
 from typing import List, Tuple, Dict
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -17,7 +17,7 @@ HBOND_DIST_MAX = 4.1    # Å，D-A 最大距离
 HBOND_DON_ANGLE_MIN = 100.0  # °，D-H···A 最小角度
 
 
-class HydrogenBondDetector(InteractionDetector):
+class HydrogenBondDetectorPerTuple(InteractionDetectorPerTuple):
     """氢键检测器。"""
 
     # 预过滤 cutoff = 距离阈值 × 3。设为 None 禁用。

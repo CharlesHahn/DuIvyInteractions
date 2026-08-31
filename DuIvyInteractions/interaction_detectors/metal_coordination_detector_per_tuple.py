@@ -9,7 +9,7 @@ import numpy as np
 from typing import List, Tuple, Dict
 from itertools import product
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -17,7 +17,7 @@ from ..core.datas import Group
 METAL_DIST_MAX = 3.0  # Å，金属到配位原子最大距离
 
 
-class MetalCoordinationDetector(InteractionDetector):
+class MetalCoordinationDetectorPerTuple(InteractionDetectorPerTuple):
     """金属配位检测器。"""
 
     # 预过滤 cutoff = 距离阈值 × 2。设为 None 禁用。

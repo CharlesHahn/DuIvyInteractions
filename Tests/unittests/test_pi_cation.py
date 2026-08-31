@@ -11,7 +11,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import PiCationDetector
+from DuIvyInteractions.interaction_detectors import PiCationDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -50,7 +50,7 @@ def relevant_groups(groups):
 def pi_cations(relevant_groups):
     """运行 π-阳离子检测，返回 Interaction 列表。"""
     u = mda.Universe(str(TPR_FILE), str(XTC_FILE))
-    detector = PiCationDetector()
+    detector = PiCationDetectorPerTuple()
     return detector.detect(relevant_groups, trajectory=u.trajectory)
 
 
@@ -140,20 +140,20 @@ class TestPiCationPairs:
 # 检测器元信息测试
 # ============================================================
 
-class TestPiCationDetectorMeta:
+class TestPiCationDetectorPerTupleMeta:
     """验证检测器的元信息。"""
 
     def test_name(self):
-        detector = PiCationDetector()
+        detector = PiCationDetectorPerTuple()
         assert detector.name == "pi_cation"
 
     def test_required_group_types(self):
-        detector = PiCationDetector()
+        detector = PiCationDetectorPerTuple()
         assert "aromatic_ring" in detector.required_group_types
         assert "charged_positive" in detector.required_group_types
 
     def test_metric_names(self):
-        detector = PiCationDetector()
+        detector = PiCationDetectorPerTuple()
         names = detector.metric_names
         assert "distance" in names
         assert "offset" in names

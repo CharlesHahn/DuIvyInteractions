@@ -9,7 +9,7 @@ import numpy as np
 from typing import List, Tuple, Dict
 from itertools import product
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -19,7 +19,7 @@ PICATION_OFFSET_MAX = 2.0  # Å，最大投影偏移
 PICATION_MIN_DIST = 0.5    # Å，最小距离
 
 
-class PiCationDetector(InteractionDetector):
+class PiCationDetectorPerTuple(InteractionDetectorPerTuple):
     """π-阳离子相互作用检测器。"""
 
     # 预过滤 cutoff = 距离阈值 × 3。设为 None 禁用。

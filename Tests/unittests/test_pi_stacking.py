@@ -11,7 +11,7 @@ import numpy as np
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
-from DuIvyInteractions.interaction_detectors import PiStackingDetector
+from DuIvyInteractions.interaction_detectors import PiStackingDetectorPerTuple
 import MDAnalysis as mda
 
 
@@ -49,7 +49,7 @@ def aromatic_groups(groups):
 def pi_stackings(aromatic_groups):
     """运行 π-π 堆积检测（不检查平面性），返回 Interaction 列表。"""
     u = mda.Universe(str(TPR_FILE), str(XTC_FILE))
-    detector = PiStackingDetector(check_planarity=False)
+    detector = PiStackingDetectorPerTuple(check_planarity=False)
     return detector.detect(aromatic_groups, trajectory=u.trajectory)
 
 
@@ -57,7 +57,7 @@ def pi_stackings(aromatic_groups):
 def pi_stackings_with_planarity(aromatic_groups):
     """运行 π-π 堆积检测（检查平面性），返回 Interaction 列表。"""
     u = mda.Universe(str(TPR_FILE), str(XTC_FILE))
-    detector = PiStackingDetector(check_planarity=True)
+    detector = PiStackingDetectorPerTuple(check_planarity=True)
     return detector.detect(aromatic_groups, trajectory=u.trajectory)
 
 
@@ -207,19 +207,19 @@ class TestPiStackingPairs:
 # 检测器元信息测试
 # ============================================================
 
-class TestPiStackingDetectorMeta:
+class TestPiStackingDetectorPerTupleMeta:
     """验证检测器的元信息。"""
 
     def test_name(self):
-        detector = PiStackingDetector()
+        detector = PiStackingDetectorPerTuple()
         assert detector.name == "pi_stacking"
 
     def test_required_group_types(self):
-        detector = PiStackingDetector()
+        detector = PiStackingDetectorPerTuple()
         assert detector.required_group_types == ["aromatic_ring"]
 
     def test_metric_names_without_planarity(self):
-        detector = PiStackingDetector(check_planarity=False)
+        detector = PiStackingDetectorPerTuple(check_planarity=False)
         names = detector.metric_names
         assert "distance" in names
         assert "angle" in names
@@ -229,7 +229,7 @@ class TestPiStackingDetectorMeta:
         assert "planarity_ring2" not in names
 
     def test_metric_names_with_planarity(self):
-        detector = PiStackingDetector(check_planarity=True)
+        detector = PiStackingDetectorPerTuple(check_planarity=True)
         names = detector.metric_names
         assert "planarity_ring1" in names
         assert "planarity_ring2" in names

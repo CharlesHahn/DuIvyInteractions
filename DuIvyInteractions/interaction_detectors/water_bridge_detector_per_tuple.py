@@ -9,7 +9,7 @@ import numpy as np
 from typing import List, Tuple, Dict
 from scipy.spatial import KDTree
 
-from ..core.interfaces import InteractionDetector
+from ..core.interfaces import InteractionDetectorPerTuple
 from ..core.datas import Group
 
 
@@ -22,7 +22,7 @@ WATER_BRIDGE_THETA_MIN = 100 # °，水O-供体H-供体D 最小角度
 PREFILTER_CUTOFF = WATER_BRIDGE_MAXDIST * 2  # 8.2 Å
 
 
-class WaterBridgeDetector(InteractionDetector):
+class WaterBridgeDetectorPerTuple(InteractionDetectorPerTuple):
     """水桥检测器。"""
 
     @property
