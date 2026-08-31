@@ -11,6 +11,7 @@ from .pi_stacking_detector_per_frame import PiStackingDetectorPerFrame
 from .pi_cation_detector_per_tuple import PiCationDetectorPerTuple
 from .pi_cation_detector_per_frame import PiCationDetectorPerFrame
 from .hydrophobic_detector_per_tuple import HydrophobicDetectorPerTuple
+from .hydrophobic_detector_per_frame import HydrophobicDetectorPerFrame
 from .metal_coordination_detector_per_tuple import MetalCoordinationDetectorPerTuple
 from .metal_coordination_detector_per_frame import MetalCoordinationDetectorPerFrame
 from .water_bridge_detector_per_tuple import WaterBridgeDetectorPerTuple
@@ -27,6 +28,7 @@ __all__ = [
     "PiCationDetectorPerTuple",
     "PiCationDetectorPerFrame",
     "HydrophobicDetectorPerTuple",
+    "HydrophobicDetectorPerFrame",
     "MetalCoordinationDetectorPerTuple",
     "MetalCoordinationDetectorPerFrame",
     "WaterBridgeDetectorPerTuple",
