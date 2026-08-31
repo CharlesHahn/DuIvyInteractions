@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""核心接口定义：Reader（读取器）、GroupIdentifier（识别器）、InteractionDetectorPerTuple（检测器）。"""
+"""核心接口定义：Reader、GroupIdentifier、InteractionDetectorPerTuple、InteractionDetectorPerFrame。"""
 
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict
@@ -218,6 +218,153 @@ class InteractionDetectorPerTuple(ABC):
             处理后的 results 列表
         """
         return results
+
+    def _build_interaction(self, results: list) -> List[Interaction]:
+        """将结果列表构建为 Interaction 对象。"""
+        if not results:
+            return []
+        groups = [r[0] for r in results]
+        existence = np.array([r[1] for r in results])
+        metrics = {k: np.array([r[2][k] for r in results])
+                   for k in results[0][2]}
+        return [Interaction(
+            interaction_type=self.name,
+            groups=groups,
+            existence=existence,
+            metrics=metrics
+        )]
+
+
+class InteractionDetectorPerFrame(ABC):
+    """相互作用检测器基类（逐帧策略）。
+
+    与 PerTuple 的区别：
+    - PerTuple: for each tuple → load ALL frames → vectorized over frames
+    - PerFrame: for each frame → process ALL tuples → vectorized over tuples
+
+    适用场景：候选 tuple 数量极大（如水桥），逐 tuple 遍历轨迹不可接受。
+    """
+
+    # ==================== 子类必须实现 ====================
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """检测器名称（如 "water_bridge"）。"""
+        ...
+
+    @property
+    @abstractmethod
+    def required_group_types(self) -> List[str]:
+        """需要的基团类型列表。"""
+        ...
+
+    @property
+    @abstractmethod
+    def metric_names(self) -> List[str]:
+        """指标名称列表。"""
+        ...
+
+    @abstractmethod
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None
+                             ) -> List[Tuple[Group, ...]]:
+        """生成候选基团组。"""
+        ...
+
+    @abstractmethod
+    def compute_metrics_for_frame(
+        self,
+        tuples: List[Tuple[Group, ...]],
+        all_positions: np.ndarray,
+        frame: int,
+    ) -> Dict[str, np.ndarray]:
+        """对全部 tuple 计算单帧指标。
+
+        Args:
+            tuples: 全部候选基团组
+            all_positions: (n_atoms_total, 3) 当前帧全部原子坐标（Å）
+            frame: 帧号
+
+        Returns:
+            {name: (n_tuples,)} 每个 tuple 在当前帧的指标值
+        """
+        ...
+
+    @abstractmethod
+    def apply_threshold(self, metrics: Dict[str, np.ndarray]) -> np.ndarray:
+        """根据指标判断是否存在。shape: (n_tuples,) → (n_tuples,) bool。"""
+        ...
+
+    # ==================== 可选覆盖 ====================
+
+    def filter_candidate_tuples(self, tuples: List[Tuple[Group, ...]],
+                                coordinates: np.ndarray) -> List[Tuple[Group, ...]]:
+        """用一帧坐标过滤候选基团组。默认不过滤。"""
+        return tuples
+
+    def _post_process(self, results: list) -> list:
+        """后处理钩子。默认不做任何处理。"""
+        return results
+
+    # ==================== 基类固化（模板方法） ====================
+
+    def detect(self, groups: List[Group], trajectory=None,
+               n_workers: int = 1,
+               topology_path: str = None,
+               trajectory_path: str = None,
+               tuple_filter=None) -> List[Interaction]:
+        """检测全部帧的相互作用。
+
+        接口与 PerTuple.detect 完全一致，便于替换。
+        """
+        if trajectory is None:
+            raise ValueError("trajectory is required")
+
+        # 1. 生成候选 tuple
+        first_frame = trajectory[0].positions
+        tuples = self.get_candidate_tuples(groups, first_frame)
+
+        if tuple_filter is not None:
+            tuples = [t for t in tuples if tuple_filter(t)]
+
+        tuples = self.filter_candidate_tuples(tuples, first_frame)
+
+        if not tuples:
+            return []
+
+        n_tuples = len(tuples)
+        n_frames = trajectory.n_frames
+
+        # 2. 预分配结果数组
+        existence = np.zeros((n_tuples, n_frames), dtype=bool)
+        metrics = {name: np.zeros((n_tuples, n_frames))
+                   for name in self.metric_names}
+
+        # 3. 逐帧处理
+        for f, ts in enumerate(trajectory):
+            frame_metrics = self.compute_metrics_for_frame(
+                tuples, ts.positions, f)
+            existence[:, f] = self.apply_threshold(frame_metrics)
+            for name in self.metric_names:
+                metrics[name][:, f] = frame_metrics[name]
+
+        # 4. 过滤从未存在的 tuple
+        has_any = np.any(existence, axis=1)
+        if not np.any(has_any):
+            return []
+
+        results = [(tuples[i], existence[i],
+                    {k: v[i] for k, v in metrics.items()})
+                   for i in range(n_tuples) if has_any[i]]
+
+        # 5. 后处理
+        results = self._post_process(results)
+
+        # 6. 构建 Interaction
+        return self._build_interaction(results)
+
+    # ==================== 内部辅助方法 ====================
 
     def _build_interaction(self, results: list) -> List[Interaction]:
         """将结果列表构建为 Interaction 对象。"""

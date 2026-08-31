@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""interaction_detectors - 相互作用检测器（InteractionDetectorPerTuple 接口的实现）。"""
+"""interaction_detectors - 相互作用检测器。"""
 
 from .saltbridge_detector_per_tuple import SaltBridgeDetectorPerTuple
+from .saltbridge_detector_per_frame import SaltBridgeDetectorPerFrame
 from .hydrogen_bond_detector_per_tuple import HydrogenBondDetectorPerTuple
 from .halogen_bond_detector_per_tuple import HalogenBondDetectorPerTuple
 from .pi_stacking_detector_per_tuple import PiStackingDetectorPerTuple
@@ -12,6 +13,7 @@ from .water_bridge_detector_per_tuple import WaterBridgeDetectorPerTuple
 
 __all__ = [
     "SaltBridgeDetectorPerTuple",
+    "SaltBridgeDetectorPerFrame",
     "HydrogenBondDetectorPerTuple",
     "HalogenBondDetectorPerTuple",
     "PiStackingDetectorPerTuple",
