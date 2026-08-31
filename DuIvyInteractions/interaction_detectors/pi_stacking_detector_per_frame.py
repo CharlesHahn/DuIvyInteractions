@@ -119,8 +119,11 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
 
         # 平面性预过滤（可选）
         if self.check_planarity:
-            normals_all = self._ring_normals(first_pos)
-            planarity = self._ring_planarity(normals_all)
+            coords = first_pos[self._ring_indices]
+            prev_coords = first_pos[self._ring_prev]
+            next_coords = first_pos[self._ring_next]
+            atom_normals = np.cross(coords - prev_coords, coords - next_coords)
+            planarity = self._ring_planarity(atom_normals)
             mask = mask & (planarity[pair_r1] <= PISTACK_PLANARITY) & \
                           (planarity[pair_r2] <= PISTACK_PLANARITY)
 

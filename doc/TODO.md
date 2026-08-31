@@ -128,6 +128,26 @@ detector.detect(groups, trajectory,
 
 **待补充**：解决性能问题后，补充具体的结果数据断言（水桥数量、top pair 等）。
 
+### 13. PerFrame 检测器长轨迹内存优化
+
+**问题**：PerFrame 检测器预分配 (n_pairs, n_frames) 的 distance/angle 矩阵。D927 体系氢键候选对 42,603 个，101 帧时矩阵约 71 MB，可接受。但外推到 1μs 轨迹（500,000 帧），矩阵将达到 342 GB，不可接受。
+
+**根因**：当前实现对全部候选对存储每一帧的 distance/angle，即使大部分 pair 最终被阈值淘汰（42,603 候选 → 119 有效）。
+
+**优化方案**：只存 existence 矩阵（bool，1 byte），不存 distance/angle。最终过滤后，对存活的 ~100 个 pair 重新遍历轨迹计算 distance/angle。
+
+| | 当前方案 | 优化方案 |
+|:--|:---------|:---------|
+| 氢键 101 帧 | 71 MB | 4.1 MB (existence only) |
+| 氢键 500,000 帧 | 342 GB | 20.3 GB (existence only) |
+| 最终结果 | 同 | 同（重算存活 pair） |
+
+**进一步优化**：existence 矩阵也可改为稀疏存储或增量累积，将 20.3 GB 降到更低。
+
+**实现位置**：`interaction_detectors/*_per_frame.py` 的 `detect()` 方法。
+
+**优先级**：低（当前 101 帧测试场景无压力，1μs 轨迹时再做）。
+
 ---
 
 *文档结束*
