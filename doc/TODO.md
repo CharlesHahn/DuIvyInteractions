@@ -148,6 +148,34 @@ detector.detect(groups, trajectory,
 
 **优先级**：低（当前 101 帧测试场景无压力，1μs 轨迹时再做）。
 
+### 14. Interaction 结果序列化（保存/加载）
+
+**需求**：将 Interaction 数据结构保存到文件，支持后续分析、可视化、跨工具共享。
+
+**方案**：JSON + .npz 双文件格式。
+
+| 文件 | 内容 | 格式 |
+|:-----|:-----|:-----|
+| `<name>.json` | 元数据（interaction_type, groups 信息：group_id, group_type, molecule, residue_name, residue_id 等） | JSON（人类可读） |
+| `<name>.npz` | 数组数据（existence, distance, angle 等 metrics） | numpy compressed（高效压缩） |
+
+**接口设计**：
+- `save_interaction(interaction, path)` → 写出 json + npz
+- `load_interaction(path)` → 读入 json + npz → 重建 Interaction 对象
+
+**优势**：
+- JSON 人类可读，方便调试和检查
+- npz 压缩后通常 10:1（bool/float 数组压缩率高）
+- numpy + json 无额外依赖
+
+**替代方案**：
+- pickle：最快但跨版本脆弱，不可读
+- HDF5：单文件，支持切片读取，但需 h5py 依赖
+
+**实现位置**：`utils/output.py`（待创建）
+
+**优先级**：中（当前无紧迫需求，Pipeline 完成后实现）
+
 ---
 
 *文档结束*
