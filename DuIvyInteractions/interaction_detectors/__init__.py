@@ -7,6 +7,7 @@ from .hydrogen_bond_detector_per_tuple import HydrogenBondDetectorPerTuple
 from .hydrogen_bond_detector_per_frame import HydrogenBondDetectorPerFrame
 from .halogen_bond_detector_per_tuple import HalogenBondDetectorPerTuple
 from .pi_stacking_detector_per_tuple import PiStackingDetectorPerTuple
+from .pi_stacking_detector_per_frame import PiStackingDetectorPerFrame
 from .pi_cation_detector_per_tuple import PiCationDetectorPerTuple
 from .hydrophobic_detector_per_tuple import HydrophobicDetectorPerTuple
 from .metal_coordination_detector_per_tuple import MetalCoordinationDetectorPerTuple
@@ -19,6 +20,7 @@ __all__ = [
     "HydrogenBondDetectorPerFrame",
     "HalogenBondDetectorPerTuple",
     "PiStackingDetectorPerTuple",
+    "PiStackingDetectorPerFrame",
     "PiCationDetectorPerTuple",
     "HydrophobicDetectorPerTuple",
     "MetalCoordinationDetectorPerTuple",
