@@ -17,6 +17,7 @@ from .metal_coordination_detector_per_tuple import MetalCoordinationDetectorPerT
 from .metal_coordination_detector_per_frame import MetalCoordinationDetectorPerFrame
 from .water_bridge_detector_per_tuple import WaterBridgeDetectorPerTuple
 from .water_bridge_detector_per_frame import WaterBridgeDetectorPerFrame
+from .saltbridge_detector_two_pass import SaltBridgeDetectorTwoPass
 
 __all__ = [
     "SaltBridgeDetectorPerTuple",
@@ -35,4 +36,5 @@ __all__ = [
     "MetalCoordinationDetectorPerFrame",
     "WaterBridgeDetectorPerTuple",
     "WaterBridgeDetectorPerFrame",
+    "SaltBridgeDetectorTwoPass",
 ]
