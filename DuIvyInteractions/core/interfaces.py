@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""核心接口定义：Reader、GroupIdentifier、InteractionDetectorPerTuple、InteractionDetectorPerFrame。"""
+"""核心接口定义：Reader、GroupIdentifier、InteractionDetectorPerTuple、InteractionDetectorPerFrame、InteractionDetectorTwoPass。"""
 
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict
@@ -357,6 +357,208 @@ class InteractionDetectorPerFrame(ABC):
         results = [(tuples[i], existence[i],
                     {k: v[i] for k, v in metrics.items()})
                    for i in range(n_tuples) if has_any[i]]
+
+        # 5. 后处理
+        results = self._post_process(results)
+
+        # 6. 构建 Interaction
+        return self._build_interaction(results)
+
+    # ==================== 内部辅助方法 ====================
+
+    def _build_interaction(self, results: list) -> List[Interaction]:
+        """将结果列表构建为 Interaction 对象。"""
+        if not results:
+            return []
+        groups = [r[0] for r in results]
+        existence = np.array([r[1] for r in results])
+        metrics = {k: np.array([r[2][k] for r in results])
+                   for k in results[0][2]}
+        return [Interaction(
+            interaction_type=self.name,
+            groups=groups,
+            existence=existence,
+            metrics=metrics
+        )]
+
+
+class InteractionDetectorTwoPass(ABC):
+    """相互作用检测器基类（两轮遍历 + 稀疏存储）。
+
+    与 PerTuple / PerFrame 的区别：
+    - PerTuple: for each tuple → load ALL frames → vectorized over frames
+    - PerFrame: for each frame → compute ALL tuples → dense storage
+    - TwoPass:  for each frame → discover active tuples → sparse storage
+
+    Pass1: 逐帧级联筛选，只记录 active 的 tuple（稀疏存储，内存低）
+    Pass2: 可选，将稀疏结果补全为完整 (n_pairs, n_frames) 数组（绘图用）
+
+    优势：零遗漏（不依赖空间预筛选）、Pass1 内存低、统计分析无需 Pass2。
+    """
+
+    # ==================== 子类必须实现 ====================
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """检测器名称（如 "salt_bridge"）。"""
+        ...
+
+    @property
+    @abstractmethod
+    def required_group_types(self) -> List[str]:
+        """需要的基团类型列表。"""
+        ...
+
+    @property
+    @abstractmethod
+    def metric_names(self) -> List[str]:
+        """指标名称列表（如 ["distance", "angle"]）。"""
+        ...
+
+    def get_candidate_tuples(self, groups: List[Group],
+                             coordinates: np.ndarray = None
+                             ) -> List[Tuple[Group, ...]]:
+        """生成候选基团组（可选）。
+
+        返回 None 表示不在 detect() 中预生成候选，由 detect_frame 自行处理。
+        返回列表则预生成候选，detect_frame 接收预生成的 tuple 列表。
+
+        默认返回 None（不预生成）。
+        """
+        return None
+
+    @abstractmethod
+    def detect_frame(self, items: list, all_positions: np.ndarray,
+                     frame: int) -> Tuple[List[int], Dict[str, List[float]]]:
+        """检测单帧的相互作用。
+
+        子类在此实现级联筛选逻辑（距离 → 角度 → ...）。
+        只返回满足全部阈值的 tuple。
+
+        Args:
+            items: 预生成的 tuple 列表，或未预生成时的 groups 列表
+            all_positions: (n_atoms_total, 3) 当前帧全部原子坐标（Å）
+            frame: 帧号
+
+        Returns:
+            (active_indices, metrics)
+            - active_indices: 当前帧 active 的 item 索引列表
+            - metrics: {name: [...]} 对应的指标值列表，长度与 active_indices 一致
+        """
+        ...
+
+    # ==================== 可选覆盖 ====================
+
+    def filter_candidate_tuples(self, tuples: List[Tuple[Group, ...]],
+                                coordinates: np.ndarray
+                                ) -> List[Tuple[Group, ...]]:
+        """用一帧坐标过滤候选基团组。仅在 get_candidate_tuples 返回列表时调用。"""
+        return tuples
+
+    def densify(self, sparse_results: Dict[int, dict],
+                n_frames: int) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+        """将 Pass1 稀疏结果补全为完整 (n_pairs, n_frames) 数组。
+
+        未 active 的帧：existence=False，metrics=NaN。
+        子类可覆盖实现自定义补全逻辑（如插值）。
+
+        Args:
+            sparse_results: {tuple_idx: {"groups": tuple, "frames": [...], "metrics": {name: [...]}}}
+            n_frames: 总帧数
+
+        Returns:
+            (existence, metrics)
+            - existence: (n_pairs, n_frames) bool
+            - metrics: {name: (n_pairs, n_frames)} float
+        """
+        indices = sorted(sparse_results.keys())
+        n_pairs = len(indices)
+
+        existence = np.zeros((n_pairs, n_frames), dtype=bool)
+        metrics = {name: np.full((n_pairs, n_frames), np.nan)
+                   for name in self.metric_names}
+
+        for row, idx in enumerate(indices):
+            data = sparse_results[idx]
+            frame_list = data["frames"]
+            existence[row, frame_list] = True
+            for name, values in zip(self.metric_names,
+                                    zip(*data["metrics"].values())):
+                metrics[name][row, frame_list] = values
+
+        return existence, metrics
+
+    def _post_process(self, results: list) -> list:
+        """后处理钩子。默认不做任何处理。"""
+        return results
+
+    # ==================== 基类固化（模板方法） ====================
+
+    def detect(self, groups: List[Group], trajectory=None,
+               n_workers: int = 1,
+               topology_path: str = None,
+               trajectory_path: str = None,
+               tuple_filter=None) -> List[Interaction]:
+        """两轮遍历检测相互作用。
+
+        接口与 PerTuple / PerFrame.detect 完全一致，便于替换。
+
+        Pass1: 逐帧检测，稀疏存储 active tuple
+        Pass2: 调用 densify() 补全为完整数组
+        """
+        if trajectory is None:
+            raise ValueError("trajectory is required")
+
+        # 1. 候选 tuple（可选）
+        first_frame = trajectory[0].positions
+        tuples = self.get_candidate_tuples(groups, first_frame)
+
+        if tuples is not None:
+            # 预生成了候选 tuple
+            if tuple_filter is not None:
+                tuples = [t for t in tuples if tuple_filter(t)]
+            tuples = self.filter_candidate_tuples(tuples, first_frame)
+            if not tuples:
+                return []
+            items = tuples
+        else:
+            # 未预生成，detect_frame 自行处理
+            items = groups
+
+        n_frames = trajectory.n_frames
+
+        # 2. Pass1: 逐帧检测，稀疏存储
+        sparse_results: Dict[int, dict] = {}
+
+        for f, ts in enumerate(trajectory):
+            active_indices, frame_metrics = self.detect_frame(
+                items, ts.positions, f)
+
+            for idx, pos in enumerate(active_indices):
+                if pos not in sparse_results:
+                    sparse_results[pos] = {
+                        "groups": items[pos],
+                        "frames": [],
+                        "metrics": {name: [] for name in self.metric_names},
+                    }
+                sparse_results[pos]["frames"].append(f)
+                for name in self.metric_names:
+                    sparse_results[pos]["metrics"][name].append(
+                        frame_metrics[name][idx])
+
+        if not sparse_results:
+            return []
+
+        # 3. Pass2: 稠密化
+        existence, metrics = self.densify(sparse_results, n_frames)
+
+        # 4. 构建 results 列表
+        indices = sorted(sparse_results.keys())
+        results = [
+            (sparse_results[i]["groups"], existence[row], {k: v[row] for k, v in metrics.items()})
+            for row, i in enumerate(indices)
+        ]
 
         # 5. 后处理
         results = self._post_process(results)

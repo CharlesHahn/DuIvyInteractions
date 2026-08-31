@@ -9,6 +9,7 @@ from .datas import (
 from .interfaces import (
     Reader, GroupIdentifier,
     InteractionDetectorPerTuple, InteractionDetectorPerFrame,
+    InteractionDetectorTwoPass,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     # 接口
     "Reader", "GroupIdentifier",
     "InteractionDetectorPerTuple", "InteractionDetectorPerFrame",
+    "InteractionDetectorTwoPass",
 ]
