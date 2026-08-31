@@ -4,6 +4,7 @@
 from .saltbridge_detector_per_tuple import SaltBridgeDetectorPerTuple
 from .saltbridge_detector_per_frame import SaltBridgeDetectorPerFrame
 from .hydrogen_bond_detector_per_tuple import HydrogenBondDetectorPerTuple
+from .hydrogen_bond_detector_per_frame import HydrogenBondDetectorPerFrame
 from .halogen_bond_detector_per_tuple import HalogenBondDetectorPerTuple
 from .pi_stacking_detector_per_tuple import PiStackingDetectorPerTuple
 from .pi_cation_detector_per_tuple import PiCationDetectorPerTuple
@@ -15,6 +16,7 @@ __all__ = [
     "SaltBridgeDetectorPerTuple",
     "SaltBridgeDetectorPerFrame",
     "HydrogenBondDetectorPerTuple",
+    "HydrogenBondDetectorPerFrame",
     "HalogenBondDetectorPerTuple",
     "PiStackingDetectorPerTuple",
     "PiCationDetectorPerTuple",
