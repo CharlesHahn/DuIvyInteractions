@@ -102,15 +102,15 @@ class HydrogenBondDetectorTwoPass(InteractionDetectorTwoPass):
     # ==================== compute_pair_metrics ====================
 
     def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算距离和角度。"""
-        # 从 group_tuples 提取原子索引
-        d_indices = np.array([gt[0].atoms[0].atom_global_idx for gt in group_tuples])
-        h_indices = np.array([gt[0].atoms[1].atom_global_idx for gt in group_tuples])
-        a_indices = np.array([gt[1].atoms[0].atom_global_idx for gt in group_tuples])
+        """向量化计算距离和角度（使用 _build_indices_from_sparse 缓存的索引）。"""
+        if not hasattr(self, '_donor_d_idx'):
+            raise RuntimeError(
+                "compute_pair_metrics requires cached indices. "
+                "Call _build_indices_from_sparse first via run_pass2.")
 
-        d = all_positions[d_indices]
-        h = all_positions[h_indices]
-        a = all_positions[a_indices]
+        d = all_positions[self._donor_d_idx]
+        h = all_positions[self._donor_h_idx]
+        a = all_positions[self._acceptor_a_idx]
 
         # D-A 距离
         da_vec = d - a

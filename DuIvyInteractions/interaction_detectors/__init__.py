@@ -20,6 +20,7 @@ from .water_bridge_detector_per_frame import WaterBridgeDetectorPerFrame
 from .saltbridge_detector_two_pass import SaltBridgeDetectorTwoPass
 from .hydrogen_bond_detector_two_pass import HydrogenBondDetectorTwoPass
 from .hydrophobic_detector_two_pass import HydrophobicDetectorTwoPass
+from .metal_coordination_detector_two_pass import MetalCoordinationDetectorTwoPass
 
 __all__ = [
     "SaltBridgeDetectorPerTuple",
@@ -41,4 +42,5 @@ __all__ = [
     "SaltBridgeDetectorTwoPass",
     "HydrogenBondDetectorTwoPass",
     "HydrophobicDetectorTwoPass",
+    "MetalCoordinationDetectorTwoPass",
 ]
