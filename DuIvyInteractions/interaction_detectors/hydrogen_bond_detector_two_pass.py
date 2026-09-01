@@ -3,14 +3,16 @@
 
 判据：D-A 距离 ≤ 4.1 Å 且 D-H···A 角度 ≥ 100°。
 参考：PLIP, Hubbard & Haider 2001（距离 +0.6 Å，角度 +10°）。
+
+Pass1：KDTree 筛选 D-A 距离 + 精确计算角度
+Pass2：从 InteractionSparse 重新构建索引 + 向量化计算
 """
 
 import numpy as np
 from typing import List, Tuple, Dict
-from scipy.spatial import KDTree
 
 from ..core.interfaces import InteractionDetectorTwoPass
-from ..core.datas import Group, Interaction
+from ..core.datas import Group, Interaction, InteractionSparse
 
 
 # PLIP 阈值
@@ -19,7 +21,11 @@ HBOND_DON_ANGLE_MIN = 100.0  # °，D-H···A 最小角度
 
 
 class HydrogenBondDetectorTwoPass(InteractionDetectorTwoPass):
-    """氢键检测器（两轮遍历 + 稀疏存储）。"""
+    """氢键检测器（两轮遍历 + 稀疏存储）。
+
+    Pass1：覆盖 run_pass1，KDTree 筛距离 + 精确计算角度。
+    Pass2：从 InteractionSparse 重新构建索引 + 向量化计算。
+    """
 
     @property
     def name(self) -> str:
@@ -33,116 +39,78 @@ class HydrogenBondDetectorTwoPass(InteractionDetectorTwoPass):
     def metric_names(self) -> List[str]:
         return ["distance", "angle"]
 
-    # ==================== 子类必须实现 ====================
+    # ==================== Pass1：KDTree 发现 ====================
 
-    def initialize_candidates(self, groups, trajectory, tuple_filter=None):
-        """构建索引数组，生成候选 items。"""
+    def run_pass1(self, groups: List[Group], trajectory,
+                  tuple_filter=None) -> InteractionSparse:
+        """执行 Pass1：KDTree 筛距离 + 精确计算角度。"""
+        # 1. 分组
         donors = [g for g in groups if g.group_type == "H_donor"]
         acceptors = [g for g in groups if g.group_type == "H_acceptor"]
 
         if not donors or not acceptors:
+            return InteractionSparse(interaction_type=self.name, data={})
+
+        # 2. 构建索引数组
+        self._build_indices(donors, acceptors)
+
+        # 3. 逐帧 KDTree 发现
+        sparse_data: Dict[Tuple[int, ...], dict] = {}
+
+        for f, ts in enumerate(trajectory):
+            active_donors, active_acceptors, distances, angles = \
+                self._kdtree_discover(ts.positions)
+
+            for d_idx, a_idx, dist, angle in zip(
+                    active_donors, active_acceptors, distances, angles):
+                donor = donors[d_idx]
+                acceptor = acceptors[a_idx]
+
+                # tuple_filter
+                if tuple_filter is not None and not tuple_filter((donor, acceptor)):
+                    continue
+
+                group_ids = (donor.group_id, acceptor.group_id)
+
+                if group_ids not in sparse_data:
+                    sparse_data[group_ids] = {
+                        "groups": (donor, acceptor),
+                        "frames": [],
+                        "metrics": {"distance": [], "angle": []}
+                    }
+
+                sparse_data[group_ids]["frames"].append(f)
+                sparse_data[group_ids]["metrics"]["distance"].append(dist)
+                sparse_data[group_ids]["metrics"]["angle"].append(angle)
+
+        return InteractionSparse(interaction_type=self.name, data=sparse_data)
+
+    # ==================== Pass2：从 InteractionSparse 重建 ====================
+
+    def run_pass2(self, sparse: InteractionSparse,
+                  trajectory) -> List[Interaction]:
+        """执行 Pass2：从 InteractionSparse 重新构建索引 + 向量化计算。"""
+        if not sparse.data:
             return []
 
-        # 构建索引数组
-        self._donor_d_idx = np.array([g.atoms[0].atom_global_idx for g in donors])
-        self._donor_h_idx = np.array([g.atoms[1].atom_global_idx for g in donors])
-        self._acceptor_a_idx = np.array([g.atoms[0].atom_global_idx for g in acceptors])
+        # 从 InteractionSparse 重新构建索引数组
+        self._build_indices_from_sparse(sparse)
 
-        # 笛卡尔积
-        n_d = len(donors)
-        n_a = len(acceptors)
-        d_grid, a_grid = np.meshgrid(np.arange(n_d), np.arange(n_a), indexing='ij')
-        pair_donor = d_grid.ravel()
-        pair_acceptor = a_grid.ravel()
+        # 调用父类的 run_pass2
+        return super().run_pass2(sparse, trajectory)
 
-        # tuple_filter
-        if tuple_filter is not None:
-            mask = np.array([
-                tuple_filter((donors[di], acceptors[ai]))
-                for di, ai in zip(pair_donor, pair_acceptor)
-            ])
-            pair_donor = pair_donor[mask]
-            pair_acceptor = pair_acceptor[mask]
+    # ==================== compute_pair_metrics ====================
 
-        if len(pair_donor) == 0:
-            return []
+    def compute_pair_metrics(self, group_tuples, all_positions):
+        """向量化计算距离和角度。"""
+        # 从 group_tuples 提取原子索引
+        d_indices = np.array([gt[0].atoms[0].atom_global_idx for gt in group_tuples])
+        h_indices = np.array([gt[0].atoms[1].atom_global_idx for gt in group_tuples])
+        a_indices = np.array([gt[1].atoms[0].atom_global_idx for gt in group_tuples])
 
-        self._pair_donor = pair_donor
-        self._pair_acceptor = pair_acceptor
-
-        items = [(donors[pair_donor[i]], acceptors[pair_acceptor[i]])
-                 for i in range(len(pair_donor))]
-        return items
-
-    def discover_active_pairs(self, pair_indices, all_positions, frame):
-        """Pass1：KDTree 距离判定 → 角度判定 → active pairs。
-
-        第一层：KDTree(D, radius=4.1Å) → 满足距离准则的 pair
-        第二层：对这些 pair 算 D-H···A 角度 ≥ 100°
-        """
-        d_pos = all_positions[self._donor_d_idx]
-        h_pos = all_positions[self._donor_h_idx]
-        a_pos = all_positions[self._acceptor_a_idx]
-
-        # 建 donor → pair index 的映射
-        # pair_donor[i] = di 表示第 i 个 pair 的 donor 是 donors[di]
-        pair_donor = self._pair_donor
-        pair_acceptor = self._pair_acceptor
-
-        # 第一层：KDTree 距离判定
-        tree = KDTree(d_pos)
-        pairs = tree.query_ball_point(a_pos, HBOND_DIST_MAX)
-
-        # 映射回全局 pair index
-        donor_to_pair_indices = {}
-        for i, di in enumerate(pair_donor):
-            donor_to_pair_indices.setdefault(int(di), []).append(i)
-
-        candidate_pair_idx = []
-        for ai, nearby_d in enumerate(pairs):
-            for di in nearby_d:
-                for pi in donor_to_pair_indices.get(int(di), []):
-                    if pair_acceptor[pi] == ai:
-                        candidate_pair_idx.append(pi)
-
-        if not candidate_pair_idx:
-            return [], {}
-
-        candidate_pair_idx = np.array(candidate_pair_idx)
-        di = pair_donor[candidate_pair_idx]
-        ai = pair_acceptor[candidate_pair_idx]
-
-        # 第二层：角度判定
-        d = d_pos[di]
-        h = h_pos[di]
-        a = a_pos[ai]
-
-        dist = np.linalg.norm(d - a, axis=1)
-
-        hd_vec = d - h
-        ha_vec = a - h
-        cos_angle = np.sum(hd_vec * ha_vec, axis=1) / (
-            np.linalg.norm(hd_vec, axis=1) * np.linalg.norm(ha_vec, axis=1)
-        )
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        ang = np.degrees(np.arccos(cos_angle))
-
-        # 阈值过滤
-        mask = (dist <= HBOND_DIST_MAX) & (ang >= HBOND_DON_ANGLE_MIN)
-
-        active_indices = candidate_pair_idx[mask].tolist()
-        active_metrics = {
-            "distance": dist[mask].tolist(),
-            "angle": ang[mask].tolist(),
-        }
-
-        return active_indices, active_metrics
-
-    def compute_pair_metrics(self, pair_indices, all_positions):
-        """Pass2：对 discovered pairs 算 distance + angle。"""
-        d = all_positions[self._donor_d_idx[self._pair_donor[pair_indices]]]
-        h = all_positions[self._donor_h_idx[self._pair_donor[pair_indices]]]
-        a = all_positions[self._acceptor_a_idx[self._pair_acceptor[pair_indices]]]
+        d = all_positions[d_indices]
+        h = all_positions[h_indices]
+        a = all_positions[a_indices]
 
         # D-A 距离
         da_vec = d - a
@@ -163,3 +131,63 @@ class HydrogenBondDetectorTwoPass(InteractionDetectorTwoPass):
         """距离 ≤ 4.1Å 且角度 ≥ 100°。"""
         return (metrics["distance"] <= HBOND_DIST_MAX) & \
                (metrics["angle"] >= HBOND_DON_ANGLE_MIN)
+
+    # ==================== 内部辅助方法 ====================
+
+    def _build_indices(self, donors, acceptors):
+        """构建索引数组（Pass1 用）。"""
+        self._donor_d_idx = np.array([g.atoms[0].atom_global_idx for g in donors])
+        self._donor_h_idx = np.array([g.atoms[1].atom_global_idx for g in donors])
+        self._acceptor_a_idx = np.array([g.atoms[0].atom_global_idx for g in acceptors])
+
+    def _build_indices_from_sparse(self, sparse: InteractionSparse):
+        """从 InteractionSparse 重新构建索引数组（Pass2 用）。"""
+        group_tuples = [entry["groups"] for entry in sparse.data.values()]
+        donors = [gt[0] for gt in group_tuples]
+        acceptors = [gt[1] for gt in group_tuples]
+
+        self._donor_d_idx = np.array([g.atoms[0].atom_global_idx for g in donors])
+        self._donor_h_idx = np.array([g.atoms[1].atom_global_idx for g in donors])
+        self._acceptor_a_idx = np.array([g.atoms[0].atom_global_idx for g in acceptors])
+
+    def _kdtree_discover(self, all_positions):
+        """KDTree 发现 D-A 距离 ≤ 4.1Å 的 pair + 精确计算角度。"""
+        from scipy.spatial import cKDTree
+
+        # 获取 D 和 A 坐标
+        d_coords = all_positions[self._donor_d_idx]
+        a_coords = all_positions[self._acceptor_a_idx]
+
+        # 构建两棵树
+        tree_d = cKDTree(d_coords)
+        tree_a = cKDTree(a_coords)
+
+        # 一步获取 (d_idx, a_idx) 对 + 精确距离
+        sparse_dist = tree_d.sparse_distance_matrix(tree_a, HBOND_DIST_MAX)
+
+        if sparse_dist.nnz == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([])
+
+        # 转换为 coo_matrix 并提取索引和距离
+        coo_dist = sparse_dist.tocoo()
+        active_donors = coo_dist.row
+        active_acceptors = coo_dist.col
+        distances = coo_dist.data
+
+        # 计算角度（向量化）
+        d = d_coords[active_donors]
+        h = all_positions[self._donor_h_idx[active_donors]]
+        a = a_coords[active_acceptors]
+
+        hd_vec = d - h
+        ha_vec = a - h
+        cos_angle = np.sum(hd_vec * ha_vec, axis=1) / (
+            np.linalg.norm(hd_vec, axis=1) * np.linalg.norm(ha_vec, axis=1))
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angles = np.degrees(np.arccos(cos_angle))
+
+        # 过滤角度 ≥ 100°
+        angle_mask = angles >= HBOND_DON_ANGLE_MIN
+
+        return (active_donors[angle_mask], active_acceptors[angle_mask],
+                distances[angle_mask], angles[angle_mask])

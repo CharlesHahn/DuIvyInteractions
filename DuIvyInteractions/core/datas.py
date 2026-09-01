@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""核心数据结构定义：Group、Interaction、SystemData。"""
+"""核心数据结构定义：Group、Interaction、InteractionSparse、SystemData。"""
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import numpy as np
 
 from .constants import GROUP_TYPES, BOND_TYPES
@@ -112,6 +112,47 @@ class Interaction:
     def __repr__(self) -> str:
         return (f"Interaction(type='{self.interaction_type}', "
                 f"pairs={self.n_pairs}, frames={self.n_frames})")
+
+
+# ============================================================
+# InteractionSparse 稀疏存储的相互作用检测结果（Pass1 输出）
+# ============================================================
+
+@dataclass
+class InteractionSparse:
+    """稀疏存储的相互作用检测结果（Pass1 输出）。
+
+    以 (group_id1, group_id2, ...) 为键，存储每个基团组在哪些帧存在相互作用。
+    不依赖内部索引（pair_idx），直接用 group_id 标识基团组。
+
+    Attributes:
+        interaction_type: 相互作用类型（如 "salt_bridge", "hydrogen_bond"）
+        data: 稀疏数据，格式：
+            {
+                (group_id1, group_id2): {
+                    "groups": (Group1, Group2),
+                    "frames": [0, 1, 5, ...],
+                    "metrics": {"distance": [...], "angle": [...]}
+                }
+            }
+    """
+
+    interaction_type: str
+    data: Dict[Tuple[int, ...], dict]
+
+    def __post_init__(self):
+        """验证数据完整性。"""
+        if not self.interaction_type:
+            raise ValueError("interaction_type cannot be empty")
+
+    @property
+    def n_pairs(self) -> int:
+        """基团组数量。"""
+        return len(self.data)
+
+    def __repr__(self) -> str:
+        return (f"InteractionSparse(type='{self.interaction_type}', "
+                f"pairs={self.n_pairs})")
 
 
 # ============================================================

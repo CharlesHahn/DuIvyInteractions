@@ -12,6 +12,7 @@ import MDAnalysis as mda
 
 from DuIvyInteractions.input_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
+from DuIvyInteractions.core.datas import InteractionSparse
 from DuIvyInteractions.interaction_detectors import (
     HydrogenBondDetectorTwoPass, HydrogenBondDetectorPerFrame)
 
@@ -51,7 +52,7 @@ def detector():
 @pytest.fixture(scope="module")
 def sparse_result(detector, protein_groups):
     u = mda.Universe(str(TPR_FILE), str(XTC_FILE))
-    return detector.detect_pass1_only(
+    return detector.run_pass1(
         protein_groups, u.trajectory,
         tuple_filter=lambda gt: gt[0].molecule != gt[1].molecule), detector
 
@@ -70,17 +71,17 @@ def hydrogen_bonds(detector, protein_groups):
 
 class TestPass1Only:
 
-    def test_returns_dict(self, sparse_result):
+    def test_returns_interaction_sparse(self, sparse_result):
         sparse, _ = sparse_result
-        assert isinstance(sparse, dict)
+        assert isinstance(sparse, InteractionSparse)
 
     def test_pair_count(self, sparse_result):
         sparse, _ = sparse_result
-        assert len(sparse) == 119
+        assert sparse.n_pairs == 119
 
     def test_each_pair_has_metrics(self, sparse_result):
         sparse, _ = sparse_result
-        for idx, data in sparse.items():
+        for group_ids, data in sparse.data.items():
             assert "distance" in data["metrics"]
             assert "angle" in data["metrics"]
             assert len(data["metrics"]["distance"]) == len(data["frames"])

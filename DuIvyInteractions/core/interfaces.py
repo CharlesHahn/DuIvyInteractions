@@ -6,7 +6,7 @@ from typing import List, Tuple, Dict
 from functools import partial
 import numpy as np
 
-from .datas import Group, Interaction, SystemData
+from .datas import Group, Interaction, InteractionSparse, SystemData
 
 
 class Reader(ABC):
@@ -388,14 +388,28 @@ class InteractionDetectorTwoPass(ABC):
     与 PerTuple / PerFrame 的区别：
     - PerTuple: for each tuple → load ALL frames → vectorized over frames
     - PerFrame: for each frame → compute ALL tuples → dense storage
-    - TwoPass:  Pass1 discover active tuples → Pass2 compute full metrics
+    - TwoPass:  Pass1 discover active tuples → Pass2 fill full metrics
 
-    Pass1: 逐帧发现 active 的 tuple（稀疏存储，内存低）
-    Pass2: 对 discovered tuples 遍历全帧算 metric（稠密存储）
+    两阶段职责：
+    - Pass1（发现）：逐帧精确检测哪些基团组存在相互作用，结果稀疏存储。
+    - Pass2（补全）：对 Pass1 发现的基团组遍历全帧，补全完整时间序列数据。
 
-    子类必须实现：initialize_candidates, compute_pair_metrics, apply_threshold。
-    子类可选覆盖：discover_active_pairs（默认：compute_pair_metrics + apply_threshold）。
-    detect() 由基类固化，子类不重写。
+    公共接口：
+    - run_pass1(groups, trajectory, tuple_filter) → InteractionSparse
+    - run_pass2(sparse, trajectory) → List[Interaction]
+    - detect(groups, trajectory, ...) → List[Interaction]（便捷方法 = Pass1 + Pass2）
+
+    Pass1 和 Pass2 只通过 InteractionSparse 传递数据，无耦合。
+
+    子类必须实现：
+    - name, required_group_types, metric_names: 元信息
+    - initialize_candidates: 初始化候选基团组
+    - compute_pair_metrics: 计算指标
+    - apply_threshold: 判定 existence
+
+    子类可覆盖：
+    - run_pass1: 直接覆盖实现自定义逻辑（如 KDTree）
+    - run_pass2: 直接覆盖实现自定义逻辑
     """
 
     # ==================== 子类必须实现 ====================
@@ -418,12 +432,9 @@ class InteractionDetectorTwoPass(ABC):
         """指标名称列表（如 ["distance", "angle"]）。"""
         ...
 
-    @abstractmethod
     def initialize_candidates(self, groups: List[Group], trajectory,
                               tuple_filter=None) -> list:
-        """初始化：准备数据结构，返回候选基团组列表。
-
-        子类将所需状态（padding 矩阵、索引数组等）存入 self。
+        """初始化候选基团组。子类实现。
 
         Args:
             groups: 基团列表
@@ -433,60 +444,40 @@ class InteractionDetectorTwoPass(ABC):
         Returns:
             items: 候选基团组列表
         """
-        ...
+        return []
 
-    @abstractmethod
-    def compute_pair_metrics(self, pair_indices: List[int],
+    def compute_pair_metrics(self, group_tuples: List[Tuple[Group, ...]],
                              all_positions: np.ndarray) -> Dict[str, np.ndarray]:
-        """对给定 pair 集合计算指标。Pass1 和 Pass2 共用。
+        """对给定的基团组列表计算指标。子类实现。
 
         Args:
-            pair_indices: 需要计算的 pair 在 items 中的索引列表
+            group_tuples: 基团组列表，每组是一个 tuple
             all_positions: (n_atoms_total, 3) 当前帧全部原子坐标（Å）
 
         Returns:
-            {name: (n_pairs,)} 每个 pair 的指标值
+            {name: (n_groups,)} 每个基团组的指标值
         """
-        ...
+        return {}
 
-    @abstractmethod
     def apply_threshold(self, metrics: Dict[str, np.ndarray]) -> np.ndarray:
-        """根据指标判断是否存在。shape: (n_pairs,) → (n_pairs,) bool。"""
-        ...
-
-    # ==================== 可选覆盖 ====================
-
-    def discover_active_pairs(self, pair_indices: List[int],
-                              all_positions: np.ndarray,
-                              frame: int) -> Tuple[List[int], Dict[str, List[float]]]:
-        """Pass1：发现 active pairs。默认实现：算全部 metric + 阈值过滤。
-
-        子类可覆盖实现高效筛选（KDTree、级联过滤等）。
+        """根据指标判定 existence。子类实现。
 
         Args:
-            pair_indices: 候选 pair 索引列表
-            all_positions: (n_atoms_total, 3) 当前帧全部原子坐标（Å）
-            frame: 帧号
+            metrics: {name: (n_groups,)} 每个基团组的指标值
 
         Returns:
-            (active_indices, metrics)
-            - active_indices: 当前帧 active 的 pair 索引列表
-            - metrics: {name: [...]} 对应的指标值列表
+            (n_groups,) bool，每组是否存在相互作用
         """
-        all_metrics = self.compute_pair_metrics(pair_indices, all_positions)
-        mask = self.apply_threshold(all_metrics)
-        active = np.where(mask)[0]
-        return active.tolist(), {k: v[mask].tolist() for k, v in all_metrics.items()}
+        return np.array([])
 
-    def _post_process(self, results: list) -> list:
-        """后处理钩子。默认不做任何处理。"""
-        return results
+    # ==================== 子类可覆盖（有默认实现） ====================
 
-    # ==================== 基类固化（模板方法） ====================
+    def run_pass1(self, groups: List[Group], trajectory,
+                  tuple_filter=None) -> InteractionSparse:
+        """执行 Pass1：逐帧发现 active pairs，返回稀疏结果。
 
-    def detect_pass1_only(self, groups: List[Group], trajectory,
-                          tuple_filter=None) -> Dict[int, dict]:
-        """仅执行 Pass1：逐帧发现 active pairs，返回稀疏结果。
+        默认实现：调用 initialize_candidates + compute_pair_metrics + apply_threshold。
+        子类可覆盖实现自定义逻辑（如 KDTree、级联筛选）。
 
         Args:
             groups: 基团列表
@@ -494,133 +485,101 @@ class InteractionDetectorTwoPass(ABC):
             tuple_filter: 可选的基团组过滤函数
 
         Returns:
-            sparse: {pair_idx: {"groups": tuple, "frames": [...], "metrics": {name: [...]}}}
+            InteractionSparse 对象
         """
-        items = self.initialize_candidates(groups, trajectory, tuple_filter)
-        if not items:
-            return {}
+        group_tuples = self.initialize_candidates(groups, trajectory, tuple_filter)
+        if not group_tuples:
+            return InteractionSparse(interaction_type=self.name, data={})
 
-        all_pair_indices = list(range(len(items)))
-        sparse: Dict[int, dict] = {}
+        sparse_data: Dict[Tuple[int, ...], dict] = {}
 
         for f, ts in enumerate(trajectory):
-            active_indices, frame_metrics = self.discover_active_pairs(
-                all_pair_indices, ts.positions, f)
+            all_metrics = self.compute_pair_metrics(group_tuples, ts.positions)
+            mask = self.apply_threshold(all_metrics)
 
-            for idx, pos in enumerate(active_indices):
-                if pos not in sparse:
-                    sparse[pos] = {
-                        "groups": items[pos],
+            for idx in np.where(mask)[0]:
+                group_tuple = group_tuples[idx]
+                group_ids = tuple(g.group_id for g in group_tuple)
+
+                if group_ids not in sparse_data:
+                    sparse_data[group_ids] = {
+                        "groups": group_tuple,
                         "frames": [],
-                        "metrics": {name: [] for name in self.metric_names},
+                        "metrics": {name: [] for name in self.metric_names}
                     }
-                sparse[pos]["frames"].append(f)
+
+                sparse_data[group_ids]["frames"].append(f)
                 for name in self.metric_names:
-                    sparse[pos]["metrics"][name].append(
-                        frame_metrics[name][idx])
+                    sparse_data[group_ids]["metrics"][name].append(
+                        all_metrics[name][idx])
 
-        return sparse
+        return InteractionSparse(interaction_type=self.name, data=sparse_data)
 
-    def fill_missing(self, sparse: Dict[int, dict],
-                     trajectory) -> List[Interaction]:
-        """Pass2：对 Pass1 发现的 pair 遍历全帧，补全缺失的 metric。
+    def run_pass2(self, sparse: InteractionSparse,
+                  trajectory) -> List[Interaction]:
+        """执行 Pass2：补全全帧数据。
+
+        默认实现：调用 compute_pair_metrics + apply_threshold。
+        子类可覆盖实现自定义逻辑。
 
         Args:
-            sparse: detect_pass1_only() 返回的稀疏结果
+            sparse: run_pass1 返回的稀疏结果
             trajectory: MDAnalysis 轨迹对象
 
         Returns:
-            List[Interaction]
+            List[Interaction]，完整的相互作用结果
         """
-        if not sparse:
+        if not sparse.data:
             return []
 
-        indices = sorted(sparse.keys())
-        pair_indices = list(indices)
-        n_pairs = len(indices)
+        group_tuples = [entry["groups"] for entry in sparse.data.values()]
+        n_groups = len(group_tuples)
         n_frames = trajectory.n_frames
 
         # 预分配稠密数组
-        existence = np.zeros((n_pairs, n_frames), dtype=bool)
-        metrics = {name: np.full((n_pairs, n_frames), np.nan)
+        existence = np.zeros((n_groups, n_frames), dtype=bool)
+        metrics = {name: np.full((n_groups, n_frames), np.nan)
                    for name in self.metric_names}
 
-        # 逐帧计算全部 discovered pairs 的 metric
+        # 逐帧计算全部 discovered groups 的 metric
         for f, ts in enumerate(trajectory):
-            frame_metrics = self.compute_pair_metrics(pair_indices, ts.positions)
-            frame_existence = self.apply_threshold(frame_metrics)
-
-            existence[:, f] = frame_existence
+            frame_metrics = self.compute_pair_metrics(group_tuples, ts.positions)
+            existence[:, f] = self.apply_threshold(frame_metrics)
             for name in self.metric_names:
                 metrics[name][:, f] = frame_metrics[name]
 
         # 构建 results 列表
         results = [
-            (sparse[i]["groups"], existence[row],
-             {k: v[row] for k, v in metrics.items()})
-            for row, i in enumerate(indices)
+            (entry["groups"], existence[i],
+             {k: v[i] for k, v in metrics.items()})
+            for i, entry in enumerate(sparse.data.values())
         ]
 
         results = self._post_process(results)
         return self._build_interaction(results)
 
-    def build_interaction_from_sparse(self, sparse: Dict[int, dict],
-                                      n_frames: int) -> List[Interaction]:
-        """将稀疏结果直接转为 Interaction（不跑 Pass2）。
-
-        非 active 帧：existence=False，metrics=NaN。
-        适用于统计分析（只看 active 帧的数据）。
-
-        Args:
-            sparse: detect_pass1_only() 返回的稀疏结果
-            n_frames: 总帧数
-
-        Returns:
-            List[Interaction]
-        """
-        if not sparse:
-            return []
-
-        indices = sorted(sparse.keys())
-        n_pairs = len(indices)
-
-        existence = np.zeros((n_pairs, n_frames), dtype=bool)
-        metrics = {name: np.full((n_pairs, n_frames), np.nan)
-                   for name in self.metric_names}
-
-        for row, idx in enumerate(indices):
-            data = sparse[idx]
-            frame_list = data["frames"]
-            existence[row, frame_list] = True
-            for name in self.metric_names:
-                metrics[name][row, frame_list] = data["metrics"][name]
-
-        results = [
-            (sparse[i]["groups"], existence[row],
-             {k: v[row] for k, v in metrics.items()})
-            for row, i in enumerate(indices)
-        ]
-
-        results = self._post_process(results)
-        return self._build_interaction(results)
+    # ==================== 公共接口 ====================
 
     def detect(self, groups: List[Group], trajectory=None,
                n_workers: int = 1,
                topology_path: str = None,
                trajectory_path: str = None,
                tuple_filter=None) -> List[Interaction]:
-        """两轮遍历检测相互作用。
+        """便捷方法：Pass1 + Pass2。
 
         接口与 PerTuple / PerFrame.detect 完全一致，便于替换。
-        detect = detect_pass1_only + fill_missing
         """
         if trajectory is None:
             raise ValueError("trajectory is required")
 
-        sparse = self.detect_pass1_only(groups, trajectory, tuple_filter)
-        return self.fill_missing(sparse, trajectory)
+        sparse = self.run_pass1(groups, trajectory, tuple_filter)
+        return self.run_pass2(sparse, trajectory)
 
     # ==================== 内部辅助方法 ====================
+
+    def _post_process(self, results: list) -> list:
+        """后处理钩子。默认不做任何处理。"""
+        return results
 
     def _build_interaction(self, results: list) -> List[Interaction]:
         """将结果列表构建为 Interaction 对象。"""
