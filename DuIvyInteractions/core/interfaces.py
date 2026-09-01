@@ -388,12 +388,13 @@ class InteractionDetectorTwoPass(ABC):
     与 PerTuple / PerFrame 的区别：
     - PerTuple: for each tuple → load ALL frames → vectorized over frames
     - PerFrame: for each frame → compute ALL tuples → dense storage
-    - TwoPass:  for each frame → discover active tuples → sparse storage
+    - TwoPass:  Pass1 discover active tuples → Pass2 compute full metrics
 
-    Pass1: 逐帧级联筛选，只记录 active 的 tuple（稀疏存储，内存低）
-    Pass2: 稠密化，将稀疏结果补全为完整 (n_pairs, n_frames) 数组
+    Pass1: 逐帧发现 active 的 tuple（稀疏存储，内存低）
+    Pass2: 对 discovered tuples 遍历全帧算 metric（稠密存储）
 
-    子类只需实现：setup() + detect_frame()。
+    子类必须实现：initialize_candidates, compute_pair_metrics, apply_threshold。
+    子类可选覆盖：discover_active_pairs（默认：compute_pair_metrics + apply_threshold）。
     detect() 由基类固化，子类不重写。
     """
 
@@ -418,9 +419,9 @@ class InteractionDetectorTwoPass(ABC):
         ...
 
     @abstractmethod
-    def setup(self, groups: List[Group], trajectory,
-              tuple_filter=None) -> list:
-        """初始化：分组、构建数据结构、生成候选 items。
+    def initialize_candidates(self, groups: List[Group], trajectory,
+                              tuple_filter=None) -> list:
+        """初始化：准备数据结构，返回候选基团组列表。
 
         子类将所需状态（padding 矩阵、索引数组等）存入 self。
 
@@ -435,51 +436,47 @@ class InteractionDetectorTwoPass(ABC):
         ...
 
     @abstractmethod
-    def detect_frame(self, all_positions: np.ndarray,
-                     frame: int) -> Tuple[List[int], Dict[str, List[float]]]:
-        """单帧检测。从 self 取数据。
+    def compute_pair_metrics(self, pair_indices: List[int],
+                             all_positions: np.ndarray) -> Dict[str, np.ndarray]:
+        """对给定 pair 集合计算指标。Pass1 和 Pass2 共用。
 
         Args:
+            pair_indices: 需要计算的 pair 在 items 中的索引列表
+            all_positions: (n_atoms_total, 3) 当前帧全部原子坐标（Å）
+
+        Returns:
+            {name: (n_pairs,)} 每个 pair 的指标值
+        """
+        ...
+
+    @abstractmethod
+    def apply_threshold(self, metrics: Dict[str, np.ndarray]) -> np.ndarray:
+        """根据指标判断是否存在。shape: (n_pairs,) → (n_pairs,) bool。"""
+        ...
+
+    # ==================== 可选覆盖 ====================
+
+    def discover_active_pairs(self, pair_indices: List[int],
+                              all_positions: np.ndarray,
+                              frame: int) -> Tuple[List[int], Dict[str, List[float]]]:
+        """Pass1：发现 active pairs。默认实现：算全部 metric + 阈值过滤。
+
+        子类可覆盖实现高效筛选（KDTree、级联过滤等）。
+
+        Args:
+            pair_indices: 候选 pair 索引列表
             all_positions: (n_atoms_total, 3) 当前帧全部原子坐标（Å）
             frame: 帧号
 
         Returns:
             (active_indices, metrics)
-            - active_indices: 当前帧 active 的 item 索引列表
+            - active_indices: 当前帧 active 的 pair 索引列表
             - metrics: {name: [...]} 对应的指标值列表
         """
-        ...
-
-    # ==================== 可选覆盖 ====================
-
-    def densify(self, sparse: Dict[int, dict],
-                n_frames: int) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-        """将 Pass1 稀疏结果补全为完整 (n_pairs, n_frames) 数组。
-
-        未 active 的帧：existence=False，metrics=NaN。
-
-        Args:
-            sparse: {item_idx: {"groups": tuple, "frames": [...], "metrics": {name: [...]}}}
-            n_frames: 总帧数
-
-        Returns:
-            (existence, metrics)
-        """
-        indices = sorted(sparse.keys())
-        n_pairs = len(indices)
-
-        existence = np.zeros((n_pairs, n_frames), dtype=bool)
-        metrics = {name: np.full((n_pairs, n_frames), np.nan)
-                   for name in self.metric_names}
-
-        for row, idx in enumerate(indices):
-            data = sparse[idx]
-            frame_list = data["frames"]
-            existence[row, frame_list] = True
-            for name in self.metric_names:
-                metrics[name][row, frame_list] = data["metrics"][name]
-
-        return existence, metrics
+        all_metrics = self.compute_pair_metrics(pair_indices, all_positions)
+        mask = self.apply_threshold(all_metrics)
+        active = np.where(mask)[0]
+        return active.tolist(), {k: v[mask].tolist() for k, v in all_metrics.items()}
 
     def _post_process(self, results: list) -> list:
         """后处理钩子。默认不做任何处理。"""
@@ -489,7 +486,7 @@ class InteractionDetectorTwoPass(ABC):
 
     def detect_pass1_only(self, groups: List[Group], trajectory,
                           tuple_filter=None) -> Dict[int, dict]:
-        """仅执行 Pass1：逐帧检测，返回稀疏结果。
+        """仅执行 Pass1：逐帧发现 active pairs，返回稀疏结果。
 
         Args:
             groups: 基团列表
@@ -497,17 +494,18 @@ class InteractionDetectorTwoPass(ABC):
             tuple_filter: 可选的基团组过滤函数
 
         Returns:
-            sparse: {item_idx: {"groups": tuple, "frames": [...], "metrics": {name: [...]}}}
+            sparse: {pair_idx: {"groups": tuple, "frames": [...], "metrics": {name: [...]}}}
         """
-        items = self.setup(groups, trajectory, tuple_filter)
+        items = self.initialize_candidates(groups, trajectory, tuple_filter)
         if not items:
             return {}
 
+        all_pair_indices = list(range(len(items)))
         sparse: Dict[int, dict] = {}
 
         for f, ts in enumerate(trajectory):
-            active_indices, frame_metrics = self.detect_frame(
-                ts.positions, f)
+            active_indices, frame_metrics = self.discover_active_pairs(
+                all_pair_indices, ts.positions, f)
 
             for idx, pos in enumerate(active_indices):
                 if pos not in sparse:
@@ -538,6 +536,7 @@ class InteractionDetectorTwoPass(ABC):
             return []
 
         indices = sorted(sparse.keys())
+        pair_indices = list(indices)
         n_pairs = len(indices)
         n_frames = trajectory.n_frames
 
@@ -548,21 +547,54 @@ class InteractionDetectorTwoPass(ABC):
 
         # 逐帧计算全部 discovered pairs 的 metric
         for f, ts in enumerate(trajectory):
-            active_indices, frame_metrics = self.detect_frame(
-                ts.positions, f)
+            frame_metrics = self.compute_pair_metrics(pair_indices, ts.positions)
+            frame_existence = self.apply_threshold(frame_metrics)
 
-            # 构建 active_pos → row 映射
-            active_set = set(active_indices)
-            for idx, pos in enumerate(active_indices):
-                if pos in sparse:
-                    row = indices.index(pos)
-                    existence[row, f] = True
-                    for name in self.metric_names:
-                        metrics[name][row, f] = frame_metrics[name][idx]
-
-            # 非 active 的 discovered pairs：existence 保持 False，metric 保持 NaN
+            existence[:, f] = frame_existence
+            for name in self.metric_names:
+                metrics[name][:, f] = frame_metrics[name]
 
         # 构建 results 列表
+        results = [
+            (sparse[i]["groups"], existence[row],
+             {k: v[row] for k, v in metrics.items()})
+            for row, i in enumerate(indices)
+        ]
+
+        results = self._post_process(results)
+        return self._build_interaction(results)
+
+    def build_interaction_from_sparse(self, sparse: Dict[int, dict],
+                                      n_frames: int) -> List[Interaction]:
+        """将稀疏结果直接转为 Interaction（不跑 Pass2）。
+
+        非 active 帧：existence=False，metrics=NaN。
+        适用于统计分析（只看 active 帧的数据）。
+
+        Args:
+            sparse: detect_pass1_only() 返回的稀疏结果
+            n_frames: 总帧数
+
+        Returns:
+            List[Interaction]
+        """
+        if not sparse:
+            return []
+
+        indices = sorted(sparse.keys())
+        n_pairs = len(indices)
+
+        existence = np.zeros((n_pairs, n_frames), dtype=bool)
+        metrics = {name: np.full((n_pairs, n_frames), np.nan)
+                   for name in self.metric_names}
+
+        for row, idx in enumerate(indices):
+            data = sparse[idx]
+            frame_list = data["frames"]
+            existence[row, frame_list] = True
+            for name in self.metric_names:
+                metrics[name][row, frame_list] = data["metrics"][name]
+
         results = [
             (sparse[i]["groups"], existence[row],
              {k: v[row] for k, v in metrics.items()})

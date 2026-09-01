@@ -31,9 +31,9 @@ class SaltBridgeDetectorTwoPass(InteractionDetectorTwoPass):
     def metric_names(self) -> List[str]:
         return ["distance"]
 
-    # ==================== setup ====================
+    # ==================== 子类必须实现 ====================
 
-    def setup(self, groups, trajectory, tuple_filter=None):
+    def initialize_candidates(self, groups, trajectory, tuple_filter=None):
         """分组 → padding → 笛卡尔积 → tuple_filter。"""
         pos_groups = [g for g in groups if g.group_type == "charged_positive"]
         neg_groups = [g for g in groups if g.group_type == "charged_negative"]
@@ -65,33 +65,34 @@ class SaltBridgeDetectorTwoPass(InteractionDetectorTwoPass):
         if len(pos_flat) == 0:
             return []
 
-        # 存入 self（detect_frame 用）
+        # 存入 self
         self._pos_flat = pos_flat
         self._neg_flat = neg_flat
 
-        # 返回 items 列表（基类用于 sparse["groups"]）
+        # 返回 items 列表
         items = [(pos_groups[pos_flat[i]], neg_groups[neg_flat[i]])
                  for i in range(len(pos_flat))]
         return items
 
-    # ==================== detect_frame ====================
+    def compute_pair_metrics(self, pair_indices, all_positions):
+        """对给定 pair 计算电荷中心距离。Pass1 和 Pass2 共用。"""
+        dist = self._compute_all_distances(all_positions)
+        return {"distance": dist[pair_indices]}
 
-    def detect_frame(self, all_positions, frame):
-        """padding 向量化算全部 pair 距离，返回 active 的 pair。"""
+    def apply_threshold(self, metrics):
+        """距离 ≤ SALTBRIDGE_DIST_MAX。"""
+        return metrics["distance"] <= SALTBRIDGE_DIST_MAX
+
+    # ==================== 内部辅助方法 ====================
+
+    def _compute_all_distances(self, all_positions):
+        """计算全部 pair 的电荷中心距离。"""
         pos_c = self._charge_centers(
             all_positions, self._pos_idx, self._pos_q, self._pos_valid)
         neg_c = self._charge_centers(
             all_positions, self._neg_idx, self._neg_q, self._neg_valid)
-        dist = np.linalg.norm(
+        return np.linalg.norm(
             pos_c[self._pos_flat] - neg_c[self._neg_flat], axis=1)
-
-        mask = dist <= SALTBRIDGE_DIST_MAX
-        active_indices = np.where(mask)[0].tolist()
-        active_distances = dist[mask].tolist()
-
-        return active_indices, {"distance": active_distances}
-
-    # ==================== 内部辅助方法 ====================
 
     @staticmethod
     def _build_padding(groups: List[Group]):
