@@ -67,11 +67,8 @@ class HydrogenBondDetectorPerFrame(InteractionDetectorPerFrame):
             raise NotImplementedError("PerFrame 检测器暂不支持并行")
 
         # 1. 分组
-        from ..group_identifiers.amber_ff_identifier import WATER_RESIDUES
-        donors = [g for g in groups
-                  if g.group_type == "H_donor" and g.residue_name not in WATER_RESIDUES]
-        acceptors = [g for g in groups
-                     if g.group_type == "H_acceptor" and g.residue_name not in WATER_RESIDUES]
+        donors = [g for g in groups if g.group_type == "H_donor"]
+        acceptors = [g for g in groups if g.group_type == "H_acceptor"]
 
         if not donors or not acceptors:
             return []
