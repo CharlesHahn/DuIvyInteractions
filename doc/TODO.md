@@ -176,6 +176,14 @@ detector.detect(groups, trajectory,
 
 **优先级**：中（当前无紧迫需求，Pipeline 完成后实现）
 
+### 15. 水桥 TwoPass 未添加 WATER_BRIDGE_MINDIST 下界
+
+**现状**：策略三（TwoPass）的水桥检测器在 `apply_threshold` 中未添加 `dist > WATER_BRIDGE_MINDIST`（2.5Å）的下界检查，仅检查 `dist < 4.1Å` 上界。策略一（PerTuple）和策略二（PerFrame）均有此下界。
+
+**影响**：TwoPass 会保留 Ow-A 距离 < 2.5Å 的三元组（如 2.48Å），而策略一/二会排除这些。D927 体系单帧测试中，TwoPass 多出 3 对（381 vs 378）。
+
+**待决定**：是否需要在 TwoPass 的 `apply_threshold` 中添加此下界。
+
 ---
 
 *文档结束*
