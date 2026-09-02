@@ -23,6 +23,7 @@ from .hydrophobic_detector_two_pass import HydrophobicDetectorTwoPass
 from .metal_coordination_detector_two_pass import MetalCoordinationDetectorTwoPass
 from .halogen_bond_detector_two_pass import HalogenBondDetectorTwoPass
 from .pi_cation_detector_two_pass import PiCationDetectorTwoPass
+from .pi_stacking_detector_two_pass import PiStackingDetectorTwoPass
 
 __all__ = [
     "SaltBridgeDetectorPerTuple",
@@ -47,4 +48,5 @@ __all__ = [
     "MetalCoordinationDetectorTwoPass",
     "HalogenBondDetectorTwoPass",
     "PiCationDetectorTwoPass",
+    "PiStackingDetectorTwoPass",
 ]
