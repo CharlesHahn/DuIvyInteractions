@@ -1,0 +1,120 @@
+# -*- coding: utf-8 -*-
+"""π-堆积 PerFrame vs TwoPass 性能对比。"""
+import time
+import tracemalloc
+import numpy as np
+from DuIvyInteractions.input_readers import GmxTprReader
+from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
+from DuIvyInteractions.interaction_detectors import (
+    PiStackingDetectorPerFrame, PiStackingDetectorTwoPass)
+import MDAnalysis as mda
+
+TPR = "Tests/test_MD_case/md.tpr"
+XTC = "Tests/test_MD_case/md1ns.xtc"
+
+reader = GmxTprReader()
+sd = reader.read(TPR)
+groups = AmberFFGroupIdentifier().identify(sd)
+aromatic = [g for g in groups if g.group_type == "aromatic_ring"]
+n = len(aromatic)
+print(f"Aromatic rings: {n}, Candidates C(n,2): {n*(n-1)//2}")
+print()
+
+
+def bench(label, detector_cls, groups, trajectory):
+    tracemalloc.start()
+    t0 = time.time()
+    results = detector_cls().detect(groups, trajectory=trajectory)
+    t1 = time.time()
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    elapsed = t1 - t0
+    peak_mb = peak / 1024 / 1024
+    n_pairs = results[0].n_pairs if results else 0
+    print(f"  {label:<12} {elapsed:>8.2f}s   {peak_mb:>8.1f} MB   pairs={n_pairs}")
+    return results
+
+
+# ============================================================
+# 不检查平面性
+# ============================================================
+print("=" * 55)
+print("[无平面性检查]")
+print("=" * 55)
+
+u1 = mda.Universe(TPR, XTC)
+print("[PerFrame]")
+res_per = bench("PerFrame", lambda: PiStackingDetectorPerFrame(check_planarity=False),
+                aromatic, u1.trajectory)
+
+u2 = mda.Universe(TPR, XTC)
+det_two = PiStackingDetectorTwoPass(check_planarity=False)
+
+print("\n[TwoPass 分阶段]")
+tracemalloc.start()
+t0 = time.time()
+sparse = det_two.run_pass1(aromatic, u2.trajectory)
+t1 = time.time()
+_, peak1 = tracemalloc.get_traced_memory()
+tracemalloc.stop()
+print(f"  Pass1        {t1-t0:>8.2f}s   {peak1/1024/1024:>8.1f} MB   sparse_pairs={sparse.n_pairs}")
+
+u3 = mda.Universe(TPR, XTC)
+tracemalloc.start()
+t0 = time.time()
+res_two = det_two.run_pass2(sparse, u3.trajectory)
+t1 = time.time()
+_, peak2 = tracemalloc.get_traced_memory()
+tracemalloc.stop()
+print(f"  Pass2        {t1-t0:>8.2f}s   {peak2/1024/1024:>8.1f} MB   pairs={res_two[0].n_pairs if res_two else 0}")
+
+u4 = mda.Universe(TPR, XTC)
+print(f"\n[TwoPass full]")
+res_two_full = bench("TwoPass", lambda: PiStackingDetectorTwoPass(check_planarity=False),
+                     aromatic, u4.trajectory)
+
+# 结果对比
+it_per = res_per[0] if res_per else None
+it_two = res_two_full[0] if res_two_full else None
+
+print(f"\n{'='*55}")
+print("[结果对比]")
+if it_per and it_two:
+    per_pairs = {(g1.group_id, g2.group_id) for g1, g2 in it_per.groups}
+    two_pairs = {(g1.group_id, g2.group_id) for g1, g2 in it_two.groups}
+    common = per_pairs & two_pairs
+
+    print(f"  PerFrame: {len(per_pairs)} pairs")
+    print(f"  TwoPass:  {len(two_pairs)} pairs")
+    print(f"  Common:   {len(common)}")
+    print(f"  PerFrame only: {len(per_pairs - two_pairs)}")
+    print(f"  TwoPass only:  {len(two_pairs - per_pairs)}")
+
+    per_occ = {}
+    for i, (g1, g2) in enumerate(it_per.groups):
+        per_occ[(g1.group_id, g2.group_id)] = float(it_per.occupancy()[i])
+    two_occ = {}
+    for i, (g1, g2) in enumerate(it_two.groups):
+        two_occ[(g1.group_id, g2.group_id)] = float(it_two.occupancy()[i])
+
+    occ_diffs = [abs(per_occ[k] - two_occ[k]) for k in common]
+    print(f"  Occupancy max diff (common): {max(occ_diffs) if occ_diffs else 'N/A'}")
+
+# ============================================================
+# 检查平面性
+# ============================================================
+print(f"\n{'='*55}")
+print("[有平面性检查]")
+print("=" * 55)
+
+u5 = mda.Universe(TPR, XTC)
+res_per_p = bench("PerFrame", lambda: PiStackingDetectorPerFrame(check_planarity=True),
+                  aromatic, u5.trajectory)
+
+u6 = mda.Universe(TPR, XTC)
+res_two_p = bench("TwoPass", lambda: PiStackingDetectorTwoPass(check_planarity=True),
+                  aromatic, u6.trajectory)
+
+n_per_p = res_per_p[0].n_pairs if res_per_p else 0
+n_two_p = res_two_p[0].n_pairs if res_two_p else 0
+print(f"  PerFrame pairs: {n_per_p}, TwoPass pairs: {n_two_p}")
