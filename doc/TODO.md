@@ -184,6 +184,15 @@ detector.detect(groups, trajectory,
 
 **待决定**：是否需要在 TwoPass 的 `apply_threshold` 中添加此下界。
 
+
+### 16. 周期性问题
+
+相互作用，尤其是水桥和氢键，可能还涉及到周期性处理的问题。
+
+MDAnlysis提供了自动处理周期性的KDTree，或许之后可以替换到MDA的接口上来，而不是自己实现
+
+
+
 ---
 
 *文档结束*
