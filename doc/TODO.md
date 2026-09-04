@@ -1,6 +1,8 @@
 # TODO 清单
 
 > 记录推迟到后续阶段实现的任务，避免遗忘。
+>
+> 状态标记：✅ 已完成 | ⏳ 进行中 | ❌ 未开始
 
 ---
 
@@ -8,11 +10,11 @@
 
 以下任务在基团识别阶段有意推迟，需要在实现 `interaction_detectors/` 时一并完成。
 
-### 1. 芳香环平面性检验
+### 1. 芳香环平面性检验 ✅
 
 **推迟原因**：初始帧构象可能未弛豫，平面性可能很差；热涨落导致瞬时平面性波动；力场原子类型已编码芳香性，不需要几何验证。
 
-**实现位置**：`interaction_detectors/pi_stacking.py`
+**实现位置**：`interaction_detectors/pi_stacking_detector_*.py`
 
 **判据**：
 - 对环内每个原子，计算相邻两键的法向量
@@ -21,7 +23,9 @@
 
 **参考**：`doc/aromatic_ring_definition.md` §3.3
 
-### 2. 疏水-芳香去重
+**实现状态**（2026-08-28 更新）：已在所有 pi_stacking 检测器中通过 `check_planarity: bool = False` 参数实现，默认关闭。
+
+### 2. 疏水-芳香去重 ❌
 
 **推迟原因**：π-π 堆积已包含疏水接触（芳香环之间的 van der Waals 力），如果同时报告 π-π 堆积和疏水相互作用，会重复计数同一物理接触。
 
@@ -35,11 +39,11 @@
 **参考**：`doc/hydrophobic_definition.md` §4
 
 
-### 3. 基团识别结果需要人为审查！
+### 3. 基团识别结果需要人为审查！ ⏳
 
 目前基于真实数据识别得到的基团的数据，还需要人去手工一个一个核对一下确认一下。单元测试的真实数据测试是基于现有代码输出结果做的，不一定对。以人工审查过的结果为准！
 
-### 4. 可选的候选对预过滤优化
+### 4. 可选的候选对预过滤优化 ✅
 
 **检测算法**：遍历基团对，每对向量化计算全部帧的距离。预加载基团原子坐标到内存（F×G×3），每对直接得到一行 existence 和 distance 向量。
 
@@ -52,7 +56,9 @@
 - 是否启用由用户通过命令行参数自行判定
 - cutoff 应远大于相互作用距离阈值（如氢键 4.1 Å → 预过滤用 15 Å）
 
-### 5. 基团组用户自定义过滤（tuple_filter）
+**实现状态**（2026-08-28 更新）：已在 PerTuple 和 PerFrame 检测器中通过 `PREFILTER_CUTOFF` 常量和 `filter_candidate_tuples()` 方法实现。PerTuple 用第一帧距离预过滤，PerFrame 用 KDTree 预筛选。
+
+### 5. 基团组用户自定义过滤（tuple_filter） ✅
 
 **需求**：用户需要指定相互作用的基团来源，如"只检测 RBD 和 KRAS 之间的盐桥"。
 
@@ -76,7 +82,7 @@ detector.detect(groups, trajectory,
 
 **状态**：已实现。
 
-### 6. 官能团分类粗糙问题
+### 6. 官能团分类粗糙问题 ❌
 
 **问题**：PLIP 的 `is_functional_group` 对氮基团分类粗糙。"tertamine" 实际包含所有 sp3 氮（NR₃、NR₃H⁺、NH₃⁺ 等），不是化学意义上的"叔胺"。当前代码复现了 PLIP 的定义，导致蛋白 N 末端 NH₃⁺ 被误判为 tertamine。
 
@@ -84,7 +90,7 @@ detector.detect(groups, trajectory,
 
 **影响**：pi-cation 检测的叔胺角度检查会误触发。
 
-### 7. PLIP 对 tertamine 的 pi-cation 特殊处理
+### 7. PLIP 对 tertamine 的 pi-cation 特殊处理 ❌
 
 **现象**：PLIP 在 `pication()` 中对 tertamine 做了额外角度检查，其他正电基团（quartamine、guanidine、sulfonium）没有此检查。
 
@@ -94,21 +100,23 @@ detector.detect(groups, trajectory,
 
 **待理解**：为什么只有 tertamine 需要这个检查？这个角度条件（≤ 30°）的物理含义是什么？为什么它能防止"穿过配体"的假阳性？
 
-### 8. 金属配位几何构型匹配
+### 8. 金属配位几何构型匹配 ❌
 
 **推迟原因**：第一版只做距离判据，几何构型匹配复杂度高。
 
 **PLIP 的操作**：按金属分组后，计算所有配位原子的角度，与已知几何构型（linear/trigonal/tetrahedral/octahedral 等）比较，选择 RMS 最小的构型，移除不符合该构型的多余配位原子。
 
-**实现位置**：`interaction_detectors/metal_coordination_detector.py`
+**实现位置**：`interaction_detectors/metal_coordination_detector_*.py`
 
-### 9. 金属配位排除纯水配位
+### 9. 金属配位排除纯水配位 ✅
 
 **推迟原因**：当前 `metal_binding` 基团已排除水分子，不需要额外处理。但如果未来改为不排除水，则需要此逻辑。
 
 **PLIP 的操作**：如果所有配位原子都来自水分子，不报告该金属配位。
 
-### 10. 水桥性能优化
+**实现状态**（2026-08-28 更新）：`_find_metal_binding()` 中已通过 `if res.residue_name in WATER_RESIDUES: return` 排除水分子。
+
+### 10. 水桥性能优化 ✅（部分）
 
 **问题**：当前水桥检测候选三元组数量太大（24.9 万个），每个三元组需要逐帧遍历轨迹（~0.95 秒），总耗时约 65 小时，不可接受。
 
@@ -116,25 +124,32 @@ detector.detect(groups, trajectory,
 
 **待优化**：减少候选三元组数量或优化轨迹加载方式。
 
-### 11. 水桥水分子去重
+**实现状态**（2026-08-28 更新）：
+- PerFrame 版：用 KDTree 预筛选（水到供/受体 < 8.2Å），耗时从 65h 降至 ~5s
+- TwoPass 版：Pass1 用 KDTree 逐帧发现，Pass2 只对 active 三元组补全
+- PerTuple 版：仍为原始实现（参考用）
+
+### 11. 水桥水分子去重 ❌
 
 **推迟原因**：第一版暂不做。
 
 **PLIP 的操作**：一个水分子最多参与 2 个氢键（两个 H 各做一个供体）。如果超过 2 个候选，保留水分子 H-O-H 角度最接近 110° 的两个。
 
-### 12. 水桥单元测试结果断言
+### 12. 水桥单元测试结果断言 ⏳
 
 **推迟原因**：性能问题导致无法跑完全量检测，无法获取真实数据结果。
 
 **待补充**：解决性能问题后，补充具体的结果数据断言（水桥数量、top pair 等）。
 
-### 13. PerFrame 检测器长轨迹内存优化
+**实现状态**（2026-08-28 更新）：PerFrame 和 TwoPass 版性能问题已解决，可补充断言。
+
+### 13. PerFrame 检测器长轨迹内存优化 ❌
 
 **问题**：PerFrame 检测器预分配 (n_pairs, n_frames) 的 distance/angle 矩阵。D927 体系氢键候选对 42,603 个，101 帧时矩阵约 71 MB，可接受。但外推到 1μs 轨迹（500,000 帧），矩阵将达到 342 GB，不可接受。
 
 **根因**：当前实现对全部候选对存储每一帧的 distance/angle，即使大部分 pair 最终被阈值淘汰（42,603 候选 → 119 有效）。
 
-**优化方案**：只存 existence 矩阵（bool，1 byte），不存 distance/angle。最终过滤后，对存活的 ~100 个 pair 重新遍历轨迹计算 distance/angle。
+**优化方案**：只存 existence 矩阵（bool，1 byte），不存 distance/angle。最终过滤后，对存活的 ~100 个 pair 重新遍迹计算 distance/angle。
 
 | | 当前方案 | 优化方案 |
 |:--|:---------|:---------|
@@ -148,7 +163,7 @@ detector.detect(groups, trajectory,
 
 **优先级**：低（当前 101 帧测试场景无压力，1μs 轨迹时再做）。
 
-### 14. Interaction 结果序列化（保存/加载）
+### 14. Interaction 结果序列化（保存/加载） ❌
 
 **需求**：将 Interaction 数据结构保存到文件，支持后续分析、可视化、跨工具共享。
 
@@ -176,7 +191,7 @@ detector.detect(groups, trajectory,
 
 **优先级**：中（当前无紧迫需求，Pipeline 完成后实现）
 
-### 15. 水桥 TwoPass 未添加 WATER_BRIDGE_MINDIST 下界
+### 15. 水桥 TwoPass 未添加 WATER_BRIDGE_MINDIST 下界 ❌
 
 **现状**：策略三（TwoPass）的水桥检测器在 `apply_threshold` 中未添加 `dist > WATER_BRIDGE_MINDIST`（2.5Å）的下界检查，仅检查 `dist < 4.1Å` 上界。策略一（PerTuple）和策略二（PerFrame）均有此下界。
 

@@ -1,7 +1,7 @@
 # Padding 索引矩阵算法设计文档
 
 > 创建日期：2026-08-25
-> 状态：草案（含对抗性审查结论）
+> 状态：定稿（对抗性审查问题已全部修复，见 §6）
 > 用途：InteractionDetectorPerFrame 的向量化计算方案
 
 ---
@@ -200,7 +200,7 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 
 注：donor 固定 2 原子，acceptor 固定 1 原子，padding 实际无浪费。
 
-### 4.3 π-堆积（Pi Stacking）—— ⚠️ 需特殊处理
+### 4.3 π-堆积（Pi Stacking）
 
 | 项 | 值 |
 |:---|:---|
@@ -210,9 +210,9 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 | group 级量 | 环心 (n_rings, 3), 法向量 (n_rings, 3) |
 | tuple 级量 | 环心距, 法向量夹角, 投影偏移 (n_tuples,) |
 
-**⚠️ 已知问题：`np.roll` + padding 破坏法向量计算**（见 §6.1）
+~~原问题：`np.roll` + padding 破坏法向量计算。~~ **已修复**：用显式 circular neighbor indices（`prev_idx`/`next_idx`）替代 `np.roll`。见 §6.1。
 
-### 4.4 π-阳离子（Pi Cation）—— ⚠️ 同 π-堆积
+### 4.4 π-阳离子（Pi Cation）
 
 | 项 | 值 |
 |:---|:---|
@@ -221,9 +221,9 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 | group 级量 | 环心 + 法向量（ring 组）, 电荷中心（charged 组） |
 | tuple 级量 | 环心-电荷中心距, 投影偏移 (n_tuples,) |
 
-**⚠️ 同 §4.3 的 np.roll 问题**
+~~同 §4.3 的 np.roll 问题。~~ **已修复**：同 §4.3。
 
-### 4.5 疏水（Hydrophobic）—— ⚠️ 需空间预筛选
+### 4.5 疏水（Hydrophobic）
 
 | 项 | 值 |
 |:---|:---|
@@ -233,9 +233,9 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 | group 级量 | 直接取坐标 (n_groups, 3) |
 | tuple 级量 | 距离 (n_tuples,) |
 
-**⚠️ 已知问题：全排列组合数量巨大，距离矩阵内存爆炸**（见 §6.2）
+~~原问题：全排列组合数量巨大，距离矩阵内存爆炸。~~ **已修复**：用 `KDTree.query_pairs()` 做空间预筛选。见 §6.2。
 
-### 4.6 卤键（Halogen Bond）—— ⚠️ 需掩码保护极值选择
+### 4.6 卤键（Halogen Bond）
 
 | 项 | 值 |
 |:---|:---|
@@ -244,7 +244,7 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 | group 级量 | C/X 坐标 (n_donors, 2, 3), A/R 坐标 (n_acceptors, max_r+1, 3) |
 | tuple 级量 | X-A 距离, C-X-A 角度, X-A-R 角度 (n_tuples,) |
 
-**⚠️ 已知问题：acc_angle 极值选择被 padding 污染**（见 §6.3）
+~~原问题：acc_angle 极值选择被 padding 污染。~~ **已修复**：acceptor R 部分用环形填充（circular fill），padding 位坐标是真实 R 原子的重复，`argmin` 结果正确。见 §6.3。
 
 ### 4.7 金属配位（Metal Coordination）
 
@@ -256,7 +256,7 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 | group 级量 | 直接取坐标 |
 | tuple 级量 | 距离 (n_tuples,) |
 
-### 4.8 水桥（Water Bridge）—— ⚠️ 需空间预筛选
+### 4.8 水桥（Water Bridge）
 
 | 项 | 值 |
 |:---|:---|
@@ -265,7 +265,7 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 | group 级量 | D/H 坐标, Ow 坐标, A 坐标 |
 | tuple 级量 | dist_dw, dist_wa, theta, omega (n_tuples,) |
 
-**⚠️ 已知问题：候选三元组生成需要 KDTree 空间预筛选**（见 §6.4）
+~~原问题：候选三元组生成需要 KDTree 空间预筛选。~~ **已修复**：`detect()` 入口用 `KDTree.query_ball_point()` 对水分子做空间预筛选（水到供/受体 < 8.2Å）。见 §6.4。
 
 ---
 
@@ -281,9 +281,9 @@ tuple 索引数组：(n_tuples,) 的整数数组，记录每个 tuple 引用了�
 
 ---
 
-## 6. 对抗性审查：已知问题
+## 6. 对抗性审查：已知问题（全部已修复）
 
-### 6.1 🔴 致命：`np.roll` + padding 破坏芳香环法向量
+### 6.1 ✅ 已修复：`np.roll` + padding 破坏芳香环法向量
 
 **影响**：§4.3 π-堆积、§4.4 π-阳离子
 
@@ -300,31 +300,84 @@ np.roll(..., -1) 得到后邻居:
 - a4 的法向量因错误邻居而错误
 - valid=False 能消除 padding 位自身的贡献，但不能消除 a4 的错误
 
-**待修复**：用显式 circular neighbor indices 替代 `np.roll`，只在有效原子内循环。
+**修复方案**：用显式 circular neighbor indices 替代 `np.roll`。
 
-### 6.2 🟡 严重：疏水距离矩阵内存爆炸
+**实现**（`pi_stacking_detector_per_frame.py` 的 `_build_circular_padding`）：
+
+```python
+# 对每个位置 j，显式计算它在环内的前/后邻居（只在有效原子数 n 内取模）
+for j in range(max_atoms):
+    prev_j = (j - 1) % n          # 只在有效原子数 n 内取模
+    next_j = (j + 1) % n
+    prev_idx[i, j] = atom_indices[prev_j]   # 存全局原子索引
+    next_idx[i, j] = atom_indices[next_j]
+```
+
+`_ring_normals` 用预计算的 `self._ring_prev` / `self._ring_next` 索引取坐标，不依赖 `np.roll`。padding 位 j=5 的 `prev_j = (5-1) % 5 = 4`，仍指向有效原子 a4。padding 位自身有 `valid=False` 掩码清零，不影响环法向量。
+
+### 6.2 ✅ 已修复：疏水距离矩阵内存爆炸
 
 **影响**：§4.5 疏水
 
 **问题**：D927 体系 ~10,000 个疏水原子。全排列 C(10000, 2) ≈ 5000 万对，距离矩阵 ~1.2 GB。
 
-**待修复**：疏水需要空间预筛选（KDTree / 网格），不能用纯 padding 全排列。
+**修复方案**：用 `KDTree.query_pairs()` 做空间预筛选。
 
-### 6.3 🟡 严重：卤键 acc_angle 被 padding 污染
+**实现**（`hydrophobic_detector_per_frame.py`）：
+
+```python
+tree = KDTree(h_pos)
+pairs = tree.query_pairs(r=PREFILTER_CUTOFF, output_type='ndarray')
+```
+
+`PREFILTER_CUTOFF = 8.0 Å`（阈值 4.0 Å × 2），只返回距离 ≤ 8Å 的原子对，将 5000 万对降至可控数量。
+
+### 6.3 ✅ 已修复：卤键 acc_angle 被 padding 污染
 
 **影响**：§4.6 卤键
 
-**问题**：acc_angle 对每个 R 计算角度后取最接近 120° 的。padding 位的坐标是 atom 0（垃圾），计算出的角度可能恰好接近 120°，被 argmin 选中。
+**问题**：acc_angle 对每个 R 计算角度后取最接近 120° 的。零填充方案中 padding 位坐标指向 atom 0（垃圾），计算出的角度可能恰好接近 120°，被 `argmin` 选中。
 
-**待修复**：用 `group_valid` 掩码将 padding 位的 angle_diff 设为 `+inf`。
+**修复方案**：acceptor R 部分用**环形填充**（circular fill）而非零填充。
 
-### 6.4 🟡 严重：水桥丢失 KDTree 空间预筛选
+**实现**（`halogen_bond_detector_per_frame.py` 的 `_build_acceptor_padding`）：
+
+```python
+# position 0 = A，position 1+ = R 部分环形填充
+indices[i, 0] = atom_indices[0]
+r_indices = atom_indices[1:]
+for j in range(1, max_atoms):
+    indices[i, j] = r_indices[(j - 1) % n_r]   # 循环重复真实 R 原子
+```
+
+padding 位的坐标是真实 R 原子的循环重复（如 `[R1, R2, R1, R2]`），不是 atom 0 的垃圾坐标。`argmin` 选到 padding 位的结果与选到对应的原始 R 位完全相同，角度值正确。
+
+### 6.4 ✅ 已修复：水桥丢失 KDTree 空间预筛选
 
 **影响**：§4.8 水桥
 
-**问题**：水桥的性能瓶颈是候选三元组生成（24.9 万个），不是每帧计算。当前 PerTuple 版用 KDTree 做空间预筛选（水到供/受体 < 8.2Å）。纯 padding 方案不解决候选生成问题。
+**问题**：水桥的性能瓶颈是候选三元组生成（24.9 万个），不是每帧计算。纯 padding 方案不解决候选生成问题。
 
-**待修复**：水桥需要每帧用 KDTree 做空间预筛选，padding 只适用于筛选后的计算阶段。
+**修复方案**：`detect()` 入口用 KDTree 做空间预筛选。
+
+**实现**（`water_bridge_detector_per_frame.py`）：
+
+```python
+donor_tree = KDTree(d_pos)
+acceptor_tree = KDTree(a_pos)
+
+for wi in range(len(waters)):
+    nearby_d = donor_tree.query_ball_point(wp, PREFILTER_CUTOFF)   # 8.2 Å
+    nearby_a = acceptor_tree.query_ball_point(wp, PREFILTER_CUTOFF)
+    for di in nearby_d:
+        for ai in nearby_a:
+            # 过滤 D-A 距离过近的情况
+            if np.linalg.norm(d_pos[di] - a_pos[ai]) < WATER_BRIDGE_MINDIST:
+                continue
+            triple_d.append(di); triple_w.append(wi); triple_a.append(ai)
+```
+
+先用 KDTree 找每个水分子附近的供体和受体（< 8.2Å），再组合成三元组。将 24.9 万全排列降至实际候选数量。
 
 ---
 
@@ -337,7 +390,7 @@ np.roll(..., -1) 得到后邻居:
 | 差异点 | 盐桥 | π-堆积 | 卤键 | 水桥 |
 |:-------|:-----|:-------|:-----|:-----|
 | group 级量 | 电荷中心 | 环心+法向量 | C/X/A/R 坐标 | D/H/Ow/A 坐标 |
-| 邻居关系 | 无 | 有（np.roll） | 有（R 邻居） | 无 |
+| 邻居关系 | 无 | 有（显式索引） | 有（环形填充） | 无 |
 | 极值选择 | 无 | 无 | 有（argmin） | 无 |
 | 空间预筛选 | 不需要 | 不需要 | 不需要 | 必须（KDTree） |
 

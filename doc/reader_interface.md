@@ -131,9 +131,14 @@ class TprDumpReader(Reader):
         ...
 ```
 
-### 4.2 子类定义位置
+### 4.2 子类定义位置（2026-08-28 修正）
 
-子类定义在 `identifiers/tpr_dump_reader.py` 中。
+子类定义在 `input_readers/` 目录中（非 `identifiers/`）：
+
+| 类名 | 文件 | 说明 |
+|:---|:---|:---|
+| `GmxTprDumpReader` | `input_readers/gmx_tpr_dump_reader.py` | 从 gmx dump 文本解析 |
+| `GmxTprReader` | `input_readers/gmx_tpr_reader.py` | 从 tpr 二进制解析（MDAnalysis） |
 
 ---
 
@@ -143,6 +148,16 @@ class TprDumpReader(Reader):
 
 ```python
 reader = TprDumpReader()
+system_data = reader.read("dump_md_D927.tpr.txt")
+print(f"读取到 {system_data.n_residues} 个残基")
+```
+
+### 5.1.1 基本使用（当前版本，使用实际类名）
+
+```python
+from DuIvyInteractions.input_readers import GmxTprDumpReader
+
+reader = GmxTprDumpReader()
 system_data = reader.read("dump_md_D927.tpr.txt")
 print(f"读取到 {system_data.n_residues} 个残基")
 ```
@@ -166,12 +181,23 @@ def run_pipeline(reader: Reader, identifier: GroupIdentifier,
 
 ## 6. 依赖关系
 
+### 初始版本
 ```
 core/interfaces.py          ← 定义 Reader 接口
       ↑
 identifiers/tpr_dump_reader.py  ← 实现 TprDumpReader
       ↓
 pipeline.py                 ← 消费 Reader
+```
+
+### 当前版本（2026-08-28 更新）
+```
+core/interfaces.py                        ← 定义 Reader 接口
+      ↑
+input_readers/gmx_tpr_dump_reader.py      ← 实现 GmxTprDumpReader
+input_readers/gmx_tpr_reader.py           ← 实现 GmxTprReader（MDAnalysis）
+      ↓
+pipeline.py（待实现）                     ← 消费 Reader
 ```
 
 ---

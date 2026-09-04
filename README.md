@@ -2,50 +2,34 @@
 
 基于 MD 拓扑力场参数的分子间相互作用判定工具。
 
+## 解决什么问题
+
+现有工具（PLIP / ProLIF）分析 MD 轨迹时，通过 OpenBabel / RDKit 从坐标重建化学信息（键序、芳香性、加氢），丢弃了 MD 力场拓扑中原有的化学语义。这导致：
+- 对 trjconv 导出的 PDB（无 CONECT / 键序）芳香性判定失败
+- 每帧重复推断，效率低
+- 推断结果与力场参数不自洽
+
 ## 核心思路
 
-现有工具（PLIP/ProLIF）在分析 MD 轨迹时，通过 OpenBabel/RDKit 重建化学信息（键序、芳香性、加氢），丢弃了 MD 力场拓扑中原有的化学语义。本项目直接从 **GROMACS tpr 拓扑中读取力场原子类型**，确定性识别官能团，与模拟力场完全自洽。
+**直接从 GROMACS tpr 拓扑中读取力场原子类型**，确定性识别化学基团，与模拟力场完全自洽。
 
-## 两段式架构
+力场原子类型（如 GAFF 的 `ca` = 芳香碳、`na` = 吡咯氮）是参数化时由 antechamber / sobtop 做出的化学判决的留存记录。直接读取 = 零损失、零歧义，不需要从坐标反推。
 
-1. **基团鉴定**：tpr 力场参数（原子类型 + 键合图 + 显式 H + 电荷）→ 确定性识别化学基团（芳香环、H 键供/受体、带电基团…）。只做一次，与帧无关。
-2. **几何判定**：逐帧用 PLIP 式距离/角度/平面临近判据 → 相互作用列表。
+## 工具优势
 
-## 目录结构
-
-```
-DuIvyInteraction/
-│
-├── DuIvyInteractions/                  # 主包
-│   ├── core/                           # 核心基础：数据类 + 接口 + 常量
-│   │   ├── datas.py                    # Group, AtomData, SystemData, Interaction, ...
-│   │   ├── interfaces.py               # Reader, GroupIdentifier, InteractionDetector ABC
-│   │   └── constants.py                # GROUP_TYPES, BOND_TYPES, 元素周期表, ...
-│   │
-│   ├── input_readers/                  # 文件 → SystemData
-│   │   ├── gmx_tpr_dump_reader.py      # gmx dump 文本解析
-│   │   └── gmx_tpr_reader.py           # tpr 二进制解析（MDAnalysis）
-│   │
-│   ├── group_identifiers/              # SystemData → List[Group]
-│   │   └── amber_ff_identifier.py      # Amber 力场基团识别
-│   │
-│   ├── interaction_detectors/          # Group[] + 坐标 → Interaction[]（待实现）
-│   ├── visualizers/                    # 结果可视化（待实现）
-│   ├── utils/                          # 无状态工具函数
-│   └── pipeline.py                     # 主流程编排（待实现）
-│
-├── doc/                                # 项目规划文档（开发辅助）
-├── pyproject.toml                      # 包管理配置
-├── CLAUDE.md                           # 项目规范
-└── README.md
-```
+- **确定性**：基团鉴定基于力场原子类型，不依赖几何推断
+- **与力场自洽**：结果与模拟使用的力场参数同源
+- **全原子显式 H**：H 键供体（D–H 键）、水桥（SOL 残基）、金属（元素+电荷）全部零推断
+- **Amber 全家族兼容**：已验证 amber03/94/96/99/99sb/99sb-ildn/GS/14sb + GAFF，类型映射零冲突
+- **支持 8 种相互作用类型**：氢键、π-π 堆积、盐桥、π-阳离子、卤键、疏水、金属配位、水桥
 
 ## 依赖
 
 - Python >= 3.9
 - NumPy >= 1.20
-- MDAnalysis >= 2.0（用于 tpr 二进制读取）
-- GROMACS（`gmx dump` 用于文本格式 tpr 解析）
+- SciPy >= 1.7
+- MDAnalysis >= 2.0
+- GROMACS（`gmx dump`，用于文本格式 tpr 解析）
 
 ## 安装
 
@@ -53,6 +37,6 @@ DuIvyInteraction/
 pip install -e .
 ```
 
-## 力场支持
+## 项目状态
 
-已验证 Amber 家族全部力场（amber03/94/96/99/99sb/99sb-ildn/GS/14sb + GAFF 配体），类型名→化学特征映射**零冲突**。
+基团鉴定和相互作用检测阶段已完成，可视化和 Pipeline 编排待实现。详见 `doc/` 目录下的设计文档。

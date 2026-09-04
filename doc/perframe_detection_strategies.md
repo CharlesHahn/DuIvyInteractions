@@ -298,9 +298,22 @@ if need_plotting:
 |:-----|:-----|:-------|
 | 策略一（PerTuple） | ✅ 已实现 | 保留为参考 |
 | 策略二（单轮预筛选） | ✅ 已实现 | 当前默认 |
-| 策略三（两轮遍历） | ❌ 未实现 | 按需实现 |
+| 策略三（两轮遍历） | ✅ 已实现（2026-08-28 更新） | 100% 覆盖保证 |
 
 策略三是策略二的"无遗漏"升级版。当用户需要 100% 覆盖保证时使用。
+
+**实现文件**：每种相互作用类型均有三个策略的实现文件：
+
+| 相互作用 | PerTuple | PerFrame | TwoPass |
+|:---|:---|:---|:---|
+| 氢键 | `hydrogen_bond_detector_per_tuple.py` | `hydrogen_bond_detector_per_frame.py` | `hydrogen_bond_detector_two_pass.py` |
+| 盐桥 | `saltbridge_detector_per_tuple.py` | `saltbridge_detector_per_frame.py` | `saltbridge_detector_two_pass.py` |
+| π-堆积 | `pi_stacking_detector_per_tuple.py` | `pi_stacking_detector_per_frame.py` | `pi_stacking_detector_two_pass.py` |
+| π-阳离子 | `pi_cation_detector_per_tuple.py` | `pi_cation_detector_per_frame.py` | `pi_cation_detector_two_pass.py` |
+| 卤键 | `halogen_bond_detector_per_tuple.py` | `halogen_bond_detector_per_frame.py` | `halogen_bond_detector_two_pass.py` |
+| 疏水 | `hydrophobic_detector_per_tuple.py` | `hydrophobic_detector_per_frame.py` | `hydrophobic_detector_two_pass.py` |
+| 金属配位 | `metal_coordination_detector_per_tuple.py` | `metal_coordination_detector_per_frame.py` | `metal_coordination_detector_two_pass.py` |
+| 水桥 | `water_bridge_detector_per_tuple.py` | `water_bridge_detector_per_frame.py` | `water_bridge_detector_two_pass.py` |
 
 ---
 

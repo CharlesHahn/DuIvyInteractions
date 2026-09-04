@@ -64,7 +64,7 @@ detectors/*.py 消费 Group 对象
 
 ## 3. 最终设计
 
-### 3.1 接口定义
+### 3.1 接口定义（初始版本）
 
 ```python
 from abc import ABC, abstractmethod
@@ -85,6 +85,39 @@ class GroupIdentifier(ABC):
 
         Args:
             source: 数据源（文件路径、SMILES 等）
+
+        Returns:
+            识别到的基团列表
+        """
+        ...
+```
+
+### 3.1.1 接口定义（当前版本，2026-08-28 更新）
+
+> **演进说明**：初始版本中 `identify()` 直接接收文件路径字符串。后因引入 `Reader` 层
+> （见 `system_data_design.md`），数据流变为 `文件 → Reader → SystemData → Identifier → List[Group]`，
+> `identify()` 的输入从 `str` 改为 `SystemData`，实现读取与识别的解耦。
+> 以下为 `core/interfaces.py` 中的实际定义。
+
+```python
+from abc import ABC, abstractmethod
+from typing import List
+
+class GroupIdentifier(ABC):
+    """基团识别器接口。"""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """识别器名称。"""
+        ...
+
+    @abstractmethod
+    def identify(self, system_data: SystemData) -> List[Group]:
+        """从 SystemData 识别基团。
+
+        Args:
+            system_data: 体系数据（由 Reader 产出）
 
         Returns:
             识别到的基团列表
@@ -147,11 +180,25 @@ class AmberGroupIdentifier(GroupIdentifier):
 
 ## 5. 使用示例
 
-### 5.1 基本使用
+### 5.1 基本使用（初始版本，直接传文件路径）
 
 ```python
 identifier = AmberGroupIdentifier()
 groups = identifier.identify("md.tpr")
+print(f"识别到 {len(groups)} 个基团")
+```
+
+### 5.1.1 基本使用（当前版本，通过 Reader 读取）
+
+```python
+from DuIvyInteractions.input_readers import GmxTprReader
+from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
+
+reader = GmxTprReader()
+system_data = reader.read("md.tpr")
+
+identifier = AmberFFGroupIdentifier()
+groups = identifier.identify(system_data)
 print(f"识别到 {len(groups)} 个基团")
 ```
 
@@ -168,12 +215,22 @@ def run_pipeline(identifier: GroupIdentifier, topology_path: str):
 
 ## 6. 依赖关系
 
+### 初始版本
 ```
 core/interfaces.py        ← 定义 GroupIdentifier 接口
       ↑
 identifiers/amber.py      ← 实现 AmberGroupIdentifier
       ↓
 pipeline.py               ← 消费 GroupIdentifier
+```
+
+### 当前版本（2026-08-28 更新）
+```
+core/interfaces.py                  ← 定义 GroupIdentifier 接口
+      ↑
+group_identifiers/amber_ff_identifier.py  ← 实现 AmberFFGroupIdentifier
+      ↓
+pipeline.py（待实现）               ← 消费 GroupIdentifier
 ```
 
 ---

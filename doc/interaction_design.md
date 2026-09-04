@@ -75,7 +75,7 @@ detectors/hydrogen_bond.py  →  产出 Interaction 对象
 
 ## 3. 最终设计
 
-### 3.1 基类定义
+### 3.1 基类定义（初始版本）
 
 ```python
 from dataclasses import dataclass, field
@@ -126,6 +126,70 @@ class Interaction:
                 f"groups=({groups_str}), frames={self.n_frames})")
 ```
 
+### 3.1.1 基类定义（当前版本，2026-08-28 更新）
+
+> **演进说明**：初始版本中一个 Interaction 对象 = **一对**基团的全帧数据（1D 数组）。
+> 后改为矩阵存储：一个 Interaction 对象 = 该类型下**所有**基团对的全帧数据（2D 数组）。
+>
+> **改动原因**：
+> 1. numpy 批量操作——`np.sum(existence, axis=1)` 一次算出所有对的 occupancy
+> 2. 内存连续——一个大矩阵比 N 个小数组布局更紧凑
+> 3. 构建简单——检测器内部用 numpy 预分配矩阵直接填入
+>
+> **附带影响**：初始版本设想的 `HydrogenBond`、`PiStacking`、`WaterBridge` 子类
+> （有 `donor`、`acceptor` 等便捷属性）在矩阵存储方案下不再适用——一个 Interaction
+> 包含多对，无法说 `.donor` 是谁。这些子类未实现，当前也不计划实现。
+
+```python
+from dataclasses import dataclass
+from typing import List, Tuple, Dict
+import numpy as np
+
+@dataclass
+class Interaction:
+    """一种相互作用类型的全部检测结果。
+
+    按类型组织：一个 Interaction 对象包含该类型下所有基团对在全部帧上的结果。
+    groups[i] 对应 existence[i] 和 metrics 中各数组的第 i 行。
+
+    Attributes:
+        interaction_type: 相互作用类型（如 "salt_bridge", "hydrogen_bond"）
+        groups: 基团对列表，每对是一个 tuple
+        existence: (n_pairs, n_frames) bool 数组
+        metrics: 几何指标字典，值为 (n_pairs, n_frames) 数组
+    """
+
+    interaction_type: str
+    groups: List[Tuple[Group, ...]]
+    existence: np.ndarray
+    metrics: Dict[str, np.ndarray]
+
+    @property
+    def n_pairs(self) -> int:
+        """基团对数量。"""
+        return len(self.groups)
+
+    @property
+    def n_frames(self) -> int:
+        """帧数。"""
+        return self.existence.shape[1]
+
+    def occupancy(self) -> np.ndarray:
+        """每对基团的存在比例，shape=(n_pairs,)。"""
+        return np.sum(self.existence, axis=1) / self.n_frames
+```
+
+**两版本对比**：
+
+| 维度 | 初始版本 | 当前版本 |
+|:---|:---|:---|
+| groups 类型 | `Tuple[Group, ...]` | `List[Tuple[Group, ...]]` |
+| existence shape | `(n_frames,)` | `(n_pairs, n_frames)` |
+| metrics shape | `(n_frames,)` | `(n_pairs, n_frames)` |
+| occupancy | `float` 属性 | `np.ndarray` 方法 |
+| 一个对象包含 | 1 对基团 | 同类型所有基团对 |
+| 子类（HydrogenBond 等） | 有意义 | 不适用（未实现） |
+
 ### 3.2 设计原则
 
 | 原则 | 体现 |
@@ -147,7 +211,7 @@ class Interaction:
 
 ## 4. 子类设计
 
-### 4.1 子类的作用
+### 4.1 子类的作用（初始版本）
 
 子类为特定相互作用类型提供：
 1. **便捷构造**：明确的参数名（`donor`, `acceptor`）
@@ -157,7 +221,11 @@ class Interaction:
 
 子类定义在 `core/data.py` 中，与基类一起，**不违反依赖方向**。
 
-### 4.3 子类示例
+### 4.3 子类示例（初始版本，未实现）
+
+> **2026-08-28 说明**：以下子类在矩阵存储方案下不再适用——一个 Interaction 包含
+> 多对基团，无法定义 `.donor`、`.acceptor` 等单对属性。这些子类未实现，当前也不
+> 计划实现。保留此节作为设计演进的历史记录。
 
 ```python
 @dataclass
@@ -228,7 +296,7 @@ class WaterBridge(Interaction):
 
 ## 5. 使用示例
 
-### 5.1 氢键
+### 5.1 氢键（初始版本，单对子类）
 
 ```python
 hbond = HydrogenBond.create(
@@ -248,7 +316,33 @@ print(hbond.occupancy)  # 预计算属性
 dist_mean = np.mean(hbond.metrics["distance"][hbond.existence])
 ```
 
-### 5.2 π-π 堆积
+### 5.1.1 氢键（当前版本，矩阵存储）
+
+```python
+# 由检测器直接产出
+from DuIvyInteractions.interaction_detectors import HydrogenBondDetectorTwoPass
+
+detector = HydrogenBondDetectorTwoPass()
+results = detector.detect(groups, trajectory)
+hbond = results[0]  # 一个 Interaction 对象包含所有氢键对
+
+# 访问
+print(hbond.interaction_type)  # "hydrogen_bond"
+print(hbond.n_pairs)           # 基团对数量
+print(hbond.n_frames)          # 帧数
+
+# 第 i 个基团对
+pair = hbond.groups[i]         # (donor_group, acceptor_group)
+occ = hbond.occupancy()        # (n_pairs,) 每对的存在比例
+
+# 第 i 个基团对的全帧距离
+dist_i = hbond.metrics["distance"][i]  # (n_frames,)
+
+# 第 i 个基团对在第 f 帧的距离
+dist_if = hbond.metrics["distance"][i, f]
+```
+
+### 5.2 π-π 堆积（初始版本）
 
 ```python
 pi_stack = PiStacking.create(
@@ -261,7 +355,7 @@ pi_stack = PiStacking.create(
 )
 ```
 
-### 5.3 水桥
+### 5.3 水桥（初始版本）
 
 ```python
 water_bridge = WaterBridge.create(
@@ -298,6 +392,7 @@ water_bridge = WaterBridge.create(
 
 ## 7. 依赖关系
 
+### 初始版本
 ```
 core/data.py          ← 定义 Interaction 基类 + 子类
       ↑
@@ -306,6 +401,22 @@ detectors/*.py        ← 产出 Interaction 对象
 utils/output.py       ← 输出 Interaction 对象
 visualize/plotter.py  ← 可视化 Interaction 对象
 ```
+
+### 当前版本（2026-08-28 更新）
+```
+core/datas.py                              ← 定义 Interaction + InteractionSparse
+      ↑
+interaction_detectors/*_per_tuple.py       ← 产出 Interaction（策略一）
+interaction_detectors/*_per_frame.py       ← 产出 Interaction（策略二）
+interaction_detectors/*_two_pass.py        ← 产出 InteractionSparse → Interaction（策略三）
+      ↓
+utils/output.py（待实现）                  ← 输出 Interaction 对象
+visualizers/plotter.py（待实现）           ← 可视化 Interaction 对象
+```
+
+> **InteractionSparse**：TwoPass 策略的中间产物，Pass1 输出、Pass2 消费。
+> 以 `(group_id1, group_id2, ...)` 为键，只存储 existence=True 的帧，
+> 长轨迹场景下比稠密存储节省 99%+ 内存。定义在 `core/datas.py` 中。
 
 ---
 
