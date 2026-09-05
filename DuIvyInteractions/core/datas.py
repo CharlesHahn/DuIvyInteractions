@@ -19,7 +19,7 @@ class Group:
         residue_name: 残基名
         residue_id: 全局残基号
         atoms: 基团内的原子列表
-        metadata: 附加信息字典
+        metadata: 附加信息字典（键必须是字符串，值只能是 JSON 支持的类型：str, int, float, bool, None, list, dict）
     """
 
     group_id: int
