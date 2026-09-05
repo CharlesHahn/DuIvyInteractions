@@ -191,7 +191,7 @@ print(f"识别到 {len(groups)} 个基团")
 ### 5.1.1 基本使用（当前版本，通过 Reader 读取）
 
 ```python
-from DuIvyInteractions.input_readers import GmxTprReader
+from DuIvyInteractions.system_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
 
 reader = GmxTprReader()

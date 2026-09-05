@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from DuIvyInteractions.input_readers import GmxTprReader
+from DuIvyInteractions.system_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
 from DuIvyInteractions.interaction_detectors import MetalCoordinationDetectorPerTuple
 import MDAnalysis as mda

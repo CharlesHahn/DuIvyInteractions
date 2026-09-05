@@ -259,43 +259,42 @@ DuIvyInteraction/
 ├── DuIvyInteractions/             # 主包
 │   ├── core/                      # 领域模型 + 接口定义
 │   │   ├── __init__.py
-│   │   ├── data.py                # Group, Interaction 数据类
-│   │   ├── interfaces.py          # GroupIdentifier, InteractionDetector ABC
+│   │   ├── datas.py               # Group, Interaction, SystemData 数据类
+│   │   ├── interfaces.py          # Reader, GroupIdentifier, InteractionDetector ABC
 │   │   └── constants.py           # 元素周期表、力场类型常量
 │   │
-│   ├── identifiers/               # 基团识别器（策略模式，可插拔）
+│   ├── system_readers/            # 系统数据读取器（Reader 接口实现）
 │   │   ├── __init__.py
-│   │   ├── amber.py               # Amber 力场识别器（含 tpr 解析）
-│   │   ├── rdkit.py               # 未来：基于 RDKit
-│   │   └── smarts.py              # 未来：基于 SMARTS
+│   │   ├── gmx_tpr_reader.py      # 从 tpr 二进制解析（MDAnalysis）
+│   │   └── gmx_tpr_dump_reader.py # 从 gmx dump 文本解析
 │   │
-│   ├── detectors/                 # 相互作用判定器（策略模式，可插拔）
+│   ├── group_identifiers/         # 基团识别器（策略模式，可插拔）
 │   │   ├── __init__.py
-│   │   ├── hydrogen_bond.py
-│   │   ├── pi_stacking.py
-│   │   ├── salt_bridge.py
-│   │   ├── hydrophobic.py
-│   │   ├── halogen_bond.py
-│   │   ├── metal_coordination.py
-│   │   ├── water_bridge.py
-│   │   └── pi_cation.py
+│   │   └── amber_ff_identifier.py # Amber 力场识别器
+│   │
+│   ├── interaction_detectors/     # 相互作用判定器（策略模式，可插拔）
+│   │   ├── __init__.py
+│   │   ├── hydrogen_bond_detector_*.py
+│   │   ├── pi_stacking_detector_*.py
+│   │   ├── saltbridge_detector_*.py
+│   │   ├── hydrophobic_detector_*.py
+│   │   ├── halogen_bond_detector_*.py
+│   │   ├── metal_coordination_detector_*.py
+│   │   ├── water_bridge_detector_*.py
+│   │   └── pi_cation_detector_*.py
+│   │
+│   ├── io/                        # 结果文件读写（Interaction 序列化/反序列化）
+│   │   └── __init__.py
 │   │
 │   ├── utils/                     # 通用工具（无状态、可复用）
-│   │   ├── __init__.py
-│   │   ├── geometry.py            # 距离、角度、平面计算
-│   │   ├── trajectory.py          # MDAnalysis 轨迹读取封装
-│   │   └── output.py              # CSV/JSON/矩阵 输出
+│   │   └── __init__.py
 │   │
-│   ├── visualize/                 # 可视化
-│   │   ├── __init__.py
-│   │   └── plotter.py
-│   │
-│   └── pipeline.py                # 主流程编排
+│   └── visualizers/               # 可视化
+│       └── __init__.py
 │
-├── tests/                         # 单元测试（镜像 src 结构）
-├── docs/                          # 中文文档
+├── Tests/                         # 单元测试（镜像 src 结构）
+├── doc/                           # 中文文档
 ├── docs_en/                       # 英文文档
-├── test/                          # 个人测试（不追踪）
 ├── test_MD_case/                  # 测试数据（已 gitignore）
 ├── .gitignore
 ├── CLAUDE.md

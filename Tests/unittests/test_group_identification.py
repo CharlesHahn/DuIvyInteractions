@@ -9,7 +9,7 @@ import pytest
 from collections import Counter
 from pathlib import Path
 
-from DuIvyInteractions.input_readers import GmxTprReader
+from DuIvyInteractions.system_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
 
 

@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import MDAnalysis as mda
 
-from DuIvyInteractions.input_readers import GmxTprReader
+from DuIvyInteractions.system_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
 from DuIvyInteractions.core.datas import InteractionSparse
 from DuIvyInteractions.interaction_detectors import (
