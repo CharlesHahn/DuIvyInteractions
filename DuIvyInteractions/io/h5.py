@@ -79,8 +79,18 @@ def _write_interaction(f: h5py.File, idx: int, interaction: Interaction, compres
     
     # 写入 metrics
     metrics_grp = grp.create_group('metrics')
+    str_dtype = h5py.string_dtype(encoding='utf-8')
     for name, values in interaction.metrics.items():
-        metrics_grp.create_dataset(name, data=values, compression=compression)
+        # 检查是否为字符串类型
+        if hasattr(values, 'dtype') and values.dtype.kind in ('U', 'S', 'O'):
+            # 字符串类型，转换为列表再存储
+            str_list = [str(s) for s in values.flatten()]
+            metrics_grp.create_dataset(name, data=str_list, dtype=str_dtype, compression=compression)
+            # 保存原始 shape 以便恢复
+            metrics_grp[name].attrs['shape'] = values.shape
+        else:
+            # 数值类型
+            metrics_grp.create_dataset(name, data=values, compression=compression)
     
     # 写入 groups
     _write_groups(grp, interaction.groups, compress)
@@ -102,7 +112,19 @@ def _read_interaction(f: h5py.File, idx: int) -> Interaction:
     metrics = {}
     metrics_grp = grp['metrics']
     for name in metrics_grp:
-        metrics[name] = metrics_grp[name][:]
+        data = metrics_grp[name][:]
+        # 检查是否为字符串类型并解码
+        if hasattr(data, 'dtype') and data.dtype.kind in ('S', 'O'):
+            # 字符串类型，解码为 Unicode
+            str_list = _decode_strings(data)
+            # 检查是否有保存的 shape
+            if 'shape' in metrics_grp[name].attrs:
+                shape = tuple(metrics_grp[name].attrs['shape'])
+                metrics[name] = np.array(str_list).reshape(shape)
+            else:
+                metrics[name] = np.array(str_list)
+        else:
+            metrics[name] = data
     
     # 读取 groups
     groups = _read_groups(grp)

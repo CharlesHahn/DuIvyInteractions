@@ -9,3 +9,6 @@ docs_en/_build/
 
 # MDAnalysis trajectory cache
 .*_offsets.npz
+
+# Generated h5 data files
+Tests/interaction_h5data/*.h5
