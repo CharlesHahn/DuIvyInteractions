@@ -154,7 +154,8 @@ class InteractionExporter(ABC):
         xpm.title = title or f"{self.name} Existence"
         xpm.xlabel = xlabel
         xpm.ylabel = ylabel
-        xpm.legend = "Existence"
+        pair_legends = self.get_pair_legends(interaction, pair_indices)
+        xpm.legend = " ".join(f"{i}:{label}" for i, label in enumerate(pair_legends))
         xpm.type = "Discrete"
 
         # 设置维度
@@ -166,7 +167,7 @@ class InteractionExporter(ABC):
         xpm.yaxis = list(range(n_pairs))
 
         # 构建值矩阵（0 或 1）
-        xpm.value_matrix = existence.astype(float).tolist()
+        xpm.value_matrix = existence.astype(int).tolist()
 
         # 刷新颜色和字符
         xpm.refresh_by_value_matrix(is_Continuous=False)
