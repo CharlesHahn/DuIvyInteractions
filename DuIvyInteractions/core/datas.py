@@ -80,6 +80,7 @@ class Interaction:
     groups: List[Tuple[Group, ...]]
     existence: np.ndarray
     metrics: Dict[str, np.ndarray]
+    times: np.ndarray
 
     def __post_init__(self):
         """验证数据完整性。"""
@@ -94,6 +95,12 @@ class Interaction:
                 raise ValueError(
                     f"{name} shape {arr.shape} != ({n_pairs}, {n_frames})"
                 )
+        times = np.asarray(self.times, dtype=float)
+        if times.shape != (n_frames,):
+            raise ValueError(
+                f"times shape {times.shape} != n_frames {n_frames}"
+            )
+        self.times = times
 
     @property
     def n_pairs(self) -> int:

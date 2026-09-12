@@ -91,7 +91,8 @@ def sample_interaction(sample_group):
         metrics={
             "distance": np.random.rand(n_pairs, n_frames) * 4.0,
             "angle": np.random.rand(n_pairs, n_frames) * 180.0
-        }
+        },
+        times=np.arange(n_frames, dtype=float),
     )
 
 
@@ -102,7 +103,8 @@ def empty_interaction():
         interaction_type="pi_stacking",
         groups=[],
         existence=np.empty((0, 10), dtype=bool),
-        metrics={"distance": np.empty((0, 10)), "angle": np.empty((0, 10))}
+        metrics={"distance": np.empty((0, 10)), "angle": np.empty((0, 10))},
+        times=np.arange(10, dtype=float),
     )
 
 
@@ -211,7 +213,8 @@ class TestH5Roundtrip:
             interaction_type="pi_stacking",
             groups=sample_interaction.groups[:1],
             existence=sample_interaction.existence[:1],
-            metrics={"distance": sample_interaction.metrics["distance"][:1]}
+            metrics={"distance": sample_interaction.metrics["distance"][:1]},
+            times=sample_interaction.times,
         )
         
         interactions = [sample_interaction, interaction2]
@@ -265,7 +268,8 @@ class TestH5Roundtrip:
             interaction_type="pi_stacking",
             groups=[(group, group)],
             existence=np.array([[True, False]]),
-            metrics={"distance": np.array([[3.5, 4.5]])}
+            metrics={"distance": np.array([[3.5, 4.5]])},
+            times=np.arange(2, dtype=float),
         )
         
         path = TEMP_DIR / "test_none.h5"
@@ -332,7 +336,8 @@ class TestH5EdgeCases:
             metrics={
                 "distance": np.random.rand(n_pairs, n_frames) * 5.0,
                 "angle": np.random.rand(n_pairs, n_frames) * 90.0
-            }
+            },
+            times=np.arange(n_frames, dtype=float),
         )
         
         path = TEMP_DIR / "test_large.h5"
@@ -370,7 +375,8 @@ class TestH5EdgeCases:
             interaction_type="pi_stacking",
             groups=[(group, group)],
             existence=np.array([[True]]),
-            metrics={"distance": np.array([[3.5]])}
+            metrics={"distance": np.array([[3.5]])},
+            times=np.arange(1, dtype=float),
         )
         
         path = TEMP_DIR / "test_special.h5"
@@ -431,7 +437,8 @@ class TestH5EdgeCases:
                 (group1, group3, group2)  # 3-tuple
             ],
             existence=np.array([[True, False], [False, True]]),
-            metrics={"distance": np.array([[3.5, 4.5], [5.5, 6.5]])}
+            metrics={"distance": np.array([[3.5, 4.5], [5.5, 6.5]])},
+            times=np.arange(2, dtype=float),
         )
         
         path = TEMP_DIR / "test_tuple.h5"

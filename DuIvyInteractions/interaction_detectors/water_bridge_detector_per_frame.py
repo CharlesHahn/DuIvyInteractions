@@ -151,9 +151,11 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         dist_wa = np.zeros((n_triples, n_frames))
         theta = np.zeros((n_triples, n_frames))
         omega = np.zeros((n_triples, n_frames))
+        times = np.empty(n_frames)
 
         # 6. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             metrics = self._compute_metrics(positions)
             dist_dw[:, f] = metrics["dist_dw"]
@@ -179,7 +181,8 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
                 "dist_wa": dist_wa[has_any],
                 "theta": theta[has_any],
                 "omega": omega[has_any],
-            }
+            },
+            times=times,
         )]
 
     # ==================== 向量化计算 ====================

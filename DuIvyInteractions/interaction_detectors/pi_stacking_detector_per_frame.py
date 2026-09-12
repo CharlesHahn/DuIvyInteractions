@@ -145,12 +145,14 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
         angle = np.zeros((n_pairs, n_frames))
         offset = np.zeros((n_pairs, n_frames))
         pistacking_type = np.full((n_pairs, n_frames), 'N', dtype='U1')
+        times = np.empty(n_frames)
         if self.check_planarity:
             planarity1 = np.zeros((n_pairs, n_frames))
             planarity2 = np.zeros((n_pairs, n_frames))
 
         # 7. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             metrics = self._compute_metrics(positions)
             distance[:, f] = metrics["distance"]
@@ -184,7 +186,8 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
             interaction_type=self.name,
             groups=tuples,
             existence=existence[has_any],
-            metrics=result_metrics
+            metrics=result_metrics,
+            times=times,
         )]
 
     # ==================== 环形 padding 构建 ====================

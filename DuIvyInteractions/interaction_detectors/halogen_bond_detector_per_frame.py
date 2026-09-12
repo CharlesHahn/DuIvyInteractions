@@ -129,9 +129,11 @@ class HalogenBondDetectorPerFrame(InteractionDetectorPerFrame):
         distance = np.zeros((n_pairs, n_frames))
         don_angle = np.zeros((n_pairs, n_frames))
         acc_angle = np.zeros((n_pairs, n_frames))
+        times = np.empty(n_frames)
 
         # 7. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             metrics = self._compute_metrics(positions)
             distance[:, f] = metrics["distance"]
@@ -155,7 +157,8 @@ class HalogenBondDetectorPerFrame(InteractionDetectorPerFrame):
                 "distance": distance[has_any],
                 "don_angle": don_angle[has_any],
                 "acc_angle": acc_angle[has_any],
-            }
+            },
+            times=times,
         )]
 
     # ==================== 数据结构构建 ====================

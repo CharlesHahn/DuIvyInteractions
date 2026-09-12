@@ -121,9 +121,11 @@ class HydrogenBondDetectorPerFrame(InteractionDetectorPerFrame):
         existence = np.zeros((n_pairs, n_frames), dtype=bool)
         distance = np.zeros((n_pairs, n_frames))
         angle = np.zeros((n_pairs, n_frames))
+        times = np.empty(n_frames)
 
         # 6. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             dist, ang = self._compute_metrics(positions)
             distance[:, f] = dist
@@ -145,7 +147,8 @@ class HydrogenBondDetectorPerFrame(InteractionDetectorPerFrame):
             interaction_type=self.name,
             groups=tuples,
             existence=existence,
-            metrics={"distance": distance, "angle": angle}
+            metrics={"distance": distance, "angle": angle},
+            times=times,
         )]
 
     # ==================== 内部辅助方法 ====================

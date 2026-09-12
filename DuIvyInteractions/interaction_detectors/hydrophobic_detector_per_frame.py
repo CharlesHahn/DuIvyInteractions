@@ -105,9 +105,11 @@ class HydrophobicDetectorPerFrame(InteractionDetectorPerFrame):
         # 5. 预分配结果数组
         existence = np.zeros((n_pairs, n_frames), dtype=bool)
         distance = np.zeros((n_pairs, n_frames))
+        times = np.empty(n_frames)
 
         # 6. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             pos_a = positions[self._hydro_idx[self._pair_a]]
             pos_b = positions[self._hydro_idx[self._pair_b]]
@@ -135,7 +137,8 @@ class HydrophobicDetectorPerFrame(InteractionDetectorPerFrame):
             interaction_type=self.name,
             groups=tuples,
             existence=existence,
-            metrics={"distance": distance}
+            metrics={"distance": distance},
+            times=times,
         )]
 
     # ==================== 去重 ====================

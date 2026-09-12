@@ -88,6 +88,13 @@ def compare_interactions(original: List[Interaction], loaded: List[Interaction],
         else:
             print(f"      ✅ existence 一致 (shape={orig.existence.shape})")
         
+        # 比较 times
+        if not np.array_equal(orig.times, load.times):
+            print(f"      ❌ times 不一致")
+            all_ok = False
+        else:
+            print(f"      ✅ times 一致 (len={len(orig.times)})")
+        
         # 比较 metrics
         if set(orig.metrics.keys()) != set(load.metrics.keys()):
             print(f"      ❌ metrics keys 不一致")

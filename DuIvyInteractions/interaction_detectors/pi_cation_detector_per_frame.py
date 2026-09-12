@@ -129,9 +129,11 @@ class PiCationDetectorPerFrame(InteractionDetectorPerFrame):
         existence = np.zeros((n_pairs, n_frames), dtype=bool)
         distance = np.zeros((n_pairs, n_frames))
         offset = np.zeros((n_pairs, n_frames))
+        times = np.empty(n_frames)
 
         # 7. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             metrics = self._compute_metrics(positions)
             distance[:, f] = metrics["distance"]
@@ -153,7 +155,8 @@ class PiCationDetectorPerFrame(InteractionDetectorPerFrame):
             metrics={
                 "distance": distance[has_any],
                 "offset": offset[has_any],
-            }
+            },
+            times=times,
         )]
 
     # ==================== 数据结构构建 ====================

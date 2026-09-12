@@ -182,7 +182,8 @@ class InteractionDetectorPerTuple(ABC):
             results = [r for r in results if r is not None]
 
         results = self._post_process(results)
-        return self._build_interaction(results)
+        times = np.array([ts.time for ts in traj_for_filter])
+        return self._build_interaction(results, times=times)
 
     # ==================== 内部辅助方法 ====================
 
@@ -219,7 +220,8 @@ class InteractionDetectorPerTuple(ABC):
         """
         return results
 
-    def _build_interaction(self, results: list) -> List[Interaction]:
+    def _build_interaction(self, results: list,
+                           times: np.ndarray = None) -> List[Interaction]:
         """将结果列表构建为 Interaction 对象。"""
         if not results:
             return []
@@ -231,7 +233,8 @@ class InteractionDetectorPerTuple(ABC):
             interaction_type=self.name,
             groups=groups,
             existence=existence,
-            metrics=metrics
+            metrics=metrics,
+            times=times,
         )]
 
 
@@ -342,7 +345,9 @@ class InteractionDetectorPerFrame(ABC):
                    for name in self.metric_names}
 
         # 3. 逐帧处理
+        times = np.empty(n_frames)
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             frame_metrics = self.compute_metrics_for_frame(
                 tuples, ts.positions, f)
             existence[:, f] = self.apply_threshold(frame_metrics)
@@ -362,11 +367,12 @@ class InteractionDetectorPerFrame(ABC):
         results = self._post_process(results)
 
         # 6. 构建 Interaction
-        return self._build_interaction(results)
+        return self._build_interaction(results, times=times)
 
     # ==================== 内部辅助方法 ====================
 
-    def _build_interaction(self, results: list) -> List[Interaction]:
+    def _build_interaction(self, results: list,
+                           times: np.ndarray = None) -> List[Interaction]:
         """将结果列表构建为 Interaction 对象。"""
         if not results:
             return []
@@ -378,7 +384,8 @@ class InteractionDetectorPerFrame(ABC):
             interaction_type=self.name,
             groups=groups,
             existence=existence,
-            metrics=metrics
+            metrics=metrics,
+            times=times,
         )]
 
 
@@ -542,7 +549,9 @@ class InteractionDetectorTwoPass(ABC):
                    for name in self.metric_names}
 
         # 逐帧计算全部 discovered groups 的 metric
+        times = np.empty(n_frames)
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             frame_metrics = self.compute_pair_metrics(group_tuples, ts.positions)
             existence[:, f] = self.apply_threshold(frame_metrics)
             for name in self.metric_names:
@@ -556,7 +565,7 @@ class InteractionDetectorTwoPass(ABC):
         ]
 
         results = self._post_process(results)
-        return self._build_interaction(results)
+        return self._build_interaction(results, times=times)
 
     # ==================== 公共接口 ====================
 
@@ -581,7 +590,8 @@ class InteractionDetectorTwoPass(ABC):
         """后处理钩子。默认不做任何处理。"""
         return results
 
-    def _build_interaction(self, results: list) -> List[Interaction]:
+    def _build_interaction(self, results: list,
+                           times: np.ndarray = None) -> List[Interaction]:
         """将结果列表构建为 Interaction 对象。"""
         if not results:
             return []
@@ -593,7 +603,8 @@ class InteractionDetectorTwoPass(ABC):
             interaction_type=self.name,
             groups=groups,
             existence=existence,
-            metrics=metrics
+            metrics=metrics,
+            times=times,
         )]
 
 

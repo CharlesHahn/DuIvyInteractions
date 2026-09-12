@@ -187,7 +187,9 @@ class PiStackingDetectorTwoPass(InteractionDetectorTwoPass):
                 metrics[name] = np.full((n_groups, n_frames), np.nan)
 
         # 逐帧计算
+        times = np.empty(n_frames)
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             frame_metrics = self.compute_pair_metrics(group_tuples, ts.positions)
             existence[:, f] = self.apply_threshold(frame_metrics)
             for name in self.metric_names:
@@ -201,7 +203,7 @@ class PiStackingDetectorTwoPass(InteractionDetectorTwoPass):
         ]
 
         results = self._post_process(results)
-        return self._build_interaction(results)
+        return self._build_interaction(results, times=times)
 
     # ==================== 内部辅助方法 ====================
 

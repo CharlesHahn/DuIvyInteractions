@@ -96,8 +96,8 @@ class InteractionExporter(ABC):
         xvg.legends = self.get_pair_legends(interaction, pair_indices)
 
         # 构建数据列
-        # 第 0 列：帧号（X 轴）
-        xvg.data_columns = [list(range(n_frames))]
+        # 第 0 列：时间（X 轴）
+        xvg.data_columns = [interaction.times.tolist()]
 
         # 后续列：每个 pair 的数据
         for idx in pair_indices:
@@ -162,7 +162,7 @@ class InteractionExporter(ABC):
         xpm.height = n_pairs
 
         # 设置坐标轴
-        xpm.xaxis = list(range(n_frames))
+        xpm.xaxis = interaction.times.tolist()
         xpm.yaxis = list(range(n_pairs))
 
         # 构建值矩阵（0 或 1）

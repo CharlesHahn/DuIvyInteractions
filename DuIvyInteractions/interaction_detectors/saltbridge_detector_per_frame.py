@@ -130,9 +130,11 @@ class SaltBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         n_frames = trajectory.n_frames
         existence = np.zeros((n_tuples, n_frames), dtype=bool)
         distance = np.zeros((n_tuples, n_frames))
+        times = np.empty(n_frames)
 
         # 5. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             pos_c = self._charge_centers(positions, pos_idx, pos_q, pos_valid)
             neg_c = self._charge_centers(positions, neg_idx, neg_q, neg_valid)
@@ -155,7 +157,8 @@ class SaltBridgeDetectorPerFrame(InteractionDetectorPerFrame):
             interaction_type=self.name,
             groups=tuples,
             existence=existence,
-            metrics={"distance": distance}
+            metrics={"distance": distance},
+            times=times,
         )]
 
     # ==================== 内部辅助方法 ====================

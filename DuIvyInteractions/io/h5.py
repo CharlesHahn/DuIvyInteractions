@@ -73,9 +73,10 @@ def _write_interaction(f: h5py.File, idx: int, interaction: Interaction, compres
     grp.attrs['n_pairs'] = interaction.n_pairs
     grp.attrs['n_frames'] = interaction.n_frames
     
-    # 写入 existence
+    # 写入 existence 和 times
     compression = 'gzip' if compress else None
     grp.create_dataset('existence', data=interaction.existence, compression=compression)
+    grp.create_dataset('times', data=interaction.times, compression=compression)
     
     # 写入 metrics
     metrics_grp = grp.create_group('metrics')
@@ -105,8 +106,9 @@ def _read_interaction(f: h5py.File, idx: int) -> Interaction:
     if isinstance(interaction_type, bytes):
         interaction_type = interaction_type.decode('utf-8')
     
-    # 读取 existence
+    # 读取 existence 和 times
     existence = grp['existence'][:]
+    times = grp['times'][:]
     
     # 读取 metrics
     metrics = {}
@@ -133,7 +135,8 @@ def _read_interaction(f: h5py.File, idx: int) -> Interaction:
         interaction_type=interaction_type,
         groups=groups,
         existence=existence,
-        metrics=metrics
+        metrics=metrics,
+        times=times,
     )
 
 

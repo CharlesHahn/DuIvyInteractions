@@ -114,9 +114,11 @@ class MetalCoordinationDetectorPerFrame(InteractionDetectorPerFrame):
         # 6. 预分配结果数组
         existence = np.zeros((n_pairs, n_frames), dtype=bool)
         distance = np.zeros((n_pairs, n_frames))
+        times = np.empty(n_frames)
 
         # 7. 逐帧计算
         for f, ts in enumerate(trajectory):
+            times[f] = ts.time
             positions = ts.positions
             m = positions[self._metal_idx[self._pair_metal]]
             b = positions[self._binding_idx[self._pair_binding]]
@@ -136,5 +138,6 @@ class MetalCoordinationDetectorPerFrame(InteractionDetectorPerFrame):
             interaction_type=self.name,
             groups=tuples,
             existence=existence[has_any],
-            metrics={"distance": distance[has_any]}
+            metrics={"distance": distance[has_any]},
+            times=times,
         )]
