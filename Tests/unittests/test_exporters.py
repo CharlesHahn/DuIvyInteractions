@@ -553,3 +553,107 @@ class TestRealData:
         xvg = exporter.to_xvg_count(saltbridge_h5)
         expected = np.sum(saltbridge_h5.existence, axis=0).astype(int).tolist()
         np.testing.assert_array_equal(xvg.data_columns[1], expected)
+
+
+# ============================================================
+# 7. to_csv_summary
+# ============================================================
+
+class TestCsvSummary:
+
+    def test_creates_file(self, saltbridge_interaction, saltbridge_exporter):
+        path = str(TEMP_DIR / "summary.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        assert Path(path).exists()
+
+    def test_row_count(self, saltbridge_interaction, saltbridge_exporter):
+        import csv as csv_mod
+        path = str(TEMP_DIR / "summary.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        with open(path) as f:
+            reader = csv_mod.reader(f)
+            rows = list(reader)
+        # n_pairs + 1 header
+        assert len(rows) == saltbridge_interaction.n_pairs + 1
+
+    def test_headers(self, saltbridge_interaction, saltbridge_exporter):
+        import csv as csv_mod
+        path = str(TEMP_DIR / "summary.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        with open(path) as f:
+            reader = csv_mod.reader(f)
+            headers = next(reader)
+        assert headers[0] == "pair_label"
+        assert headers[1] == "occupancy"
+        assert "avg_distance" in headers
+        assert "std_distance" in headers
+
+    def test_occupancy_values(self, saltbridge_interaction, saltbridge_exporter):
+        import csv as csv_mod
+        path = str(TEMP_DIR / "summary.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        with open(path) as f:
+            reader = csv_mod.reader(f)
+            next(reader)
+            rows = list(reader)
+        # pair0: [T,T,F,T,T] → 4/5 = 0.8
+        assert float(rows[0][1]) == pytest.approx(0.8000, abs=0.001)
+        # pair2: [T,T,T,T,T] → 5/5 = 1.0
+        assert float(rows[2][1]) == pytest.approx(1.0000, abs=0.001)
+
+    def test_avg_only_active_frames(self, saltbridge_interaction, saltbridge_exporter):
+        """avg_distance 仅在活跃帧上计算。"""
+        import csv as csv_mod
+        path = str(TEMP_DIR / "summary.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        with open(path) as f:
+            reader = csv_mod.reader(f)
+            next(reader)
+            rows = list(reader)
+        # pair0: active frames = [0,1,3,4], distance = [3.5, 3.2, 3.8, 3.1]
+        # mean = 3.4
+        expected_avg = np.mean([3.5, 3.2, 3.8, 3.1])
+        assert float(rows[0][2]) == pytest.approx(expected_avg, abs=0.01)
+
+    def test_std_only_active_frames(self, saltbridge_interaction, saltbridge_exporter):
+        """std_distance 仅在活跃帧上计算。"""
+        import csv as csv_mod
+        path = str(TEMP_DIR / "summary.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        with open(path) as f:
+            reader = csv_mod.reader(f)
+            next(reader)
+            rows = list(reader)
+        # pair0: active distance = [3.5, 3.2, 3.8, 3.1], std
+        expected_std = np.std([3.5, 3.2, 3.8, 3.1])
+        assert float(rows[0][3]) == pytest.approx(expected_std, abs=0.01)
+
+    def test_pair_label_format(self, saltbridge_interaction, saltbridge_exporter):
+        import csv as csv_mod
+        path = str(TEMP_DIR / "summary.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        with open(path) as f:
+            reader = csv_mod.reader(f)
+            next(reader)
+            rows = list(reader)
+        # pair0: LYS10(10-11)···ASP40(40-41)
+        assert "LYS10" in rows[0][0]
+        assert "ASP40" in rows[0][0]
+        assert "···" in rows[0][0]
+
+    def test_real_data(self):
+        """真实数据验证。"""
+        import csv as csv_mod
+        h5_path = Path(__file__).parent.parent / "interaction_h5data" / "salt_bridge.h5"
+        if not h5_path.exists():
+            pytest.skip("salt_bridge.h5 not found")
+        it = load_interactions(str(h5_path))[0]
+        exporter = SaltBridgeExporter()
+        path = str(TEMP_DIR / "real_summary.csv")
+        exporter.to_csv_summary(it, path)
+        with open(path) as f:
+            reader = csv_mod.reader(f)
+            rows = list(reader)
+        assert len(rows) == it.n_pairs + 1
+        # 第一个 pair 占位率应为 1.0
+        assert float(rows[1][1]) == pytest.approx(1.0, abs=0.001)

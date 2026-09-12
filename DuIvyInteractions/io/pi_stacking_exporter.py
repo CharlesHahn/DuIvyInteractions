@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """π-堆积导出器。"""
 
-from typing import Dict
+from typing import Dict, Optional, List
 
-from .interaction_exporter import InteractionExporter
+import numpy as np
+
+from .interaction_exporter import InteractionExporter, DIT_COLORS
+from DuIvyTools.DuIvyTools.FileParser.xpmParser import XPM
 from ..core.datas import Interaction
 
 
@@ -39,3 +42,73 @@ class PiStackingExporter(InteractionExporter):
         indices = [a.atom_global_idx for a in ring.atoms]
         start, end = min(indices), max(indices)
         return f"{ring.residue_name}{ring.residue_id}({start}-{end})"
+
+    def to_xpm_stacking_type(
+        self,
+        interaction: Interaction,
+        pair_indices: Optional[List[int]] = None,
+        title: Optional[str] = None,
+        xlabel: str = "Time (ps)",
+        ylabel: str = "Pair",
+    ) -> XPM:
+        """输出堆积类型的 XPM（0=无, 1=T 型, 2=P 型）。
+
+        Args:
+            interaction: Interaction 数据
+            pair_indices: 要导出的 pair 索引，None 表示全部
+            title: 图表标题
+            xlabel: X 轴标签
+            ylabel: Y 轴标签
+
+        Returns:
+            XPM 对象
+        """
+        if interaction.n_pairs == 0:
+            raise ValueError("No pairs found in interaction")
+
+        pair_indices = self._validate_pair_indices(interaction, pair_indices)
+
+        existence = interaction.existence[pair_indices]
+        pstype = interaction.metrics["pistacking_type"][pair_indices]
+        n_frames = interaction.n_frames
+        n_pairs = len(pair_indices)
+
+        # 构建三值矩阵：0=无, 1=T, 2=P
+        vm = np.zeros((n_pairs, n_frames), dtype=int)
+        vm[(existence) & (pstype == 'T')] = 1
+        vm[(existence) & (pstype == 'P')] = 2
+
+        xpm = XPM("", is_file=False, new_file=True)
+        xpm.title = title or f"{self.name} Type"
+        xpm.xlabel = xlabel
+        xpm.ylabel = ylabel
+        xpm.type = "Discrete"
+
+        xpm.width = n_frames
+        xpm.height = n_pairs
+
+        xpm.xaxis = interaction.times.tolist()
+        xpm.yaxis = list(range(n_pairs))
+
+        # legend: 行号:标签
+        pair_legends = self.get_pair_legends(interaction, pair_indices)
+        xpm.legend = " ".join(f"{i}:{label}" for i, label in enumerate(pair_legends))
+
+        xpm.value_matrix = vm.tolist()
+        xpm.refresh_by_value_matrix(is_Continuous=False)
+
+        # 0=白, 1=DIT 粉(T), 2=DIT 蓝(P)
+        xpm.colors = ['#FFFFFF', DIT_COLORS[1], DIT_COLORS[0]]
+        xpm.notes = ['None', 'T-shaped', 'Parallel']
+
+        return xpm
+
+    def save_xpm_stacking_type(
+        self,
+        interaction: Interaction,
+        path: str,
+        **kwargs
+    ) -> None:
+        """保存堆积类型 XPM 文件。"""
+        xpm = self.to_xpm_stacking_type(interaction, **kwargs)
+        xpm.save(path)

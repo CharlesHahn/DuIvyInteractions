@@ -4,6 +4,7 @@
 将 Interaction 数据导出为 DuIvyTools 支持的 xvg 和 xpm 格式。
 """
 
+import csv
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 
@@ -264,6 +265,48 @@ class InteractionExporter(ABC):
         """
         xpm = self.to_xpm_existence(interaction, **kwargs)
         xpm.save(path)
+
+    def to_csv_summary(self, interaction: Interaction, path: str) -> None:
+        """每对的汇总统计（仅活跃帧）保存为 CSV。
+
+        列：pair_label, occupancy, avg_{metric}, std_{metric}, ...
+
+        Args:
+            interaction: Interaction 数据
+            path: 输出文件路径
+        """
+        occ = interaction.occupancy()
+
+        # 表头：只输出数值指标，跳过字符串指标
+        headers = ["pair_label", "occupancy"]
+        numeric_metrics = []
+        for name, arr in interaction.metrics.items():
+            is_str = hasattr(arr, 'dtype') and arr.dtype.kind in ('U', 'S', 'O')
+            if not is_str:
+                numeric_metrics.append(name)
+                headers.append(f"avg_{name}")
+                headers.append(f"std_{name}")
+
+        # 逐行
+        rows = []
+        for i in range(interaction.n_pairs):
+            label = self.get_pair_label(interaction, i)
+            row = [label, f"{occ[i]:.4f}"]
+            for name in numeric_metrics:
+                active = interaction.metrics[name][i][interaction.existence[i]]
+                if active.size > 0:
+                    row.append(f"{np.nanmean(active):.4f}")
+                    row.append(f"{np.nanstd(active):.4f}")
+                else:
+                    row.append("")
+                    row.append("")
+            rows.append(row)
+
+        # 写文件
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(rows)
 
     # ==================== 辅助方法 ====================
 
