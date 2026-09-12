@@ -14,6 +14,12 @@ from DuIvyTools.DuIvyTools.FileParser.xpmParser import XPM
 
 from ..core.datas import Interaction
 
+# DIT.mplstyle 颜色循环（DuIvyTools 默认配色）
+DIT_COLORS = [
+    '#38A7D0', '#F67088', '#66C2A5', '#FC8D62', '#8DA0CB',
+    '#E78AC3', '#A6D854', '#FFD92F', '#E5C494', '#B3B3B3',
+]
+
 
 class InteractionExporter(ABC):
     """Interaction 导出器基类。
@@ -112,6 +118,37 @@ class InteractionExporter(ABC):
 
         return xvg
 
+    def to_xvg_count(
+        self,
+        interaction: Interaction,
+        title: Optional[str] = None,
+        xlabel: str = "Time (ps)",
+        ylabel: Optional[str] = None,
+    ) -> XVG:
+        """将每帧的活跃相互作用数量转换为 XVG 对象。
+
+        Args:
+            interaction: Interaction 数据
+            title: 图表标题，None 则自动生成
+            xlabel: X 轴标签
+            ylabel: Y 轴标签
+
+        Returns:
+            XVG 对象
+        """
+        count = np.sum(interaction.existence, axis=0).astype(int)
+
+        xvg = XVG("", is_file=False, new_file=True)
+        xvg.title = title or f"{self.name} Count"
+        xvg.xlabel = xlabel
+        xvg.ylabel = ylabel or "Count"
+        xvg.data_columns = [interaction.times.tolist(), count.tolist()]
+        xvg.column_num = 2
+        xvg.row_num = interaction.n_frames
+        xvg.data_heads = [xlabel, ylabel or "Count"]
+
+        return xvg
+
     def to_xpm_existence(
         self,
         interaction: Interaction,
@@ -169,8 +206,10 @@ class InteractionExporter(ABC):
         # 构建值矩阵（0 或 1）
         xpm.value_matrix = existence.astype(int).tolist()
 
-        # 刷新颜色和字符
+        # 刷新颜色和字符，然后覆盖为 DIT 配色
         xpm.refresh_by_value_matrix(is_Continuous=False)
+        xpm.colors = ['#FFFFFF', DIT_COLORS[0]]  # 0=白色，1=DIT 蓝
+        xpm.notes = ['No', 'Yes']
 
         return xpm
 
@@ -192,6 +231,22 @@ class InteractionExporter(ABC):
             **kwargs: 传递给 to_xvg_metric 的参数
         """
         xvg = self.to_xvg_metric(interaction, metric_name, **kwargs)
+        xvg.save(path)
+
+    def save_xvg_count(
+        self,
+        interaction: Interaction,
+        path: str,
+        **kwargs
+    ) -> None:
+        """保存每帧活跃相互作用数量为 xvg 文件。
+
+        Args:
+            interaction: Interaction 数据
+            path: 输出文件路径
+            **kwargs: 传递给 to_xvg_count 的参数
+        """
+        xvg = self.to_xvg_count(interaction, **kwargs)
         xvg.save(path)
 
     def save_xpm(
