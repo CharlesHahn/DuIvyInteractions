@@ -19,6 +19,9 @@ dev = [
     "pytest>=7.0",
 ]
 
+[project.scripts]
+dii = "DuIvyInteractions.DII:main"
+
 [tool.setuptools.packages.find]
 include = ["DuIvyInteractions*"]
 exclude = ["tests*", "archive*", "docs*"]
