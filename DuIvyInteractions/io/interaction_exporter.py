@@ -54,7 +54,7 @@ class InteractionExporter(ABC):
         metric_name: str,
         pair_indices: Optional[List[int]] = None,
         title: Optional[str] = None,
-        xlabel: str = "Frame",
+        xlabel: str = "Time (ps)",
         ylabel: Optional[str] = None,
     ) -> XVG:
         """将某个 metric 转换为 XVG 对象。
@@ -64,7 +64,7 @@ class InteractionExporter(ABC):
             metric_name: metric 名称，如 "distance", "angle"
             pair_indices: 要导出的 pair 索引，None 表示全部
             title: 图表标题，None 则自动生成
-            xlabel: X 轴标签，默认为 "Frame"
+            xlabel: X 轴标签，默认为 "Time (ps)"
             ylabel: Y 轴标签，None 则从 metric_labels 获取
 
         Returns:
@@ -155,7 +155,7 @@ class InteractionExporter(ABC):
         interaction: Interaction,
         pair_indices: Optional[List[int]] = None,
         title: Optional[str] = None,
-        xlabel: str = "Frame",
+        xlabel: str = "Time (ps)",
         ylabel: str = "Pair",
     ) -> XPM:
         """将 existence 转换为 XPM 对象（热力图）。

@@ -127,7 +127,7 @@ class TestToXvgMetric:
     def test_xlabel_default(self, saltbridge_interaction, saltbridge_exporter):
         xvg = saltbridge_exporter.to_xvg_metric(
             saltbridge_interaction, "distance")
-        assert xvg.xlabel == "Frame"
+        assert xvg.xlabel == "Time (ps)"
 
     def test_ylabel_from_metric_labels(self, saltbridge_interaction, saltbridge_exporter):
         xvg = saltbridge_exporter.to_xvg_metric(
