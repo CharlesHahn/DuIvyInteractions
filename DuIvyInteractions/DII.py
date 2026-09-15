@@ -3,6 +3,8 @@
 
 import argparse
 
+from .group_identifiers import IDENTIFIER_CLASSES
+
 
 def build_parser() -> argparse.ArgumentParser:
     """构建命令行参数解析器。"""
@@ -15,6 +17,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("-t", "--tpr", required=True, help="GROMACS 拓扑文件")
     run_p.add_argument("-f", "--xtc", required=True, help="轨迹文件")
     run_p.add_argument("-o", "--output", required=True, help="输出目录")
+    run_p.add_argument("--ff", required=True,
+                       choices=list(IDENTIFIER_CLASSES),
+                       help=f"力场（当前支持: {', '.join(IDENTIFIER_CLASSES)}）")
     run_p.add_argument("--interactions", default="all",
                        help="相互作用类型（逗号分隔），默认 all")
     run_p.add_argument("--strategy", default="two_pass",
@@ -40,7 +45,7 @@ def main():
                 if name not in ALL_INTERACTIONS:
                     raise SystemExit(
                         f"未知相互作用类型: '{name}'。可用: {', '.join(ALL_INTERACTIONS)}")
-        Pipeline(args.strategy).run(
+        Pipeline(args.ff, args.strategy).run(
             args.tpr, args.xtc, args.output, interactions)
 
 

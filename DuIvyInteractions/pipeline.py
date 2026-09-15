@@ -7,7 +7,7 @@ from typing import List
 import MDAnalysis as mda
 
 from .system_readers import GmxTprReader
-from .group_identifiers import AmberFFGroupIdentifier
+from .group_identifiers import IDENTIFIER_CLASSES
 from .group_identifiers.amber_ff_identifier import WATER_RESIDUES
 from .interaction_detectors import (
     HydrogenBondDetectorTwoPass, HydrogenBondDetectorPerFrame, HydrogenBondDetectorPerTuple,
@@ -61,7 +61,8 @@ STRATEGY_INDEX = {"two_pass": 0, "per_frame": 1, "per_tuple": 2}
 class Pipeline:
     """串联 Reader → Identifier → Detector → h5 保存。"""
 
-    def __init__(self, strategy: str = "two_pass"):
+    def __init__(self, ff: str, strategy: str = "two_pass"):
+        self.ff = ff
         self.strategy = strategy
 
     def run(self, tpr: str, xtc: str, output: str,
@@ -76,7 +77,8 @@ class Pipeline:
         """
         # 1. 读取 + 识别（只做一次）
         sd = GmxTprReader().read(tpr)
-        groups = AmberFFGroupIdentifier().identify(sd)
+        identifier = self._make_identifier()
+        groups = identifier.identify(sd)
         # 2. 加载轨迹（只做一次）
         u = mda.Universe(tpr, xtc)
         os.makedirs(output, exist_ok=True)
@@ -90,6 +92,13 @@ class Pipeline:
                 save_interactions(results, os.path.join(output, f"{name}.h5"))
             except Exception as e:
                 print(f"[WARN] {name} 检测失败: {e}")
+
+    def _make_identifier(self):
+        """按力场构造基团识别器。"""
+        if self.ff not in IDENTIFIER_CLASSES:
+            raise ValueError(
+                f"未知力场: '{self.ff}'。可用: {', '.join(IDENTIFIER_CLASSES)}")
+        return IDENTIFIER_CLASSES[self.ff]()
 
     def _make_detector(self, name: str):
         """按类型和策略构造检测器。"""

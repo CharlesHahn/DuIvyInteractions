@@ -39,4 +39,14 @@ pip install -e .
 
 ## 项目状态
 
-基团鉴定和相互作用检测阶段已完成，可视化和 Pipeline 编排待实现。详见 `doc/` 目录下的设计文档。
+基团鉴定、相互作用检测、HDF5 结果存储、xvg/xpm/CSV 导出、Pipeline 编排和 DII 命令行工具均已完成。详见 `doc/` 目录下的设计文档。
+
+## 使用
+
+```bash
+# 安装
+pip install -e .
+
+# 命令行运行相互作用检测
+dii run -t md.tpr -f md.xtc -o output/ --ff amber
+```
