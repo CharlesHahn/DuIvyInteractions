@@ -17,6 +17,19 @@ from ..core.datas import Interaction, Group, AtomData
 FORMAT_VERSION = "1.0"
 
 
+def _json_default(obj):
+    """json.dumps 兜底：numpy 类型转原生。"""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    return str(obj)
+
+
 def save_interactions(interactions: List[Interaction], path: str, compress: bool = True) -> None:
     """保存 Interaction 列表到 HDF5 文件。
 
@@ -25,7 +38,10 @@ def save_interactions(interactions: List[Interaction], path: str, compress: bool
         path: 输出文件路径
         compress: 是否启用 gzip 压缩
     """
+    original_path = path
     path = str(path)
+    if not isinstance(path, str) or path == '':
+        raise TypeError(f"path must be str or PathLike, got {type(original_path)}")
     
     with h5py.File(path, 'w') as f:
         # 写入格式版本
@@ -46,7 +62,10 @@ def load_interactions(path: str) -> List[Interaction]:
     Returns:
         Interaction 列表
     """
+    original_path = path
     path = str(path)
+    if not isinstance(path, str) or path == '':
+        raise TypeError(f"path must be str or PathLike, got {type(original_path)}")
     interactions = []
     
     with h5py.File(path, 'r') as f:
@@ -191,7 +210,8 @@ def _write_groups(grp: h5py.Group, groups: List[Tuple[Group, ...]], compress: bo
             molecules.append(g.molecule)
             residue_names.append(g.residue_name)
             residue_ids[group_idx] = g.residue_id
-            metadata_jsons.append(json.dumps(g.metadata, ensure_ascii=False))
+            metadata_jsons.append(json.dumps(g.metadata, ensure_ascii=False,
+                                             default=_json_default))
             
             # atom 数据
             for atom in g.atoms:

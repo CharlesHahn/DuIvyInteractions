@@ -315,11 +315,13 @@ class InteractionExporter(ABC):
         # 逐行
         rows = []
         for i in range(interaction.n_pairs):
+            if occ[i] == 0:
+                continue
             label = self.get_pair_label(interaction, i)
             row = [label, f"{occ[i]:.4f}"]
             for name in numeric_metrics:
                 active = interaction.metrics[name][i][interaction.existence[i]]
-                if active.size > 0:
+                if active.size > 0 and not np.all(np.isnan(active)):
                     row.append(f"{np.nanmean(active):.4f}")
                     row.append(f"{np.nanstd(active):.4f}")
                 else:
@@ -388,9 +390,9 @@ class InteractionExporter(ABC):
 
         # 验证每个索引
         for idx in pair_indices:
-            if not isinstance(idx, int):
+            if isinstance(idx, bool) or not isinstance(idx, int):
                 raise ValueError(f"pair_index must be int, got {type(idx)}")
             if idx < 0 or idx > max_idx:
                 raise ValueError(f"pair_index {idx} out of range [0, {max_idx}]")
 
-        return pair_indices
+        return list(dict.fromkeys(pair_indices))

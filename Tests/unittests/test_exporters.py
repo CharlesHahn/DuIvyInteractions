@@ -771,3 +771,85 @@ class TestDiscreteXpmBuild:
                 colors=["#FFFFFF", "#38A7D0"], notes=["No"],
                 title="t", legend="l", xlabel="x", ylabel="y",
                 times=np.array([0.0, 1.0]))
+
+
+# ============================================================
+# 9. DII export 对抗性测试（空数据/多类型/重复类型）
+# ============================================================
+
+class TestDIIExportAdversarial:
+    """dii export 边界场景（n_pairs=0、空帧、多类型、重复类型）。"""
+
+    def _save_and_export(self, interactions, filename):
+        """保存 h5 并运行 _run_export，返回输出目录。"""
+        from DuIvyInteractions.io.h5 import save_interactions
+        from DuIvyInteractions.DII import _run_export
+        import argparse
+        h5_path = TEMP_DIR / filename
+        out_dir = TEMP_DIR / (filename.replace(".h5", "_out"))
+        save_interactions(interactions, str(h5_path))
+        args = argparse.Namespace(input=str(h5_path), output=str(out_dir))
+        _run_export(args)
+        return out_dir
+
+    def _make_saltbridge(self, n_pairs=2, n_frames=5, exist=True):
+        """构造盐桥 Interaction。"""
+        from DuIvyInteractions.io.saltbridge_exporter import SaltBridgeExporter
+        pos = _make_group(0, "charged_positive",
+                          [_make_atom(10, "NZ", "N"), _make_atom(11, "HZ1", "H")],
+                          "LYS", 10)
+        neg = _make_group(1, "charged_negative",
+                          [_make_atom(20, "OD1", "O"), _make_atom(21, "OD2", "O")],
+                          "ASP", 20)
+        existence = np.full((n_pairs, n_frames), exist, dtype=bool)
+        metrics = {"distance": np.full((n_pairs, n_frames), 3.5)}
+        groups = [(pos, neg)] * n_pairs
+        return Interaction(
+            interaction_type="salt_bridge", groups=groups,
+            existence=existence, metrics=metrics,
+            times=np.arange(n_frames, dtype=float) * 10.0)
+
+    def test_n_pairs_zero_skipped(self):
+        """n_pairs=0 不崩溃、不产生文件。"""
+        it = self._make_saltbridge(n_pairs=0)
+        out = self._save_and_export([it], "empty_pairs.h5")
+        files = list(out.glob("*")) if out.exists() else []
+        assert files == []
+
+    def test_empty_frames_overview(self):
+        """空帧概览不 IndexError（先有 0 帧 → 跳过导出）。"""
+        it = self._make_saltbridge(n_pairs=0, n_frames=0)
+        out = self._save_and_export([it], "empty_frames.h5")
+        files = list(out.glob("*")) if out.exists() else []
+        assert files == []
+
+    def test_multiple_types_all_exported(self):
+        """多类型 h5：所有类型都导出，不丢弃。"""
+        from DuIvyInteractions.io.pi_stacking_exporter import PiStackingExporter
+        sb = self._make_saltbridge(n_pairs=1)
+        # π-stacking Interaction
+        ring = _make_group(0, "aromatic_ring", [_make_atom(10, "CG", "C")], "PHE", 10)
+        ring2 = _make_group(1, "aromatic_ring", [_make_atom(20, "CG", "C")], "PHE", 20)
+        pi = Interaction(
+            interaction_type="pi_stacking", groups=[(ring, ring2)],
+            existence=np.ones((1, 5), dtype=bool),
+            metrics={"distance": np.full((1, 5), 4.0),
+                     "angle": np.full((1, 5), 10.0),
+                     "offset": np.full((1, 5), 1.0),
+                     "pistacking_type": np.full((1, 5), "P", dtype="U1")},
+            times=np.arange(5, dtype=float) * 10.0)
+        out = self._save_and_export([sb, pi], "multi.h5")
+        names = [p.name for p in out.glob("*")]
+        assert any("salt_bridge" in n for n in names)
+        assert any("pi_stacking" in n for n in names)
+
+    def test_same_type_repeated_gets_index(self):
+        """同类型重复：第二个带 _2 序号，不覆盖。"""
+        sb1 = self._make_saltbridge(n_pairs=1)
+        sb2 = self._make_saltbridge(n_pairs=1)
+        out = self._save_and_export([sb1, sb2], "repeat.h5")
+        names = sorted(p.name for p in out.glob("*"))
+        assert any("_2_" in n for n in names)
+        # 两个 summary 都在
+        summaries = [n for n in names if n.endswith("_summary.csv")]
+        assert len(summaries) == 2

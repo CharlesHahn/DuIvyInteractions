@@ -60,7 +60,11 @@ def _run_export(args) -> None:
         "pi_cation": PiCationExporter,
     }
 
-    interactions = load_interactions(args.input)
+    try:
+        interactions = load_interactions(args.input)
+    except OSError:
+        raise SystemExit(
+            f"无法读取 h5 文件: {args.input}（文件可能损坏或不存在）")
     if not interactions:
         raise SystemExit(f"h5 中无相互作用结果: {args.input}")
 
@@ -73,6 +77,12 @@ def _run_export(args) -> None:
             raise SystemExit(
                 f"未知相互作用类型: '{it.interaction_type}'。可用: {', '.join(exporter_classes)}")
         exporter = exporter_classes[it.interaction_type]()
+
+        # 空数据防护：0 对或 0 帧 → 只提示，跳过导出
+        if it.n_pairs == 0 or it.n_frames == 0:
+            print(f"[跳过] {it.interaction_type}: 无相互作用可导出"
+                  f"（pairs={it.n_pairs}, frames={it.n_frames}）")
+            continue
 
         _print_overview(it, exporter)
 
@@ -106,7 +116,8 @@ def _print_overview(it, exporter) -> None:
     print(f"类型:     {it.interaction_type}")
     print(f"基团对数: {it.n_pairs}")
     print(f"帧数:     {it.n_frames}")
-    print(f"时间范围: {it.times[0]:.1f} ~ {it.times[-1]:.1f} ps")
+    if it.n_frames > 0:
+        print(f"时间范围: {it.times[0]:.1f} ~ {it.times[-1]:.1f} ps")
     print(f"\nTop {OVERVIEW_TOP_N} 占位率:")
     for i, idx in enumerate(order, 1):
         print(f"  {i}. {exporter.get_pair_label(it, int(idx))}  {occ[idx]:.1%}")
