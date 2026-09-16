@@ -70,38 +70,24 @@ class PiStackingExporter(InteractionExporter):
 
         existence = interaction.existence[pair_indices]
         pstype = interaction.metrics["pistacking_type"][pair_indices]
-        n_frames = interaction.n_frames
-        n_pairs = len(pair_indices)
 
         # 构建三值矩阵：0=无, 1=T, 2=P
-        vm = np.zeros((n_pairs, n_frames), dtype=int)
+        vm = np.zeros(existence.shape, dtype=int)
         vm[(existence) & (pstype == 'T')] = 1
         vm[(existence) & (pstype == 'P')] = 2
 
-        xpm = XPM("", is_file=False, new_file=True)
-        xpm.title = title or f"{self.name} Type"
-        xpm.xlabel = xlabel
-        xpm.ylabel = ylabel
-        xpm.type = "Discrete"
-
-        xpm.width = n_frames
-        xpm.height = n_pairs
-
-        xpm.xaxis = interaction.times.tolist()
-        xpm.yaxis = list(range(n_pairs))
-
-        # legend: 行号:标签
+        # 构建 XPM（value_matrix 即颜色索引，colors/notes 按索引对齐）
         pair_legends = self.get_pair_legends(interaction, pair_indices)
-        xpm.legend = " ".join(f"{i}:{label}" for i, label in enumerate(pair_legends))
-
-        xpm.value_matrix = vm.tolist()
-        xpm.refresh_by_value_matrix(is_Continuous=False)
-
-        # 0=白, 1=DIT 粉(T), 2=DIT 蓝(P)
-        xpm.colors = ['#FFFFFF', DIT_COLORS[1], DIT_COLORS[0]]
-        xpm.notes = ['None', 'T-shaped', 'Parallel']
-
-        return xpm
+        return self._build_discrete_xpm(
+            value_matrix=vm,
+            colors=["#FFFFFF", DIT_COLORS[1], DIT_COLORS[0]],
+            notes=["None", "T-shaped", "Parallel"],
+            title=title or f"{self.name} Type",
+            legend=" ".join(f"{i}:{label}" for i, label in enumerate(pair_legends)),
+            xlabel=xlabel,
+            ylabel=ylabel,
+            times=interaction.times,
+        )
 
     def save_xpm_stacking_type(
         self,

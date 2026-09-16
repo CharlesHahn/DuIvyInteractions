@@ -657,3 +657,117 @@ class TestCsvSummary:
         assert len(rows) == it.n_pairs + 1
         # 第一个 pair 占位率应为 1.0
         assert float(rows[1][1]) == pytest.approx(1.0, abs=0.001)
+
+
+# ============================================================
+# 8. XPM 手动构建（对抗性测试：原 refresh 重映射 bug 回归防护）
+# ============================================================
+
+class TestDiscreteXpmBuild:
+    """对抗性测试：XPM 手动构建（原 refresh 重映射 bug 回归防护）。"""
+
+    def _mk_saltbridge_it(self, existence, times):
+        pos = _make_group(0, "charged_positive",
+                          [_make_atom(10, "NZ", "N")], "LYS", 10)
+        neg = _make_group(1, "charged_negative",
+                          [_make_atom(20, "OD1", "O")], "ASP", 20)
+        n_pairs, n_frames = existence.shape
+        dist = np.where(existence, 3.0, 9.0).astype(float)
+        return Interaction("salt_bridge", [(pos, neg)] * n_pairs,
+                           existence=existence,
+                           metrics={"distance": dist},
+                           times=times)
+
+    def test_all_active_existence_not_remapped(self):
+        """全活跃矩阵保持 [1,1,1]（原 bug：被 refresh 重映射为全 0）。"""
+        it = self._mk_saltbridge_it(
+            existence=np.array([[True, True, True]]),
+            times=np.array([0.0, 10.0, 20.0]))
+        xpm = SaltBridgeExporter().to_xpm_existence(it)
+        assert np.array(xpm.value_matrix).tolist() == [[1, 1, 1]]
+        assert xpm.colors == ["#FFFFFF", "#38A7D0"]
+        assert xpm.notes == ["No", "Yes"]
+
+    def test_stacking_all_active_types_not_shifted(self):
+        """[T,P] 全活跃保持 [[1,2]]（原 bug：P 被重映射成 1 显示为 T）。"""
+        ring1 = _make_group(0, "aromatic_ring",
+                            [_make_atom(10, "CG", "C")], "PHE", 10)
+        ring2 = _make_group(1, "aromatic_ring",
+                            [_make_atom(20, "CG", "C")], "TYR", 20)
+        it = Interaction("pi_stacking", [(ring1, ring2)],
+                         existence=np.array([[True, True]]),
+                         metrics={"distance": np.array([[4.0, 4.1]]),
+                                  "pistacking_type": np.array([["T", "P"]])},
+                         times=np.array([0.0, 10.0]))
+        xpm = PiStackingExporter().to_xpm_stacking_type(it)
+        assert np.array(xpm.value_matrix).tolist() == [[1, 2]]
+        assert xpm.notes == ["None", "T-shaped", "Parallel"]
+        assert xpm.colors == ["#FFFFFF", "#F67088", "#38A7D0"]
+
+    def test_partial_existence_unchanged(self):
+        """部分活跃（值集合完整）输出与旧版一致（回归）。"""
+        it = self._mk_saltbridge_it(
+            existence=np.array([[True, False, True]]),
+            times=np.array([0.0, 10.0, 20.0]))
+        xpm = SaltBridgeExporter().to_xpm_existence(it)
+        assert np.array(xpm.value_matrix).tolist() == [[1, 0, 1]]
+
+    def test_roundtrip_all_active(self):
+        """全活跃 XPM 保存后读回一致。"""
+        from DuIvyTools.DuIvyTools.FileParser.xpmParser import XPM
+        it = self._mk_saltbridge_it(
+            existence=np.array([[True, True, True]]),
+            times=np.array([0.0, 10.0, 20.0]))
+        xpm = SaltBridgeExporter().to_xpm_existence(it)
+        path = str(TEMP_DIR / "all_active.xpm")
+        xpm.save(path)
+        loaded = XPM(path)
+        assert np.array(loaded.value_matrix).tolist() == [[1, 1, 1]]
+        assert loaded.colors == ["#FFFFFF", "#38A7D0"]
+        assert loaded.notes == ["No", "Yes"]
+
+    def test_negative_index_rejected(self):
+        """负索引拒绝（原 refresh 静默错乱）。"""
+        with pytest.raises(ValueError):
+            SaltBridgeExporter()._build_discrete_xpm(
+                value_matrix=np.array([[-1, 1]]),
+                colors=["#FFFFFF", "#38A7D0"], notes=["No", "Yes"],
+                title="t", legend="l", xlabel="x", ylabel="y",
+                times=np.array([0.0, 1.0]))
+
+    def test_float_index_rejected(self):
+        """float dtype 拒绝。"""
+        with pytest.raises(TypeError):
+            SaltBridgeExporter()._build_discrete_xpm(
+                value_matrix=np.array([[1.0, 0.0]]),
+                colors=["#FFFFFF", "#38A7D0"], notes=["No", "Yes"],
+                title="t", legend="l", xlabel="x", ylabel="y",
+                times=np.array([0.0, 1.0]))
+
+    def test_index_out_of_range_rejected(self):
+        """越界正索引拒绝。"""
+        with pytest.raises(ValueError):
+            SaltBridgeExporter()._build_discrete_xpm(
+                value_matrix=np.array([[0, 2]]),
+                colors=["#FFFFFF", "#38A7D0"], notes=["No", "Yes"],
+                title="t", legend="l", xlabel="x", ylabel="y",
+                times=np.array([0.0, 1.0]))
+
+    def test_too_many_colors_rejected(self):
+        """超过字符表容量（82）拒绝，不静默截断。"""
+        with pytest.raises(ValueError):
+            SaltBridgeExporter()._build_discrete_xpm(
+                value_matrix=np.zeros((1, 1), dtype=int),
+                colors=[f"#{i:06x}" for i in range(90)],
+                notes=[str(i) for i in range(90)],
+                title="t", legend="l", xlabel="x", ylabel="y",
+                times=np.array([0.0]))
+
+    def test_colors_notes_length_mismatch_rejected(self):
+        """colors 与 notes 长度不一致拒绝。"""
+        with pytest.raises(ValueError):
+            SaltBridgeExporter()._build_discrete_xpm(
+                value_matrix=np.array([[0, 1]]),
+                colors=["#FFFFFF", "#38A7D0"], notes=["No"],
+                title="t", legend="l", xlabel="x", ylabel="y",
+                times=np.array([0.0, 1.0]))

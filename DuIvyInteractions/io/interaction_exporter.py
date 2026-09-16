@@ -5,6 +5,7 @@
 """
 
 import csv
+import string
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 
@@ -20,6 +21,19 @@ DIT_COLORS = [
     '#38A7D0', '#F67088', '#66C2A5', '#FC8D62', '#8DA0CB',
     '#E78AC3', '#A6D854', '#FFD92F', '#E5C494', '#B3B3B3',
 ]
+
+# XPM 字符表：与 DuIvyTools refresh 的 letters 方案一致
+XPM_LETTERS = string.ascii_letters + "0123456789!@#$%^&*()-_=+{}|;"
+
+
+def _validate_xpm_indices(value_matrix: np.ndarray, n_colors: int) -> None:
+    """校验 value_matrix 是 [0, n_colors) 内的整数索引。"""
+    arr = np.asarray(value_matrix)
+    if arr.dtype.kind not in "iu":
+        raise TypeError(f"value_matrix must be integer, got {arr.dtype}")
+    if arr.size and (arr.min() < 0 or arr.max() >= n_colors):
+        raise ValueError(f"value_matrix index out of range [0, {n_colors}): "
+                         f"min={arr.min()}, max={arr.max()}")
 
 
 class InteractionExporter(ABC):
@@ -180,38 +194,49 @@ class InteractionExporter(ABC):
         # 确定并验证 pair 索引
         pair_indices = self._validate_pair_indices(interaction, pair_indices)
 
-        # 获取数据
-        existence = interaction.existence[pair_indices]  # (n_selected, n_frames)
-        n_frames = interaction.n_frames
-        n_pairs = len(pair_indices)
-
-        # 构建 XPM 对象
-        xpm = XPM("", is_file=False, new_file=True)
-
-        # 设置基本属性
-        xpm.title = title or f"{self.name} Existence"
-        xpm.xlabel = xlabel
-        xpm.ylabel = ylabel
+        # 构建 XPM（value_matrix 即颜色索引，colors/notes 按索引对齐）
         pair_legends = self.get_pair_legends(interaction, pair_indices)
-        xpm.legend = " ".join(f"{i}:{label}" for i, label in enumerate(pair_legends))
+        return self._build_discrete_xpm(
+            value_matrix=interaction.existence[pair_indices].astype(int),
+            colors=["#FFFFFF", DIT_COLORS[0]],
+            notes=["No", "Yes"],
+            title=title or f"{self.name} Existence",
+            legend=" ".join(f"{i}:{label}" for i, label in enumerate(pair_legends)),
+            xlabel=xlabel,
+            ylabel=ylabel,
+            times=interaction.times,
+        )
+
+    def _build_discrete_xpm(
+        self,
+        value_matrix: np.ndarray,   # (n_pairs, n_frames) 颜色索引 0..k-1
+        colors: List[str],          # 长度 k，与索引一一对应
+        notes: List[str],           # 长度 k
+        title: str,
+        legend: str,
+        xlabel: str,
+        ylabel: str,
+        times: np.ndarray,
+    ) -> XPM:
+        """构建 Discrete 型 XPM：value_matrix 即颜色索引，colors/notes 按索引对齐。"""
+        n_pairs, n_frames = value_matrix.shape
+        if len(colors) != len(notes):
+            raise ValueError(f"colors({len(colors)}) != notes({len(notes)})")
+        if len(colors) > len(XPM_LETTERS):
+            raise ValueError(f"too many colors ({len(colors)}), max {len(XPM_LETTERS)}")
+        _validate_xpm_indices(value_matrix, len(colors))
+        xpm = XPM("", is_file=False, new_file=True)
+        xpm.title, xpm.legend = title, legend
+        xpm.xlabel, xpm.ylabel = xlabel, ylabel
         xpm.type = "Discrete"
-
-        # 设置维度
-        xpm.width = n_frames
-        xpm.height = n_pairs
-
-        # 设置坐标轴
-        xpm.xaxis = interaction.times.tolist()
-        xpm.yaxis = list(range(n_pairs))
-
-        # 构建值矩阵（0 或 1）
-        xpm.value_matrix = existence.astype(int).tolist()
-
-        # 刷新颜色和字符，然后覆盖为 DIT 配色
-        xpm.refresh_by_value_matrix(is_Continuous=False)
-        xpm.colors = ['#FFFFFF', DIT_COLORS[0]]  # 0=白色，1=DIT 蓝
-        xpm.notes = ['No', 'Yes']
-
+        xpm.width, xpm.height = n_frames, n_pairs
+        xpm.color_num, xpm.char_per_pixel = len(colors), 1
+        xpm.chars, xpm.colors, xpm.notes = (
+            list(XPM_LETTERS[:len(colors)]), list(colors), list(notes))
+        xpm.xaxis, xpm.yaxis = times.tolist(), list(range(n_pairs))
+        xpm.value_matrix = value_matrix.astype(int).tolist()
+        xpm.datalines = ["".join(XPM_LETTERS[v] for v in row)
+                         for row in value_matrix.astype(int)]
         return xpm
 
     # ==================== 保存方法 ====================
