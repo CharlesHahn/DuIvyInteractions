@@ -63,32 +63,39 @@ def _run_export(args) -> None:
     interactions = load_interactions(args.input)
     if not interactions:
         raise SystemExit(f"h5 中无相互作用结果: {args.input}")
-    it = interactions[0]
-
-    if it.interaction_type not in exporter_classes:
-        raise SystemExit(
-            f"未知相互作用类型: '{it.interaction_type}'。可用: {', '.join(exporter_classes)}")
-    exporter = exporter_classes[it.interaction_type]()
-
-    _print_overview(it, exporter)
 
     os.makedirs(args.output, exist_ok=True)
-    prefix = f"{args.output}/{it.interaction_type}"
 
-    # xvg: 每帧活跃数 + 数值 metric 时间序列
-    exporter.save_xvg_count(it, f"{prefix}_count.xvg")
-    for metric, arr in it.metrics.items():
-        if arr.dtype.kind in ('U', 'S', 'O'):
-            continue
-        exporter.save_xvg(it, metric, f"{prefix}_{metric}.xvg")
+    # 同类型重复时追加序号（如 salt_bridge_2_*）
+    seen_types = {}
+    for it in interactions:
+        if it.interaction_type not in exporter_classes:
+            raise SystemExit(
+                f"未知相互作用类型: '{it.interaction_type}'。可用: {', '.join(exporter_classes)}")
+        exporter = exporter_classes[it.interaction_type]()
 
-    # xpm: existence 热力图；π-stacking 额外输出类型图
-    exporter.save_xpm(it, f"{prefix}_existence.xpm")
-    if it.interaction_type == "pi_stacking":
-        exporter.save_xpm_stacking_type(it, f"{prefix}_type.xpm")
+        _print_overview(it, exporter)
 
-    # csv: 每对汇总
-    exporter.to_csv_summary(it, f"{prefix}_summary.csv")
+        seen_types[it.interaction_type] = seen_types.get(it.interaction_type, 0) + 1
+        n = seen_types[it.interaction_type]
+        prefix = f"{args.output}/{it.interaction_type}"
+        if n > 1:
+            prefix += f"_{n}"
+
+        # xvg: 每帧活跃数 + 数值 metric 时间序列
+        exporter.save_xvg_count(it, f"{prefix}_count.xvg")
+        for metric, arr in it.metrics.items():
+            if arr.dtype.kind in ('U', 'S', 'O'):
+                continue
+            exporter.save_xvg(it, metric, f"{prefix}_{metric}.xvg")
+
+        # xpm: existence 热力图；π-stacking 额外输出类型图
+        exporter.save_xpm(it, f"{prefix}_existence.xpm")
+        if it.interaction_type == "pi_stacking":
+            exporter.save_xpm_stacking_type(it, f"{prefix}_type.xpm")
+
+        # csv: 每对汇总
+        exporter.to_csv_summary(it, f"{prefix}_summary.csv")
 
 
 def _print_overview(it, exporter) -> None:
