@@ -86,6 +86,6 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber --strategy two_pass
 
 ## 下一步
 
-- 了解 8 类相互作用的检测判据与结果解读，见[结果解读](result.html)
-- 查看 `dii` 全部命令与参数，见[命令参考](command.html)
-- 理解核心原理（为什么直接读 tpr 类型），见[核心概念](concepts.html)（位于参考手册）
+- 了解 8 类相互作用的检测判据与结果解读，见[结果解读](result)
+- 查看 `dii` 全部命令与参数，见[命令参考](command)
+- 理解核心原理（为什么直接读 tpr 类型），见{doc}`/reference/concepts`（位于参考手册）

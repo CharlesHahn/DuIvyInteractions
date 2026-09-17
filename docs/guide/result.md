@@ -86,5 +86,5 @@ xpm 是 GROMACS 标准矩阵热力图格式，行列构成矩阵，颜色表示�
 
 ## 下一步
 
-- 理解 8 类相互作用的检测判据，见[相互作用判据](criteria.html)（参考手册）
-- 理解结果数据格式（h5），见[数据格式](data_format.html)（参考手册）
+- 理解 8 类相互作用的检测判据，见{doc}`/reference/criteria`（参考手册）
+- 理解结果数据格式（h5），见{doc}`/reference/data_format`（参考手册）

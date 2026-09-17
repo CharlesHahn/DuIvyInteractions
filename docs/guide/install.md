@@ -51,4 +51,4 @@ print("DuIvyInteractions OK")
 
 ## 下一步
 
-安装完成后，进入[快速上手](quickstart.html)用真实数据跑一遍完整流程。
+安装完成后，进入[快速上手](quickstart)用真实数据跑一遍完整流程。
