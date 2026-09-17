@@ -69,7 +69,7 @@ interaction_<i>/
 ### 数据类型
 
 - 数值型指标存为 float32/float64
-- 字符串指标（如 `pistacking_type`）存为 UTF-8 字符串数组，读取时还原为 `<U1` 数组
+- 字符串指标（如 `pistacking_type`）**展平为 1D 列表**存储为 UTF-8 字符串数组，原始 shape 单独存于该数据集的 `attrs['shape']`；读取时按 shape `reshape` 还原为 `<U1` 数组
 - 基团 `metadata` 序列化为 JSON 字符串（自动兜底 numpy 标量/数组，如 ndarray → list、np.int → int）
 
 ### 压缩

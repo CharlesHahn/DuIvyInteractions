@@ -2,6 +2,10 @@
 
 ## v0.1.0（开发中）
 
+### 2026-09-17
+
+- **文档对抗性修订**：新建中文用户文档站点（guide + reference）；优化主 index 目录结构；修复 MyST 内部交叉引用；修正结果解读中疏水/卤键标签格式、h5 字符串 metric 存储机制描述
+
 ### 2026-09-16
 
 - **XPM bug 修复**：绕过 DuIvyTools `refresh_by_value_matrix` 重映射，新增 `_build_discrete_xpm` 手动构建 Discrete XPM（value_matrix 即颜色索引，colors/notes 按索引对齐），修复值集合不完整时热力图颜色错位
