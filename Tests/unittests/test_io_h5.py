@@ -449,3 +449,56 @@ class TestH5EdgeCases:
         assert len(loaded[0].groups) == 2
         assert len(loaded[0].groups[0]) == 2
         assert len(loaded[0].groups[1]) == 3
+
+
+class TestH5PathValidation:
+    """对抗性测试：path 参数类型校验（BytesIO/None 不得静默产生垃圾文件）。"""
+
+    @pytest.fixture
+    def sample_it(self):
+        atom = AtomData(
+            atom_global_idx=0, atom_idx_in_residue=0,
+            atom_name="C", atom_type="ca", atom_element="C",
+            atom_charge=0.0, atom_mass=12.011,
+        )
+        group = Group(
+            group_id=1, group_type="aromatic_ring", molecule="D927",
+            residue_name="D927", residue_id=1, atoms=[atom], metadata={},
+        )
+        return Interaction(
+            interaction_type="pi_stacking",
+            groups=[(group, group)],
+            existence=np.array([[True]]),
+            metrics={"distance": np.array([[4.0]])},
+            times=np.array([0.0]),
+        )
+
+    def test_bytesio_rejected(self, sample_it):
+        """BytesIO 应报 TypeError，不产生垃圾文件。"""
+        import io
+        with pytest.raises(TypeError):
+            save_interactions([sample_it], io.BytesIO())
+        with pytest.raises(TypeError):
+            load_interactions(io.BytesIO())
+
+    def test_none_rejected(self, sample_it):
+        """None 应报 TypeError。"""
+        with pytest.raises(TypeError):
+            save_interactions([sample_it], None)
+        with pytest.raises(TypeError):
+            load_interactions(None)
+
+    def test_empty_string_rejected(self, sample_it):
+        """空字符串应报 ValueError。"""
+        with pytest.raises(ValueError):
+            save_interactions([sample_it], "")
+        with pytest.raises(ValueError):
+            load_interactions("")
+
+    def test_pathlib_accepted(self, sample_it):
+        """Path 对象应正常接受。"""
+        path = TEMP_DIR / "test_pathlib.h5"
+        save_interactions([sample_it], path)
+        loaded = load_interactions(path)
+        assert len(loaded) == 1
+        assert loaded[0].interaction_type == "pi_stacking"

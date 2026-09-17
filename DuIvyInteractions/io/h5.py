@@ -38,11 +38,12 @@ def save_interactions(interactions: List[Interaction], path: str, compress: bool
         path: 输出文件路径
         compress: 是否启用 gzip 压缩
     """
-    original_path = path
+    if not isinstance(path, (str, Path)):
+        raise TypeError(f"path must be str or Path, got {type(path)}")
     path = str(path)
-    if not isinstance(path, str) or path == '':
-        raise TypeError(f"path must be str or PathLike, got {type(original_path)}")
-    
+    if path == '':
+        raise ValueError("path cannot be empty")
+
     with h5py.File(path, 'w') as f:
         # 写入格式版本
         f.attrs['format_version'] = FORMAT_VERSION
@@ -62,10 +63,11 @@ def load_interactions(path: str) -> List[Interaction]:
     Returns:
         Interaction 列表
     """
-    original_path = path
+    if not isinstance(path, (str, Path)):
+        raise TypeError(f"path must be str or Path, got {type(path)}")
     path = str(path)
-    if not isinstance(path, str) or path == '':
-        raise TypeError(f"path must be str or PathLike, got {type(original_path)}")
+    if path == '':
+        raise ValueError("path cannot be empty")
     interactions = []
     
     with h5py.File(path, 'r') as f:
