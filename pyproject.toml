@@ -7,8 +7,28 @@ name = "DuIvyInteractions"
 version = "0.1.0"
 description = "基于 MD 拓扑力场参数的分子间相互作用判定工具"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "GPL-3.0"}
 requires-python = ">=3.9"
+authors = [
+    {name = "DuIvy Team", email = "1972069239@qq.com"},
+]
+urls = {Homepage = "https://github.com/CharlesHahn/DuIvyInteractions", Documentation = "https://duivyinteractions.readthedocs.io/", Source = "https://github.com/CharlesHahn/DuIvyInteractions"}
+keywords = [
+    "molecular dynamics", "interaction analysis", "GROMACS",
+    "tpr", "force field", "protein-ligand",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
 dependencies = [
     "numpy>=1.20",
     "MDAnalysis>=2.0",
