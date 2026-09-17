@@ -318,42 +318,52 @@ DuIvyInteraction/
 
 **判断标准**：如果一个模块换了项目还能用 → utils；只在本项目有意义 → core
 
-### 为什么没有 io/ 目录
+### 为什么有 io/ 目录
 
-- `tpr_parser.py` 是 Amber 特定的 → 合并进 `identifiers/amber.py`
-- `output.py` 是通用工具 → 放在 `utils/output.py`
-- `io/` 作为目录职责不清晰，不如按性质分散
+- `io/` 存放结果文件的序列化/反序列化与导出器：
+  - `h5.py` — Interaction 数据的 HDF5 存储/加载（无损 roundtrip，支持字符串 metric、numpy metadata 兜底）
+  - `interaction_exporter.py` — InteractionExporter 基类 + `_build_discrete_xpm`（手动构建 Discrete XPM，绕过 DuIvyTools refresh 重映射）
+  - `*_exporter.py`（8 个子类）— 各相互作用类型的 pair 标签
+- `tpr_parser.py`（Amber 特定）→ 合并进 `group_identifiers/amber_ff_identifier.py`
+- 通用输出工具函数 → `utils/output.py`（待建）
 
 ### 核心接口设计
 
-#### 数据类（core/data.py）
+#### 数据类（core/datas.py）
 
 ```python
 @dataclass
 class Group:
     """一个可参与相互作用的基团"""
     group_id: int                    # 唯一标识
-    group_type: str                  # "aromatic_ring", "donor", "acceptor", ...
+    group_type: str                  # "aromatic_ring", "H_donor", ...
     molecule: str                    # 所属分子名（如 "D927", "RBD_pro"）
     residue_name: str                # 残基名
-    residue_id: int                  # 残基号
-    atom_indices: List[int]          # 全局原子索引列表
-    center: Optional[Tuple] = None   # 质心坐标（动态计算）
-    normal: Optional[Tuple] = None   # 法向量（芳香环用）
-    properties: dict = None          # 额外属性
+    residue_id: int                  # 全局残基号
+    atoms: List[AtomData]            # 基团内原子列表
+    metadata: Dict = default_factory  # 附加信息（键必须 str，值限 JSON 类型）
+
+@dataclass
+class AtomData:
+    atom_global_idx: int             # 全局原子索引（整个体系唯一）
+    atom_idx_in_residue: int         # 残基内索引
+    atom_name: str                   # 原子名（如 "CG"）
+    atom_type: str                   # 力场类型（如 "ca"）
+    atom_element: str                # 元素符号
+    atom_charge: float
+    atom_mass: float
 
 @dataclass
 class Interaction:
-    """一个检测到的相互作用"""
-    interaction_type: str            # "hydrogen_bond", "pi_stacking", ...
-    group1: Group
-    group2: Group
-    frame: int
-    time_ps: float
-    distance: float
-    angle: Optional[float] = None
-    is_active: bool = True
+    """一种相互作用类型的全部检测结果（矩阵存储）"""
+    interaction_type: str            # "salt_bridge", "hydrogen_bond", ...
+    groups: List[Tuple[Group, ...]]  # 基团对列表，groups[i] 对应 existence[i] 行
+    existence: np.ndarray            # (n_pairs, n_frames) bool
+    metrics: Dict[str, np.ndarray]   # {name: (n_pairs, n_frames)}
+    times: np.ndarray                # (n_frames,) 每帧时间（ps）
 ```
+
+> 注：`Interaction` 是**矩阵式**存储（每类型一个对象，含全部 pair × 全部帧），非逐条记录式。另有 `InteractionSparse`（Pass1 稀疏中间结果，以 `(group_id,...)` 为键）。
 
 #### 基团识别器 ABC（core/interfaces.py）
 
@@ -364,71 +374,141 @@ class GroupIdentifier(ABC):
     def name(self) -> str: ...
 
     @abstractmethod
-    def identify(self, topology) -> List[Group]: ...
+    def identify(self, system_data: SystemData) -> List[Group]: ...
 ```
 
-#### 相互作用判定器 ABC（core/interfaces.py）
+#### 读取器 ABC（core/interfaces.py）
 
 ```python
-class InteractionDetector(ABC):
+class Reader(ABC):
     @property
     @abstractmethod
     def name(self) -> str: ...
 
+    @abstractmethod
+    def read(self, source: str) -> SystemData: ...
+```
+
+#### 相互作用检测器 ABC（core/interfaces.py）
+
+实际有 **3 个检测器基类**（模板方法模式），`detect()` 接口一致、可替换：
+
+```python
+# 策略一：PerTuple —— for each tuple → load ALL frames → 帧向量化
+class InteractionDetectorPerTuple(ABC):
     @property
     @abstractmethod
-    def required_group_types(self) -> List[str]: ...
-
+    def name(self) -> str: ...
+    @property
     @abstractmethod
-    def detect_frame(self, groups, coordinates, frame, time_ps) -> List[Interaction]: ...
+    def required_group_types(self) -> List[str]: ...   # Pipeline 据此过滤
+    @property
+    @abstractmethod
+    def metric_names(self) -> List[str]: ...
+    @abstractmethod
+    def get_candidate_tuples(self, groups, coordinates=None) -> List[Tuple[Group, ...]]: ...
+    @abstractmethod
+    def compute_metrics(self, group_tuple, coords) -> Dict[str, np.ndarray]: ...
+    @abstractmethod
+    def apply_threshold(self, metrics) -> np.ndarray: ...   # (F,) bool
+    def detect(self, groups, trajectory=None, n_workers=1,
+               topology_path=None, trajectory_path=None,
+               tuple_filter=None) -> List[Interaction]: ...  # 基类固化模板
+    # 可覆盖：filter_candidate_tuples, _post_process
+
+# 策略二：PerFrame —— for each frame → process ALL tuples → tuple 向量化
+#   适用：候选 tuple 数量极大（如水桥）
+class InteractionDetectorPerFrame(ABC):
+    # name/required_group_types/metric_names/get_candidate_tuples 同上
+    @abstractmethod
+    def compute_metrics_for_frame(self, tuples, all_positions, frame) -> Dict[str, np.ndarray]: ...
+    @abstractmethod
+    def apply_threshold(self, metrics) -> np.ndarray: ...   # (n_tuples,) bool
+
+# 策略三：TwoPass —— Pass1 逐帧发现 active pairs（稀疏）→ Pass2 补全全帧
+#   适用：大体系；水桥用 KDTree 预筛后从 65h 降到 ~5s
+class InteractionDetectorTwoPass(ABC):
+    # name/required_group_types/metric_names 同上
+    def initialize_candidates(self, groups, trajectory, tuple_filter=None) -> list: ...
+    def compute_pair_metrics(self, group_tuples, all_positions) -> Dict[str, np.ndarray]: ...
+    def apply_threshold(self, metrics) -> np.ndarray: ...
+    def run_pass1(self, groups, trajectory, tuple_filter=None) -> InteractionSparse: ...  # 可覆盖
+    def run_pass2(self, sparse, trajectory) -> List[Interaction]: ...                     # 可覆盖
+    def detect(self, groups, trajectory=None, ...) -> List[Interaction]: ...   # = Pass1 + Pass2
 ```
+
+> 检测结果统一为 `List[Interaction]`（矩阵式），三策略接口完全一致，可由 `pipeline.py` 的 `STRATEGY_INDEX` 切换。
 
 ### 扩展性设计
 
 | 扩展场景 | 实现方式 |
 |:----|:----|
-| **新力场识别器** | 继承 `GroupIdentifier`，实现 `identify()` |
-| **新相互作用类型** | 继承 `InteractionDetector`，实现 `detect_frame()` |
+| **新力场识别器** | 继承 `GroupIdentifier`，实现 `identify()`，注册进 `IDENTIFIER_CLASSES` |
+| **新相互作用类型** | 继承任一 Detector 基类，实现必需抽象方法 |
 | **新判据** | 同一类型可有多个 Detector（如 `HBondStrict`, `HBondLoose`） |
-| **新输出格式** | 在 `utils/output.py` 添加新函数 |
-| **新可视化** | 在 `visualize/plotter.py` 添加新方法 |
+| **新输出格式** | 在 `io/interaction_exporter.py` 添加导出方法 |
+| **新可视化** | 在 `visualizers/` 添加（待实现） |
 
 ### 使用示例
 
-```python
-from DuIvyInteractions.identifiers.amber import AmberGroupIdentifier
-from DuIvyInteractions.detectors.hydrogen_bond import HydrogenBondDetector
-from DuIvyInteractions.detectors.pi_stacking import PiStackingDetector
-from DuIvyInteractions.pipeline import Pipeline
+命令行（推荐）：
 
-# 配置
-identifier = AmberGroupIdentifier()
-detectors = [
-    HydrogenBondDetector(distance_cutoff=3.5, angle_cutoff=150),
-    PiStackingDetector(distance_cutoff=5.0, angle_cutoff=30),
-]
+```bash
+# 运行相互作用检测并保存 h5（--ff 必选，当前仅支持 amber）
+dii run -t md.tpr -f md.xtc -o out/ --ff amber
+# 可选：--interactions hydrogen_bond,pi_stacking 只检测部分类型
+#       --strategy two_pass|per_frame|per_tuple  选择检测策略
 
-# 运行
-pipeline = Pipeline(identifier, detectors)
-results = pipeline.run("md.tpr", "md.xtc")
-
-# 输出
-from DuIvyInteractions.utils.output import save_results_csv
-save_results_csv(results, "interactions.csv")
-
-# 可视化
-from DuIvyInteractions.visualize.plotter import InteractionPlotter
-plotter = InteractionPlotter(results)
-plotter.plot_timeline("hydrogen_bond")
-plotter.plot_heatmap("pi_stacking")
+# 导出 h5 结果为 xvg/xpm/csv 并打印概览
+dii export -i out/salt_bridge.h5 -o out_export/
 ```
 
-### 当前代码状态（2026-08-12）
+Python API：
 
-已完成第一阶段（基团鉴定）的 D927 体系验证：
-- ✅ `parse_tpr_dump.py` — tpr dump 解析器（200行）
-- ✅ `functional_groups.py` — 特征映射 + 环检测 + 官能团鉴定（470行）
-- ✅ `verify_type_mapping.py` — 映射表自动验证器（312行）
+```python
+from DuIvyInteractions.pipeline import Pipeline
+
+# 配置：力场 + 策略
+pipeline = Pipeline(ff="amber", strategy="two_pass")
+
+# 运行：tpr + xtc -> 识别 -> 检测 -> 存 h5
+pipeline.run("md.tpr", "md.xtc", "out/", interactions=None)  # None=全部8类
+
+# 读取 h5 并导出
+from DuIvyInteractions.io import load_interactions
+from DuIvyInteractions.io import SaltBridgeExporter
+it = load_interactions("out/salt_bridge.h5")[0]
+SaltBridgeExporter().to_csv_summary(it, "salt_bridge_summary.csv")
+```
+
+> 注：`visualizers/` 与 `utils/output.py` 尚未实现（详见架构目录结构与"当前代码状态"）。
+
+### 当前代码状态（2026-09-16 更新）
+
+#### 阶段一：基团鉴定（2026-08-11 已验证）
+- ✅ `original_draft/parse_tpr_dump.py` — tpr dump 解析器
+- ✅ `original_draft/functional_groups.py` — 特征映射 + 环检测 + 官能团鉴定
+- ✅ `original_draft/verify_type_mapping.py` — 映射表自动验证器
 - ✅ 已使用全局原子索引（跨分子类型唯一）
+- 注：以上脚本已迁移进新架构（`system_readers/` + `group_identifiers/amber_ff_identifier.py`），`original_draft/` 保留为历史参考。
 
-待迁移：将现有代码重构到新架构中
+#### 阶段二：相互作用检测（已完成）
+- ✅ 8 种相互作用 × 3 策略（PerTuple / PerFrame / TwoPass）全部实现，接口统一可替换
+- ✅ TwoPass 性能优化（KDTree 预筛，水桥 65h → ~5s）
+- ✅ `pipeline.py` 编排：Reader → Identifier → Detector → h5
+- ✅ `core/interfaces.py` 三种检测器 ABC（模板方法模式）
+
+#### 阶段三：结果存储与导出（已完成）
+- ✅ `io/h5.py` — HDF5 无损序列化/反序列化（字符串 metric、numpy metadata 兜底、path 类型校验）
+- ✅ `io/interaction_exporter.py` + 8 子类 — xvg/xpm/CSV 导出
+- ✅ `_build_discrete_xpm` 手动构建 XPM（修复 DuIvyTools refresh 重映射 bug）
+
+#### 阶段四：命令行（已完成）
+- ✅ `DII.py` — `dii run`（检测）+ `dii export`（导出 + 概览）
+- ✅ 多 Interaction 遍历导出、空数据/损坏 h5/0 帧防护、索引校验
+
+#### 未实现（详见 doc/TODO.md）
+- ❌ `visualizers/` 可视化
+- ❌ `utils/output.py` 通用输出工具
+- ❌ 基团识别结果人工审查（TODO#3）
+- ❌ 长轨迹 PerFrame 内存优化（TODO#13）、PBC 处理（TODO#16）等

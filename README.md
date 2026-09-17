@@ -29,6 +29,8 @@
 - NumPy >= 1.20
 - SciPy >= 1.7
 - MDAnalysis >= 2.0
+- h5py >= 3.0
+- DuIvyTools >= 0.6.0
 - GROMACS（`gmx dump`，用于文本格式 tpr 解析）
 
 ## 安装
@@ -47,6 +49,24 @@ pip install -e .
 # 安装
 pip install -e .
 
-# 命令行运行相互作用检测
-dii run -t md.tpr -f md.xtc -o output/ --ff amber
+# 运行相互作用检测并保存 h5（--ff 必选，当前支持 amber）
+dii run -t md.tpr -f md.xtc -o out/ --ff amber
+# 可选参数：
+#   --interactions hydrogen_bond,pi_stacking   只检测部分类型（默认 all=8类）
+#   --strategy two_pass|per_frame|per_tuple    检测策略（默认 two_pass）
+
+# 导出 h5 结果为 xvg/xpm/csv 并打印概览（支持多 Interaction h5）
+dii export -i out/salt_bridge.h5 -o out_export/
+```
+
+支持的 8 种相互作用类型：氢键、π-π 堆积、盐桥、π-阳离子、卤键、疏水、金属配位、水桥。
+
+在 Python 中调用：
+
+```python
+from DuIvyInteractions.pipeline import Pipeline
+
+# 配置：力场 + 策略
+pipeline = Pipeline(ff="amber", strategy="two_pass")
+pipeline.run("md.tpr", "md.xtc", "out/", interactions=None)  # None=全部8类
 ```
