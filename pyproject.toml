@@ -1,10 +1,10 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
-name = "DuIvyInteractions"
-version = "0.1.0"
+name = "duivyinteractions"
+version = "0.0.1"
 description = "基于 MD 拓扑力场参数的分子间相互作用判定工具"
 readme = "README.md"
 license = {text = "GPL-3.0"}
