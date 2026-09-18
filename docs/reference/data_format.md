@@ -30,7 +30,7 @@ interaction_<i>/
 ├── times/                  # 每帧时间，(n_frames,) float，单位 ps
 ├── metrics/                # 指标字典，每个指标一个数据集
 │   ├── distance/           # 数值指标，(n_pairs, n_frames) float
-│   └── pistacking_type/    # 字符串指标（如 π 堆积类型 P/T/N）保存为字符串数组
+│   └── pistacking_type/    # 字符串指标（如 π 堆积类型 P/T/N）展平为 1D 存储，shape 存 attrs
 └── groups/                 # 基团对数据
     ├── group_id/           # (n_groups,) 全局基团 ID
     ├── pair_index/         # (n_groups,) 每个基团所属的 pair 索引

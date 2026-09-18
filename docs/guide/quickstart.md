@@ -84,6 +84,18 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
 dii run -t md.tpr -f md.xtc -o out/ --ff amber --strategy two_pass
 ```
 
+## 性能参考
+
+以下为测试体系（KRAS-RBD，116,383 原子，101 帧）上的参考性能：
+
+| 检测策略 | 水桥耗时 | 说明 |
+|:---------|:---------|:-----|
+| `two_pass`（默认） | ~5 s | Pass1 逐帧发现活跃对 + Pass2 补全；水桥用 KDTree 预筛 |
+| `per_frame` | ~5 s | 逐帧向量化处理全部候选 |
+| `per_tuple` | 约 65 h | 逐候选对遍历全部帧；候选三元组多时极慢，仅作对照参考 |
+
+水桥候选三元组可达 24.9 万个，`per_tuple` 策略逐对遍历轨迹是其慢的根因。**大体系/长轨迹建议用默认 `two_pass`**。
+
 ## 下一步
 
 - 了解 8 类相互作用的检测判据与结果解读，见[结果解读](result)

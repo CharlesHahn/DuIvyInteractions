@@ -7,6 +7,7 @@
 :caption: 核心概念
 
 concepts
+glossary
 ```
 
 ```{toctree}
@@ -23,5 +24,13 @@ criteria
 :caption: 数据与扩展
 
 data_format
+api
 extension
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: 范围与限制
+
+limitations
 ```

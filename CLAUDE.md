@@ -68,9 +68,12 @@ DuIvyInteraction/
 │   ├── utils/                    # （空，待实现）
 │   └── visualizers/              # （空，待实现）
 ├── Tests/                        # 单元测试
+│   ├── unittests/                # 单元测试用例
+│   ├── test_MD_case/             # 测试数据（KRAS-RBD 体系，已 gitignore）
+│   └── original_draft/           # 早期验证脚本与调研（历史参考，不随包发布）
 ├── doc/                          # 中文设计文档 + project_background.md(论证归档)
-├── docs/  docs_en/               # 文档站点（中/英）
-└── test_MD_case/                 # 测试数据（gitignore）
+├── docs/  docs_en/               # 文档站点（中/英，ReadTheDocs）
+└── dist/                         # PyPI 构建产物（发布用）
 ```
 
 **架构原则**：单一职责；依赖高层→低层不反向（detectors/identifiers → core）；策略模式可插拔。
@@ -93,7 +96,7 @@ Pipeline(ff="amber", strategy="two_pass").run("md.tpr", "md.xtc", "out/", intera
 
 ## 当前代码状态（2026-09-16）
 
-- ✅ 阶段一：基团鉴定（D927 验证完成，已迁移进新架构；`original_draft/` 为历史参考）
+- ✅ 阶段一：基团鉴定（D927 验证完成，已迁移进新架构；`Tests/original_draft/` 保留历史脚本与调研，不随包发布）
 - ✅ 阶段二：相互作用检测（8 类型 × 3 策略，TwoPass 水桥 KDTree 优化 65h→~5s）
 - ✅ 阶段三：结果存储与导出（HDF5 序列化 + xvg/xpm/CSV 导出器 + XPM 手动构建修复）
 - ✅ 阶段四：命令行（dii run / dii export，多 Interaction 遍历 + 空数据/损坏 h5/0 帧防护 + 索引校验）

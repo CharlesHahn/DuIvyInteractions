@@ -45,6 +45,67 @@
 4. **注册到 DII**：在 `DII.py` 的 `ALL_INTERACTIONS` 与 `exporter_classes` 添加
 5. **补充测试**：新建 `Tests/unittests/test_<type>_*.py` 单测
 
+#### 检测器代码骨架（TwoPass）
+
+```python
+from ..core.interfaces import InteractionDetectorTwoPass
+
+# 判据阈值：模块级常量（与 PLIP 一致）
+MY_DIST_MAX = 4.0  # Å
+
+
+class MyInteractionDetectorTwoPass(InteractionDetectorTwoPass):
+    """新相互作用检测器（TwoPass 策略）。"""
+
+    @property
+    def name(self) -> str:
+        return "my_interaction"
+
+    @property
+    def required_group_types(self) -> list[str]:
+        return ["H_donor", "H_acceptor"]
+
+    @property
+    def metric_names(self) -> list[str]:
+        return ["distance"]
+
+    def initialize_candidates(self, groups, trajectory, tuple_filter=None):
+        # Pass1 前：生成候选对（可在此预筛）
+        return super().initialize_candidates(groups, trajectory, tuple_filter)
+
+    def compute_pair_metrics(self, group_tuples, all_positions):
+        # 对候选对计算全部帧的指标 -> {"distance": (n_pairs, n_frames)}
+        ...
+
+    def apply_threshold(self, metrics):
+        # 按判据判定每帧是否存在 -> (n_pairs, n_frames) bool
+        return metrics["distance"] <= MY_DIST_MAX
+```
+
+#### 导出器代码骨架
+
+```python
+from typing import Dict
+from .interaction_exporter import InteractionExporter
+
+
+class MyInteractionExporter(InteractionExporter):
+    """新相互作用导出器。"""
+
+    @property
+    def name(self) -> str:
+        return "My Interaction"
+
+    @property
+    def metric_labels(self) -> Dict[str, str]:
+        return {"distance": "Distance (Å)"}
+
+    def get_pair_label(self, interaction, pair_idx: int) -> str:
+        # 生成基团对标签
+        g1, g2 = interaction.groups[pair_idx]
+        return f"{g1.residue_name}{g1.residue_id}···{g2.residue_name}{g2.residue_id}"
+```
+
 ## 添加新判据（同一类型多判据）
 
 同一类型可有多个 Detector（如 `HBondStrict`, `HBondLoose`），只需继承基类并覆盖 `apply_threshold`。判据阈值是模块级常量，调参只需改常量。
