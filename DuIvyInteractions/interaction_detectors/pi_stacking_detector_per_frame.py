@@ -78,7 +78,7 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
         if trajectory is None:
             raise ValueError("trajectory is required")
         if n_workers > 1:
-            raise NotImplementedError("PerFrame 检测器暂不支持并行")
+            raise NotImplementedError("PerFrame detector does not support parallelism yet")
 
         # 1. 筛选芳香环
         rings = [g for g in groups if g.group_type == "aromatic_ring"]

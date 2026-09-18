@@ -5,6 +5,7 @@
 ## 解决什么问题
 
 现有工具（PLIP / ProLIF）分析 MD 轨迹时，通过 OpenBabel / RDKit 从坐标重建化学信息（键序、芳香性、加氢），丢弃了 MD 力场拓扑中原有的化学语义。这导致：
+
 - 对 trjconv 导出的 PDB（无 CONECT / 键序）芳香性判定失败
 - 每帧重复推断，效率低
 - 推断结果与力场参数不自洽
@@ -36,7 +37,7 @@
 ## 安装
 
 ```bash
-pip install -e .
+pip install duivyinteractions
 ```
 
 ## 项目状态
@@ -46,9 +47,6 @@ pip install -e .
 ## 使用
 
 ```bash
-# 安装
-pip install -e .
-
 # 运行相互作用检测并保存 h5（--ff 必选，当前支持 amber）
 dii run -t md.tpr -f md.xtc -o out/ --ff amber
 # 可选参数：
@@ -69,4 +67,77 @@ from DuIvyInteractions.pipeline import Pipeline
 # 配置：力场 + 策略
 pipeline = Pipeline(ff="amber", strategy="two_pass")
 pipeline.run("md.tpr", "md.xtc", "out/", interactions=None)  # None=全部8类
+```
+
+---
+
+# DuIvyInteraction (English)
+
+Molecular interaction detection tool based on MD topology force-field parameters.
+
+## Problem Statement
+
+Existing tools (PLIP / ProLIF) analyze MD trajectories by reconstructing chemistry (bond orders, aromaticity, protonation) from coordinates via OpenBabel / RDKit, discarding the chemical semantics already present in the MD force-field topology. This leads to:
+
+- Failed aromaticity detection on PDB files exported by `trjconv` (no CONECT / bond orders)
+- Repeated per-frame inference, inefficient
+- Results inconsistent with the force-field parameters
+
+## Core Idea
+
+**Read force-field atom types directly from the GROMACS tpr topology** to identify chemical groups deterministically, fully consistent with the simulation force field.
+
+Force-field atom types (e.g., GAFF `ca` = aromatic carbon, `na` = pyrrole nitrogen) are the retained record of chemical decisions made during parameterization by antechamber / sobtop. Reading them directly means zero loss, zero ambiguity, and no need to reverse-engineer chemistry from coordinates.
+
+## Advantages
+
+- **Deterministic**: group identification relies on force-field atom types, not geometric inference
+- **Consistent with the force field**: results share the same origin as the parameters used in the simulation
+- **All-atom explicit H**: H-bond donors (D–H bonds), water bridges (SOL residues), and metals (element + charge) all require zero inference
+- **Full Amber family support**: validated against amber03/94/96/99/99sb/99sb-ildn/GS/14sb + GAFF, zero type-mapping conflicts
+- **8 interaction types**: hydrogen bond, π-π stacking, salt bridge, π-cation, halogen bond, hydrophobic, metal coordination, water bridge
+
+## Dependencies
+
+- Python >= 3.9
+- NumPy >= 1.20
+- SciPy >= 1.7
+- MDAnalysis >= 2.0
+- h5py >= 3.0
+- DuIvyTools >= 0.6.0
+- GROMACS (`gmx dump`, for text-format tpr parsing)
+
+## Installation
+
+```bash
+pip install duivyinteractions
+```
+
+## Project Status
+
+Group identification, interaction detection, HDF5 result storage, xvg/xpm/CSV export, Pipeline orchestration, and the DII command-line tool are all complete. See the `doc/` directory for design documents.
+
+## Usage
+
+```bash
+# run interaction detection and save h5 (--ff required, currently supports amber)
+dii run -t md.tpr -f md.xtc -o out/ --ff amber
+# optional arguments:
+#   --interactions hydrogen_bond,pi_stacking    detect only selected types (default all=8)
+#   --strategy two_pass|per_frame|per_tuple     detection strategy (default two_pass)
+
+# export h5 results to xvg/xpm/csv and print overview (supports multi-Interaction h5)
+dii export -i out/salt_bridge.h5 -o out_export/
+```
+
+The 8 supported interaction types: hydrogen bond, π-π stacking, salt bridge, π-cation, halogen bond, hydrophobic, metal coordination, water bridge.
+
+Usage in Python:
+
+```python
+from DuIvyInteractions.pipeline import Pipeline
+
+# configuration: force field + strategy
+pipeline = Pipeline(ff="amber", strategy="two_pass")
+pipeline.run("md.tpr", "md.xtc", "out/", interactions=None)  # None = all 8 types
 ```

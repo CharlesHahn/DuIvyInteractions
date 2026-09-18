@@ -75,7 +75,7 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         if trajectory is None:
             raise ValueError("trajectory is required")
         if n_workers > 1:
-            raise NotImplementedError("PerFrame 检测器暂不支持并行")
+            raise NotImplementedError("PerFrame detector does not support parallelism yet")
 
         # 1. 分组
         from ..group_identifiers.amber_ff_identifier import WATER_RESIDUES

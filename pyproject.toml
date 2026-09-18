@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "duivyinteractions"
 version = "0.0.1"
-description = "基于 MD 拓扑力场参数的分子间相互作用判定工具"
+description = "Molecular interaction detection tool based on MD topology force-field parameters"
 readme = "README.md"
 license = {text = "GPL-3.0"}
 requires-python = ">=3.9"

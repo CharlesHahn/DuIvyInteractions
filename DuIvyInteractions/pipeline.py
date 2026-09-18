@@ -91,13 +91,13 @@ class Pipeline:
                 results = detector.detect(filtered, trajectory=u.trajectory)
                 save_interactions(results, os.path.join(output, f"{name}.h5"))
             except Exception as e:
-                print(f"[WARN] {name} 检测失败: {e}")
+                print(f"[WARN] {name} detection failed: {e}")
 
     def _make_identifier(self):
         """按力场构造基团识别器。"""
         if self.ff not in IDENTIFIER_CLASSES:
             raise ValueError(
-                f"未知力场: '{self.ff}'。可用: {', '.join(IDENTIFIER_CLASSES)}")
+                f"unknown force field: '{self.ff}'. Available: {', '.join(IDENTIFIER_CLASSES)}")
         return IDENTIFIER_CLASSES[self.ff]()
 
     def _make_detector(self, name: str):
