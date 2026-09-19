@@ -1,0 +1,17 @@
+{
+  "skill_name": "duivyinteractions-skill",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "用 dii 对 Tests/test_MD_case 的 md.tpr 和 md1ns.xtc 跑一次检测，只要 salt_bridge 和 hydrogen_bond 两种，输出到 test_temp/skill_test",
+      "expected_output": "运行 dii run，生成 test_temp/skill_test/salt_bridge.h5 和 hydrogen_bond.h5，两个文件可被 load_interactions 读回且 interaction_type 正确",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "把 test_temp/skill_test 里的 salt_bridge.h5 用 dii export 导出成 xvg/xpm/csv，放到 test_temp/skill_export",
+      "expected_output": "导出目录生成 salt_bridge_count.xvg、salt_bridge_existence.xpm、salt_bridge_summary.csv（及 distance.xvg），终端打印 overview",
+      "files": []
+    }
+  ]
+}
