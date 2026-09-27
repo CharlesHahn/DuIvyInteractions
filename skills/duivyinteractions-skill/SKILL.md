@@ -1,7 +1,7 @@
 ---
 name: duivyinteractions-skill
 description: 操作 DuIvyInteractions（dii）命令行工具：对 GROMACS tpr+xtc 轨迹运行分子相互作用检测（氢键、π-π 堆积、盐桥、疏水、卤键、金属配位、水桥、π-阳离子共 8 类），并将 h5 结果导出为 xvg/xpm/csv。当用户要求运行 dii、做分子相互作用分析、处理 MD 轨迹的相互作用，或导出/查看 .h5 相互作用结果时使用本技能。即使用户没有明确说出 "dii"，只要任务涉及 MD 轨迹中蛋白-配体/分子间相互作用（氢键、堆积、盐桥等）的检测或结果导出，也应主动使用本技能。
-compatibility: Requires Python 3.9+ and GROMACS gmx dump (for text-format tpr parsing); installs via pip install duivyinteractions
+compatibility: Requires Python 3.9+ with numpy / MDAnalysis / h5py / scipy / DuIvyTools; installs via pip install duivyinteractions
 ---
 
 # DuIvyInteractions（dii）操作指南
@@ -14,7 +14,7 @@ DuIvyInteractions（命令 `dii`）是分子动力学（MD）相互作用分析�
 - 两种调用方式等价：
   - `dii ...`（CLI 入口）
   - `python -m DuIvyInteractions.DII ...`（入口不可用时兜底）
-- 依赖：Python >= 3.9，numpy / MDAnalysis / h5py / scipy / DuIvyTools；文本 tpr 解析需要系统里有 GROMACS 的 `gmx dump`
+- 依赖：Python >= 3.9，numpy / MDAnalysis / h5py / scipy / DuIvyTools；dii 直接读 tpr 二进制（MDAnalysis），无需 GROMACS / gmx dump
 - 动手前先确认可用：`dii --help`；需要完整参数时让 agent 自己跑 `dii run --help` / `dii export --help`
 
 ## 快速开始示例
@@ -34,7 +34,7 @@ DuIvyInteractions（命令 `dii`）是分子动力学（MD）相互作用分析�
 dii run -t <topology.tpr> -f <trajectory.xtc> -o <out_dir> --ff amber [选项]
 ```
 
-- 必填：`-t/--tpr`、`-f/--xtc`、`-o/--output`、`--ff`（当前仅支持 `amber`；已验证 amber03/94/96/99/99sb/99sb-ildn/GS/14sb + GAFF）
+- 必填：`-t/--tpr`、`-f/--xtc`、`-o/--output`、`--ff`（仅接受字面值 `amber`，内部覆盖 Amber 全家族 + GAFF 类型映射）
 - 可选：`--interactions`（逗号分隔，默认 all）；`--strategy`（`two_pass` 默认 / `per_frame` / `per_tuple`）
 - 8 种类型：`hydrogen_bond, pi_stacking, salt_bridge, hydrophobic, halogen_bond, metal_coordination, water_bridge, pi_cation`
 
@@ -63,6 +63,7 @@ dii export -i <result.h5> -o <export_dir>
 
 1. **CLI 不支持按分子/残基过滤**相互作用来源（如"只看分子 A 与 B 之间"）。需要时用 Python API 的 `tuple_filter` 参数（Pipeline 检测器的 `detect(..., tuple_filter=...)`，接受 `(Tuple[Group, ...]) -> bool` 函数）
 2. `--ff` 仅支持 amber；**联合原子力场**（无显式 H，如 GROMOS）不支持——供体鉴定依赖显式 H，会失效
+3. **策略差异**：`--strategy per_frame` / `per_tuple` 用第一帧坐标做候选预筛（硬编码 cutoff），会遗漏"首帧相距远、后续帧才靠近"的相互作用；默认 `two_pass` 逐帧精确发现，无此问题。构象变化大的体系务必用默认 `two_pass`
 
 ## 常见错误与处理
 
