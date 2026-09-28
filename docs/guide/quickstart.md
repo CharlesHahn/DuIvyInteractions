@@ -22,19 +22,15 @@ dii run -t Tests/test_MD_case/md.tpr -f Tests/test_MD_case/md1ns.xtc -o out/ --f
 - `--ff`：力场类型，当前仅支持 `amber`
 - 默认检测全部 8 类，存为 `out/<类型>.h5`
 
-**真实输出**（截取自测试数据，盐桥与 π-堆积）：
+`dii run` 成功时不打印中间过程；检测完成后在输出目录生成每个类型的 h5 文件：
 
 ```
-=== salt_bridge ===
-基团对数: 47, 帧数: 101, 时间: 0~1000 ps
-metrics: ['distance']
-saved out/salt_bridge.h5
-
-=== pi_stacking ===
-基团对数: 10, 帧数: 101, 时间: 0~1000 ps
-metrics: ['distance', 'angle', 'offset', 'pistacking_type']
-saved out/pi_stacking.h5
+$ ls out/
+hydrogen_bond.h5  pi_stacking.h5  salt_bridge.h5  hydrophobic.h5
+halogen_bond.h5   metal_coordination.h5  water_bridge.h5  pi_cation.h5
 ```
+
+> 提示：某类型检测失败时打印 `[WARN] <类型> detection failed: <原因>`，但不中断其余类型。测试数据上盐桥识别出 47 对、π-堆积 10 对（101 帧）。
 
 ## 3. 导出结果
 
@@ -47,13 +43,13 @@ dii export -i out/salt_bridge.h5 -o out_export/
 **真实输出**（概览 + 生成的文件）：
 
 ```
-===== Salt Bridge 概览 =====
-类型:     salt_bridge
-基团对数: 47
-帧数:     101
-时间范围: 0.0 ~ 1000.0 ps
+===== Salt Bridge overview =====
+Type:     salt_bridge
+Pairs:    47
+Frames:   101
+Time range: 0.0 ~ 1000.0 ps
 
-Top 5 占位率:
+Top 5 occupancies:
   1. ARG210(3443-3451)···ASP211(3461-3463)  100.0%
   2. LYS70(1157-1160)···ASP180(2983-2985)  100.0%
   3. ARG291(4737-4745)···ASP295(4795-4797)  100.0%

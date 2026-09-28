@@ -7,13 +7,13 @@
 运行 `dii export` 时，会先打印该类型的概览：
 
 ```
-===== Salt Bridge 概览 =====
-类型:     salt_bridge
-基团对数: 47
-帧数:     101
-时间范围: 0.0 ~ 1000.0 ps
+===== Salt Bridge overview =====
+Type:     salt_bridge
+Pairs:    47
+Frames:   101
+Time range: 0.0 ~ 1000.0 ps
 
-Top 5 占位率:
+Top 5 occupancies:
   1. ARG210(3443-3451)···ASP211(3461-3463)  100.0%
   ...
 ```

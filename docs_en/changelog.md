@@ -2,33 +2,37 @@
 
 ## v0.1.0 (In Development)
 
+### 2026-09-17
+
+- **Adversarial documentation revision**: Created the Chinese user documentation site (guide + reference); optimized the main index directory structure; fixed MyST internal cross-references; corrected the label formats for hydrophobic interactions/halogen bonds in Interpreting Results and the description of the h5 string metric storage mechanism
+
 ### 2026-09-16
 
-- **XPM bug fix**: bypass DuIvyTools `refresh_by_value_matrix` remapping, add `_build_discrete_xpm` to manually build Discrete XPM (value_matrix as color index, colors/notes aligned by index), fixing color misalignment in heatmaps when the value set is incomplete
-- **dii export enhancement**: iterate over all Interactions (append sequence number for duplicate types), skip empty data (0 pairs / 0 frames), friendly error for corrupted h5, reject bool + dedupe pair_indices
-- **h5 serialization hardening**: metadata numpy-type fallback serialization; path parameter type validation (reject BytesIO/None garbage files)
-- **Dependencies**: add `h5py` / `scipy` / `DuIvyTools` to pyproject
-- **Adversarial tests**: add XPM manual build (9), DII export (4), path validation (4)
+- **XPM bug fix**: Bypassed the DuIvyTools `refresh_by_value_matrix` remapping and added `_build_discrete_xpm` to manually build the Discrete XPM (value_matrix is the color index; colors/notes are aligned by index), fixing heatmap color misalignment when the value set is incomplete
+- **dii export enhancement**: Iterates over all Interactions (same-type duplicates get serial numbers), skips export for empty data/0 frames, reports corrupted h5 files gracefully, rejects bool for pair_indices plus order-preserving deduplication
+- **h5 serialization hardening**: metadata supports fallback serialization for numpy types; type validation for the path parameter (rejects garbage files such as BytesIO/None)
+- **Dependency completion**: Added `h5py` / `scipy` / `DuIvyTools` to pyproject
+- **Adversarial testing**: Added tests for XPM manual construction (9 cases), DII export (4 cases), and path validation (4 cases)
 
 ### 2026-09-14
 
-- **CLI tool**: add `dii run` (interaction detection + h5 saving) and `dii export` (export xvg/xpm/csv + overview)
-- **Pipeline orchestration**: chain Reader → Identifier → Detector → h5 saving
+- **Command-line tools**: Added `dii run` (interaction detection + h5 saving) and `dii export` (export xvg/xpm/csv + overview)
+- **Pipeline orchestration**: Chains Reader → Identifier → Detector → h5 saving
 
 ### 2026-09-05 ~ 09-13
 
-- **Result serialization**: lossless HDF5 store/load (full Interaction/Group/Atom roundtrip)
-- **Exporters**: InteractionExporter base + 8 subclasses (xvg/xpm/CSV); CSV summary, π-stacking 3-value XPM
-- **Result time series**: Interaction gains `times` field
+- **Result serialization**: Lossless HDF5 storage/loading (full roundtrip of Interaction/Group/Atom)
+- **Exporter**: InteractionExporter base class + 8 subclasses (xvg/xpm/CSV); CSV summary, three-value XPM for π stacking types
+- **Result time series**: Added the times field to Interaction
 
 ### 2026-08-12 ~ 09-03
 
-- **Interaction detection**: all 8 types × 3 strategies (PerTuple / PerFrame / TwoPass)
-- **TwoPass performance**: water bridge reduced from 65h to ~5s via KDTree pre-filtering
-- **Directory refactor**: `input_readers` → `system_readers`, add `io/` directory
+- **Interaction detection**: All 8 types × 3 strategies (PerTuple / PerFrame / TwoPass) implemented
+- **TwoPass performance optimization**: After pre-filtering water bridges with KDTree, the runtime dropped from 65 h to ~5 s
+- **Directory refactoring**: `input_readers` → `system_readers`; added the `io/` directory
 
-### 2026-08-11 (Group Identification Complete)
+### 2026-08-11 (Group identification completed)
 
-- Group identification module complete (Amber force fields)
-- End-to-end pipeline from tpr to functional groups validated (D927 system)
-- Type mapping zero-conflict across full Amber family (amber03/94/96/99/99sb/99sb-ildn/GS/14sb + GAFF)
+- Group identification module completed (Amber force field)
+- Full pipeline from tpr to functional groups validated (D927 system verification)
+- The type mapping table shows zero conflicts across the entire Amber family (amber03/94/96/99/99sb/99sb-ildn/GS/14sb + GAFF)
