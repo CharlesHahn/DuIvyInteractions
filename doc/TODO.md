@@ -206,6 +206,23 @@ detector.detect(groups, trajectory,
 
 MDAnlysis提供了自动处理周期性的KDTree，或许之后可以替换到MDA的接口上来，而不是自己实现
 
+### 17. 正电残基的铵/胍氮被误判为 H 键受体 ⚠️（新力场通用，已确认 OPLS/CHARMM/GROMOS 存在）
+
+**现状**：受体判定逻辑（`_find_acceptors`）为"类型 ∈ 受体表 且 q<0"。各力场受体表均含氮类（如 OPLS `opls_287`/CHARMM `NH3`/GROMOS `NL` 等铵氮类型）。带负电荷的铵氮（如 OPLS LYSH NZ q=-0.30、CHARMM 质子化 His 咪唑氮 q=-0.51）因此被识别为 H_acceptor。
+
+**化学问题**：铵氮（N⁺，无孤对电子）与胍氮不应作为 H 键受体；正电残基的氮被判为受体可能导致氢键检测假阳性。
+
+**来源**：继承自 `amber_ff_identifier.py` 的 `ACCEPTOR_TYPES`（amber 同样含 N3 铵类），属跨力场既有行为，非 OPLS 独有。
+
+**待处理**：
+- 参考 PLIP/化学定义，明确"受体 = 有孤对电子的 N/O/S"判定
+- 在 `_find_acceptors` 或受体表中排除正电残基的铵/胍氮（如 LYSH NZ、ARG NE/NH1/NH2、质子化 His 咪唑氮）
+- 注意：需与 H_donor 判定（N-H 键）协调，避免剔除参与供体的氮
+
+**实现位置**：`group_identifiers/*_ff_identifier.py` 的 `_find_acceptors`
+
+**优先级**：低（当前阳性影响有限，作为已知现状记录）
+
 
 
 ---
