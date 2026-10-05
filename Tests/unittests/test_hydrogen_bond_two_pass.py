@@ -77,7 +77,7 @@ class TestPass1Only:
 
     def test_pair_count(self, sparse_result):
         sparse, _ = sparse_result
-        assert sparse.n_pairs == 119
+        assert sparse.n_pairs == 108
 
     def test_each_pair_has_metrics(self, sparse_result):
         sparse, _ = sparse_result
@@ -100,7 +100,7 @@ class TestDetect:
         assert hydrogen_bonds[0].interaction_type == "hydrogen_bond"
 
     def test_n_pairs(self, hydrogen_bonds):
-        assert hydrogen_bonds[0].n_pairs == 119
+        assert hydrogen_bonds[0].n_pairs == 108
 
     def test_all_inter_protein(self, hydrogen_bonds):
         for g1, g2 in hydrogen_bonds[0].groups:

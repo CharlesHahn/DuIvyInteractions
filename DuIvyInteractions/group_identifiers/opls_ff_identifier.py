@@ -85,13 +85,17 @@ class OplsFFGroupIdentifier(AmberFFGroupIdentifier):
     # ============================================================
 
     def _find_acceptors(self, res: ResidueData,
-                        start_id: int) -> Tuple[List[Group], int]:
-        """检测 H 键受体（类型 ∈ OPLS_ACCEPTOR_TYPES + q<0，同 amber）。"""
+                        start_id: int,
+                        exclude_atoms: Set[int] = None) -> Tuple[List[Group], int]:
+        """检测 H 键受体（类型 ∈ OPLS_ACCEPTOR_TYPES + q<0，排除无孤对原子）。"""
+        exclude_atoms = exclude_atoms or set()
         groups: List[Group] = []
         gid = start_id
 
         for atom in res.atoms:
             if atom.atom_type in OPLS_ACCEPTOR_TYPES and atom.atom_charge < 0:
+                if atom.atom_global_idx in exclude_atoms:
+                    continue
                 groups.append(Group(
                     group_id=gid, group_type="H_acceptor",
                     molecule=res.molecule_name,

@@ -90,7 +90,7 @@ class TestGroupCounts:
 
     def test_total_groups(self, group_counts):
         total = sum(group_counts.values())
-        assert total == 152385
+        assert total == 152307
 
     def test_H_donor(self, group_counts):
         assert group_counts["H_donor"] == 74623
@@ -105,7 +105,7 @@ class TestGroupCounts:
         assert sample.metadata == {}
 
     def test_H_acceptor(self, group_counts):
-        assert group_counts["H_acceptor"] == 37954
+        assert group_counts["H_acceptor"] == 37876
 
     def test_water(self, group_counts):
         assert group_counts["water"] == 37021

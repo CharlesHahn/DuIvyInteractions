@@ -148,16 +148,33 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         rings, gid = self._find_aromatic_rings(res, bond_graph, gid)
         groups.extend(rings)
 
-        # H 键供体/受体
+        # H 键供体
         donors, gid = self._find_donors(res, gid)
         groups.extend(donors)
 
-        acceptors, gid = self._find_acceptors(res, gid)
-        groups.extend(acceptors)
-
-        # 带电基团
+        # 带电基团（提前：为受体识别排除正电基团成员）
         charged, gid = self._find_charged(res, bond_graph, gid)
         groups.extend(charged)
+
+        # 计算受体排除集合：
+        # ① 正电基团成员（无孤对，不可作受体）
+        # ② 芳香环内带 H 的氮（吡咯型 NH，孤对参与芳香共轭，不可作受体）
+        exclude_atoms: Set[int] = set()
+        for g in charged:
+            if g.group_type == "charged_positive":
+                exclude_atoms.update(g.atom_indices)
+        for ring in rings:
+            for atom in ring.atoms:
+                if atom.atom_element != 'N':
+                    continue
+                neighbors = [atom_map[i] for i in bond_graph.get(atom.atom_global_idx, set())
+                             if i in atom_map]
+                if any(n.atom_element == 'H' for n in neighbors):
+                    exclude_atoms.add(atom.atom_global_idx)
+
+        # H 键受体（排除无孤对原子）
+        acceptors, gid = self._find_acceptors(res, gid, exclude_atoms)
+        groups.extend(acceptors)
 
         # 卤键供体
         hal_donors, gid = self._find_halogen_donors(res, bond_graph, gid, atom_map)
@@ -368,13 +385,21 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         return None, None
 
     def _find_acceptors(self, res: ResidueData,
-                        start_id: int) -> Tuple[List[Group], int]:
-        """检测 H 键受体。"""
+                        start_id: int,
+                        exclude_atoms: Set[int] = None) -> Tuple[List[Group], int]:
+        """检测 H 键受体。
+
+        exclude_atoms: 需排除的原子集合（正电基团成员 + 环内带 H 的吡咯型 N），
+        这些原子无可用孤对，化学上不可作 H 键受体。
+        """
+        exclude_atoms = exclude_atoms or set()
         groups: List[Group] = []
         gid = start_id
 
         for atom in res.atoms:
             if atom.atom_type in ACCEPTOR_TYPES and atom.atom_charge < 0:
+                if atom.atom_global_idx in exclude_atoms:
+                    continue
                 groups.append(Group(
                     group_id=gid, group_type="H_acceptor",
                     molecule=res.molecule_name,
