@@ -2,7 +2,7 @@
 """两个 Reader（GmxTprReader / GmxTprDumpReader）一致性单元测试。
 
 同一体系（KRAS-RBD D927）分别经：
-- GmxTprReader 读二进制 tpr（Tests/test_MD_case/md.tpr，MDAnalysis）
+- GmxTprReader 读二进制 tpr（Tests/test_MD_case_amber/md.tpr，MDAnalysis）
 - GmxTprDumpReader 读 gmx dump 文本（Tests/original_draft/dump_md_D927.tpr.txt）
 
 TestConsistentAcrossReaders：两 Reader 输出必须一致的维度（同源体系，
@@ -20,7 +20,7 @@ import pytest
 from DuIvyInteractions.system_readers import GmxTprReader, GmxTprDumpReader
 
 
-TPR_FILE = Path(__file__).parent.parent / "test_MD_case" / "md.tpr"
+TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
 DUMP_FILE = str(Path(__file__).parent.parent / "original_draft"
                 / "dump_md_D927.tpr.txt").replace("\\", "/")
 

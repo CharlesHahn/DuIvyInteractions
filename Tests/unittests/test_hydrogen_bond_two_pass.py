@@ -17,8 +17,8 @@ from DuIvyInteractions.interaction_detectors import (
     HydrogenBondDetectorTwoPass, HydrogenBondDetectorPerFrame)
 
 
-TPR_FILE = Path(__file__).parent.parent / "test_MD_case" / "md.tpr"
-XTC_FILE = Path(__file__).parent.parent / "test_MD_case" / "md1ns.xtc"
+TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
+XTC_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md1ns.xtc"
 
 MOL_RBD = "seg_0_RBD_pro"
 MOL_KRAS = "seg_2_KRAS_pro"

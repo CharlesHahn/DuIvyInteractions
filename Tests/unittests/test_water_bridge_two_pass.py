@@ -15,8 +15,8 @@ from DuIvyInteractions.interaction_detectors import WaterBridgeDetectorTwoPass
 import MDAnalysis as mda
 
 
-TPR_FILE = Path(__file__).parent.parent / "test_MD_case" / "md.tpr"
-XTC_FILE = Path(__file__).parent.parent / "test_MD_case" / "md1ns.xtc"
+TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
+XTC_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md1ns.xtc"
 
 
 @pytest.fixture(scope="module")

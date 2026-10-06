@@ -14,7 +14,7 @@ from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
 
 
 # 测试数据路径
-TPR_FILE = Path(__file__).parent.parent / "test_MD_case" / "md.tpr"
+TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
 
 # GmxTprReader 的分子名前缀
 MOL_RBD = "seg_0_RBD_pro"

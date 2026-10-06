@@ -18,8 +18,8 @@ import MDAnalysis as mda
 
 
 # 测试数据路径
-TPR_FILE = Path(__file__).parent.parent / "test_MD_case" / "md.tpr"
-XTC_FILE = Path(__file__).parent.parent / "test_MD_case" / "md1ns.xtc"
+TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
+XTC_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md1ns.xtc"
 
 
 @pytest.fixture(scope="module")

@@ -15,8 +15,8 @@ from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
 from DuIvyInteractions.interaction_detectors import HydrophobicDetectorPerFrame
 
 
-TPR_FILE = Path(__file__).parent.parent / "test_MD_case" / "md.tpr"
-XTC_FILE = Path(__file__).parent.parent / "test_MD_case" / "md1ns.xtc"
+TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
+XTC_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md1ns.xtc"
 
 
 @pytest.fixture(scope="module")

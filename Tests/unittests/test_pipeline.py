@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pipeline 单元测试：注册表完整性、构造器、基团过滤、run 全链路。
 
-真实数据：Tests/test_MD_case/md.tpr + md1ns.xtc（KRAS-RBD D927 体系）。
+真实数据：Tests/test_MD_case_amber/md.tpr + md1ns.xtc（KRAS-RBD D927 体系）。
 """
 
 import shutil
@@ -22,8 +22,8 @@ from DuIvyInteractions.io.h5 import load_interactions
 from DuIvyInteractions.core.datas import Group
 
 
-TPR_FILE = Path(__file__).parent.parent / "test_MD_case" / "md.tpr"
-XTC_FILE = Path(__file__).parent.parent / "test_MD_case" / "md1ns.xtc"
+TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
+XTC_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md1ns.xtc"
 
 TMP_DIR = Path(__file__).parent.parent.parent / "test_temp" / "pipeline_test"
 
