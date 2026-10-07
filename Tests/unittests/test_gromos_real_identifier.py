@@ -7,6 +7,10 @@
 
 断言基线（已实测）：H_donor=200, H_acceptor=336, aromatic_ring=10,
 charged_positive=10, charged_negative=15, hydrophobic=330, 总计 1584。
+
+⚠️ 注意：本测试的全部数值断言（基团计数、pair 数）来自程序自动探测，
+【尚未经人工核验】（未与 gmx dump 或人工分子分析交叉确认）。
+数值可能与真实化学不符，请谨慎引用，待人工核验后更新。
 """
 
 import pytest
