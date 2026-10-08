@@ -399,3 +399,35 @@ class TestMetalBinding:
                          if g.group_type == "metal_binding"
                          and g.residue_name in ("SOL", "HOH", "WAT")]
         assert len(water_binding) == 0
+
+
+class TestGlycosidicNitrogen:
+    """核酸糖苷 N（amber `N*`=嘌呤 N9/嘧啶 N1，连糖 3 键吡咯型）非受体。
+
+    依据：3 键环内 sp2 N 孤对参与芳香=吡咯型非受体（教科书杂环化学）；
+    碱基配对受体位 A=N1/N3/N7 无 N9。rtp 实证 `N*` 仅用于糖苷 N9/N1。
+    回归保护：`N*` 已从 ACCEPTOR_TYPES 剔除。
+    """
+
+    def test_glycosidic_N_not_acceptor(self):
+        """构造含 N9（N* 类型，连糖 3 键，q<0）的核酸残基，N9 不应是受体。"""
+        from DuIvyInteractions.core.datas import (
+            AtomData, BondData, ResidueData, SystemData,
+        )
+
+        atoms = [
+            AtomData(0, 0, "N9", "N*", "N", -0.0268, 14.0),   # 糖苷 N（3 键）
+            AtomData(1, 1, "C1'", "C*", "C", 0.10, 12.0),      # 糖 C1'
+            AtomData(2, 2, "C4", "CB", "C", 0.20, 12.0),
+            AtomData(3, 3, "C8", "CK", "C", 0.15, 12.0),
+        ]
+        bonds = [BondData(0, 1, "bond"), BondData(0, 2, "bond"),
+                 BondData(0, 3, "bond")]
+        res = ResidueData(residue_name="ADE", residue_global_idx=0,
+                          residue_idx_in_molecule=1, molecule_name="RNA",
+                          atoms=atoms, bonds=bonds)
+        sd = SystemData(system_name="t", residues=[res], inter_residue_bonds=[])
+        acc = [g for g in AmberFFGroupIdentifier().identify(sd)
+               if g.group_type == "H_acceptor"]
+        acc_names = {a.atoms[0].atom_name for a in acc}
+        assert "N9" not in acc_names, "核酸糖苷 N9（N*）不应是受体"

@@ -45,7 +45,6 @@ ACCEPTOR_TYPES = frozenset({
     #         —— 同一类型二义，由 _find_acceptors 按 H 邻居数区分
     #   N2  : 核酸氨基（如腺嘌呤 N6，带 2H，受体，Luisi 1998; Baik 2003）
     "NB", "NC",                                # Amber 无 H 吡啶/环内氮（受体）
-    "N*",                                      # 核酸糖苷 N（嘌呤 N9；受体资格证据不足，暂保留待查）
     "S", "SH",                                 # Amber 硫
 })
 

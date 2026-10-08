@@ -185,6 +185,19 @@ _SOL = [
 ]
 _SOL_BONDS = [("OH2", "H1"), ("OH2", "H2")]
 
+# CGenFF 配体模板（受体资格依据 top_all36_cgenff.rtf MASS 注释）
+_CG_AMIDE = [
+    ("N", "NG2S1", "N", -0.47), ("H", "H", "H", 0.31),
+    ("CA", "CT1", "C", 0.07), ("C", "C", "C", 0.51), ("O", "O", "O", -0.51),
+]
+_CG_AMIDE_BONDS = [("N", "H"), ("N", "CA"), ("CA", "C"), ("C", "O")]
+
+_CG_IMINE = [
+    ("N", "NG2D1", "N", -0.50), ("C", "CG2D1", "C", 0.20),
+    ("C2", "CG2DC1", "C", 0.10), ("H", "H", "H", 0.20),
+]
+_CG_IMINE_BONDS = [("N", "C"), ("N", "C2"), ("N", "H")]
+
 _TEMPLATES = {
     "GLY_NTER": (_GLY_NTER, _GLY_NTER_BONDS),
     "PHE": (_PHE, _PHE_BONDS),
@@ -196,6 +209,8 @@ _TEMPLATES = {
     "GLU": (_GLU, _GLU_BONDS),
     "CYM": (_CYM, _CYM_BONDS),
     "SOL": (_SOL, _SOL_BONDS),
+    "CG_AMIDE": (_CG_AMIDE, _CG_AMIDE_BONDS),
+    "CG_IMINE": (_CG_IMINE, _CG_IMINE_BONDS),
 }
 
 
@@ -375,6 +390,27 @@ class TestDonorAcceptor:
                      [g for g in _groups_of("PHE", groups)
                       if g.group_type == "H_acceptor"]}
         assert "N" not in acc_names, "主链肽键 N 不应是受体"
+
+    def test_cgenff_amide_N_not_acceptor(self, identifier):
+        """CGenFF 肽键 N（NG2S1）非受体；羰基 O 受体（配体回归保护）。
+
+        依据 top_all36_cgenff.rtf MASS 注释：NG2S1 = "peptide nitrogen (CO=NHR)"。
+        """
+        sd = _make_system(["CG_AMIDE"])
+        acc = [g for g in identifier.identify(sd) if g.group_type == "H_acceptor"]
+        names = {a.atoms[0].atom_name for a in acc}
+        assert "N" not in names, "CGenFF 肽键 N（NG2S1）不应是受体"
+        assert "O" in names, "羰基 O 应保持受体"
+
+    def test_cgenff_imine_N_is_acceptor(self, identifier):
+        """CGenFF 中性亚胺 N（NG2D1）是受体（配体回归保护）。
+
+        依据 top_all36_cgenff.rtf MASS 注释：NG2D1 = "neutral imine/Schiff's base (C=N-R)"。
+        """
+        sd = _make_system(["CG_IMINE"])
+        acc = [g for g in identifier.identify(sd) if g.group_type == "H_acceptor"]
+        names = {a.atoms[0].atom_name for a in acc}
+        assert "N" in names, "CGenFF 中性亚胺 N（NG2D1）应是受体"
 
     def test_water_group(self, groups):
         waters = [g for g in _groups_of("SOL", groups)
