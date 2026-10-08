@@ -37,10 +37,17 @@ CHARMM_ACCEPTOR_TYPES = frozenset({
     #     （Eildal 2013; 教科书；CHARMM rtf MASS 段类型名自证语义）
     # 保留 N(proline N，无 H，受体，Deepak 2016)、NR2(unprotonated his N，吡啶型，受体)
     "N", "NR2",
-    # CGenFF 氮（配体扩展；各 NG* 类型的受体资格逐项待查证，暂保留）
-    "NG2D1", "NG2O1", "NG2P1", "NG2R50", "NG2R51", "NG2R52",
-    "NG2R60", "NG2R61", "NG2R62", "NG2RC0", "NG2S0", "NG2S1",
-    "NG2S2", "NG3N1",
+    # CGenFF 氮（配体扩展）——受体资格按 top_all36_cgenff.rtf MASS 段官方注释逐项判定：
+    # 保留（有可用孤对，受体）：
+    "NG2D1",                # 中性亚胺/席夫碱 (C=N-R, acyclic amidine, guanidine)
+    "NG2R50", "NG2R60", "NG2R62",  # 5/6 元环双键中性 N（吡啶型；R50=嘌呤 N7，受体）
+    "NG2S3",                # 环外胺/苯胺型 N（受体，Luisi 1998; Baik 2003）
+    "NG3N1",                # 肼 N（sp3 胺，受体）
+    # 剔除（CGenFF MASS 注释自证非受体；孤被共振占用/带 H 无孤对/正电）：
+    # NG2O1(硝基苯N) NG2P1(质子化亚胺) NG2R51(5元单键sp2 N=His/Trp吡咯，带H)
+    # NG2R52(质子化席夫碱/脒/胍) NG2R61(6元单键亚胺N) NG2RC0(5/6元桥头N)
+    # NG2S0(N,N-二取代酰胺/配体Pro类，见证据清单Pro例外) NG2S1(肽键N) NG2S2(末端酰胺N)
+    # NG2S4(羟肟酸N)
     # 硫
     "S", "SM", "SS",
     # 卤素（CGenFF 命名；卤素可作 H 键受体，Lin 2017）

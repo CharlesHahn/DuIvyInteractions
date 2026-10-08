@@ -33,13 +33,17 @@
 | `NB` | His 无 H 态 / 核酸 N7（吡啶） | 保留 |
 | `NC` | 核酸环内无 H N（A N1/C N3） | 保留 |
 | `N2` | 核酸氨基（A N6） | 保留（Luisi 1998; Baik 2003） |
-| `N*` | 核酸糖苷 N（嘌呤 N9） | 保留（证据不足，待查） |
+| `N*` | 核酸糖苷 N（嘌呤 N9） | 保留（2026-09-30 查证：JOC 2012 量子化学示 N9 位受体倾向；但核苷 N9 连糖为 3 键吡咯型、且**从未出现在碱基配对受体位**（A 受体=N1/N3/N7），实际受体能力弱/可及性低——维持保留，低影响） |
 | `n`(GAFF) | 配体酰胺 | **剔除** |
-| `n2`(GAFF) | 语义待查证 | 保留（证据不足，待查） |
+| `n2`(GAFF) | **2026-09-30 查证**：GAFF 官方类型表定义 = *"sp2 N with 2 substituted double bond"*（亚胺型 -N=C<，有孤对）→ 受体 | 保留（受体） |
 | `n3`(GAFF) | 中性胺 | 保留（受体） |
 
-### CHARMM（top_all36_prot.rtf MASS 段类型名自证）
-剔 `NH1`(peptide)/`NH2`(amide)/`NH3`(ammonium)/`NC2`(guanidinium)/`NY`(pyrrole)/`NR1`,`NR3`(protonated his)；留 `N`(proline)/`NR2`(unprotonated his)+CGenFF `NG*`（待逐项查证）。
+### CHARMM（top_all36_prot.rtf + top_all36_cgenff.rtf MASS 段类型名自证）
+蛋白：剔 `NH1`(peptide)/`NH2`(amide)/`NH3`(ammonium)/`NC2`(guanidinium)/`NY`(pyrrole)/`NR1`,`NR3`(protonated his)；留 `N`(proline)/`NR2`(unprotonated his)。
+
+CGenFF 配体 N（2026-09-30 按官方 MASS 注释逐项判定）：
+- 留（受体）：`NG2D1`(中性亚胺/席夫碱)、`NG2R50`(5元双键中性N=嘌呤N7)、`NG2R60`/`NG2R62`(6元双键中性N=吡啶型)、`NG2S3`(环外胺/苯胺型，Luisi 1998)、`NG3N1`(肼N=sp3胺)
+- 剔（非受体，注释自证）：`NG2O1`(硝基苯N)、`NG2P1`(质子化亚胺)、`NG2R51`(5元单键sp2 N=His/Trp吡咯带H)、`NG2R52`(质子化席夫碱/脒/胍)、`NG2R61`(6元单键亚胺N)、`NG2RC0`(5/6元桥头N)、`NG2S0`(N,N-二取代酰胺，**含配体Pro类——Pro受体例外见 §3**)、`NG2S1`(肽键N)、`NG2S2`(末端酰胺N)、`NG2S4`(羟肟酸N)
 
 ### OPLS（GROMACS oplsaa.ff aminoacids.rtp 实测）
 剔 `opls_238`(主链N)/`opls_237`(酰胺N)/`opls_287`(LYSH铵)/`opls_300`,`opls_303`(Arg胍)/`opls_503`(带H吡咯)/`opls_512`(双质子化His)/`opls_749`,`opls_750`,`opls_751`(ARGN中性胍)；留 `opls_239`(Pro)/`opls_511`(无H吡啶)/`opls_900`(中性胺LYS)。
@@ -53,9 +57,10 @@
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 嘌呤 N9（amber `N*`）受体资格 | **待查** | 无直接文献；当前按"证据不足不动"保留为受体候选 |
-| GAFF `n2` 语义 | **待查** | 需查 gaff.dat 定义后定剔/留 |
-| CGenFF `NG*` 逐项 H 数 | **待查** | 配体类型需逐个核对后再定 |
+| 嘌呤 N9（amber `N*`）受体资格 | **已查证，维持保留** | JOC 2012（"Effect of the H-Bonding on Aromaticity of Purine Tautomers"）量子化学示 N7/N9 均可形成 N···HF H 键；但**核苷 N9 连糖为 3 键吡咯型、从未出现在碱基配对受体位**（A 受体=N1/N3/N7，Watson-Crick/Hoogsteen 均无 N9）——实际弱受体/低可及性，保留影响极小 |
+| GAFF `n2` 语义 | **已查证，保留** | GAFF 官方类型表（ambermd.org/antechamber/gaff.html）定义 `n2 = sp2 N with 2 substituted double bond`（亚胺型，有孤对）→ 受体 |
+| CGenFF `NG*` 逐项 | **已查证，部分剔/留** | 按 top_all36_cgenff.rtf MASS 段官方注释逐项判定（见 §2 CHARMM 部分）：留 NG2D1/R50/R60/R62/S3/N3N1，剔 NG2O1/P1/R51/R52/R61/RC0/S0/S1/S2/S4 |
+| **NG2S0（N,N-二取代酰胺）与配体 Pro 类** | **登记例外** | CGenFF 把 Pro N 归 NG2S0（CO=NRR'）；Deepak 2016 示 Pro 受体（环约束弱化共振）——但一般叔酰胺（共振）非受体，同一类型不可分。剔 NG2S0 丢失配体 Pro 类弱受体，登记为已知例外 |
 | GROMOS 核酸氨基 N | **已知不一致** | GROMOS 简化判据"带 H 即排除"会连带排除核酸氨基（Luisi 判为受体，amber 用 `N2` 保留）；GROMOS 版设计文档已声明配体/核酸场景受限，属已知边界 |
 | 胍基 N 非受体 | **化学推理级** | 无"胍基作受体"文献，判定靠胍基共振化学事实；方向与全部胍基文献（供体角色）一致 |
 
