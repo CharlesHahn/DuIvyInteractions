@@ -103,6 +103,12 @@ Pipeline(ff="amber", strategy="two_pass").run("md.tpr", "md.xtc", "out/", intera
 
 **未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果人工审查、长轨迹 PerFrame 内存优化、PBC 处理等。
 
+## 测试约定（2026-09-30）
+
+- **策略一（per_tuple）不跑**：`Tests/unittests/test_*.py`（**无策略后缀** = per_tuple 策略）处于"**可能被舍弃**"状态。跑测试时**跳过**策略一，只跑策略二（`*_per_frame.py`）与策略三（`*_two_pass.py`）。
+- 跑"全量测试"用**显式文件列表**（剔除无后缀的 `test_<type>.py`），不要 `pytest Tests/unittests/` 无差别跑。
+- per_tuple 与 per_frame/two_pass 共用同一基团集合（Group 由同一 Identifier 产出），基团修复后只需同步 per_frame/two_pass 的断言基线。
+
 ## 常用命令
 
 ```bash

@@ -114,7 +114,7 @@ class TestFilterGroups:
         groups = [self._make_group(0, "H_donor"),
                   self._make_group(1, "water", "SOL")]
         det = Pipeline("amber", "two_pass")._make_detector("water_bridge")
-        filtered = Pipeline._filter_groups(groups, det)
+        filtered = Pipeline._filter_groups(groups, det, {"SOL", "HOH", "WAT"})
         assert {g.group_type for g in filtered} == {"H_donor", "water"}
 
     def test_saltbridge_excludes_water(self):
@@ -122,16 +122,33 @@ class TestFilterGroups:
                   self._make_group(1, "water", "SOL"),
                   self._make_group(2, "charged_negative", "ASP")]
         det = Pipeline("amber", "two_pass")._make_detector("salt_bridge")
-        filtered = Pipeline._filter_groups(groups, det)
+        filtered = Pipeline._filter_groups(groups, det, {"SOL", "HOH", "WAT"})
         assert {g.group_type for g in filtered} == {
             "charged_positive", "charged_negative"}
 
     def test_real_groups_saltbridge_filter(self, real_groups):
         det = Pipeline("amber", "two_pass")._make_detector("salt_bridge")
-        filtered = Pipeline._filter_groups(real_groups, det)
+        filtered = Pipeline._filter_groups(real_groups, det, {"SOL", "HOH", "WAT"})
         types = {g.group_type for g in filtered}
         assert types == {"charged_positive", "charged_negative"}
         assert all(g.residue_name not in ("SOL", "HOH") for g in filtered)
+
+    @pytest.mark.parametrize("water_type", ["charmm", "opls"])
+    def test_cross_ff_water_excluded(self, water_type):
+        """CHARMM TIP3 / OPLS HO4 水在非水桥检测中被排除（力场自洽回归保护）。"""
+        residue = "TIP3" if water_type == "charmm" else "HO4"
+        groups = [self._make_group(0, "charged_positive"),
+                  self._make_group(1, "H_acceptor", residue),
+                  self._make_group(2, "charged_negative", "ASP")]
+        det = Pipeline(water_type, "two_pass")._make_detector("salt_bridge")
+        # 从对应识别器取水残基集合（charmm/opls 各自定义）
+        from DuIvyInteractions.group_identifiers import IDENTIFIER_CLASSES
+        water_residues = IDENTIFIER_CLASSES[water_type].WATER_RESIDUES
+        assert residue in water_residues
+        filtered = Pipeline._filter_groups(groups, det, water_residues)
+        types = {g.group_type for g in filtered}
+        assert types == {"charged_positive", "charged_negative"}
+        assert all(g.residue_name != residue for g in filtered)
 
 
 class TestRun:
@@ -157,3 +174,49 @@ class TestRun:
         assert not (out / "not_a_type.h5").exists()
         captured = capsys.readouterr()
         assert "not_a_type detection failed" in captured.out
+
+
+class TestWaterResidues:
+    """跨力场水排除（识别器层 + 防御）。"""
+
+    def test_all_identifiers_water_residues_nonempty(self):
+        """每个识别器必须暴露非空 WATER_RESIDUES（防基类默认空集静默失效）。"""
+        from DuIvyInteractions.group_identifiers import IDENTIFIER_CLASSES
+        for ff, cls in IDENTIFIER_CLASSES.items():
+            assert cls.WATER_RESIDUES, f"{ff} 识别器 WATER_RESIDUES 为空"
+
+    def test_charmm_tip3_not_metal_binding(self):
+        """CHARMM TIP3 水：识别为 water 基团，不进入 metal_binding（力场自洽）。"""
+        from DuIvyInteractions.core.datas import AtomData, BondData, ResidueData, SystemData
+        from DuIvyInteractions.group_identifiers.charmm_ff_identifier import CharmmFFGroupIdentifier
+
+        atoms = [AtomData(0, 0, "OH2", "OT", "O", -0.834, 16.0),
+                 AtomData(1, 1, "H1", "HT", "H", 0.417, 1.0),
+                 AtomData(2, 2, "H2", "HT", "H", 0.417, 1.0)]
+        bonds = [BondData(0, 1, "bond"), BondData(0, 2, "bond")]
+        res = ResidueData(residue_name="TIP3", residue_global_idx=0,
+                          residue_idx_in_molecule=1, molecule_name="WAT",
+                          atoms=atoms, bonds=bonds)
+        sd = SystemData(system_name="t", residues=[res], inter_residue_bonds=[])
+        groups = CharmmFFGroupIdentifier().identify(sd)
+        types = {g.group_type for g in groups}
+        assert "water" in types
+        assert "metal_binding" not in types, "TIP3 水不应是 metal_binding"
+
+    def test_opls_ho4_not_metal_binding(self):
+        """OPLS HO4（TIP4P）水：不进入 metal_binding（力场自洽）。"""
+        from DuIvyInteractions.core.datas import AtomData, BondData, ResidueData, SystemData
+        from DuIvyInteractions.group_identifiers.opls_ff_identifier import OplsFFGroupIdentifier
+
+        atoms = [AtomData(0, 0, "OW", "opls_113", "O", 0.0, 16.0),
+                 AtomData(1, 1, "HW1", "opls_114", "H", 0.52, 1.0),
+                 AtomData(2, 2, "HW2", "opls_114", "H", 0.52, 1.0)]
+        bonds = [BondData(0, 1, "bond"), BondData(0, 2, "bond")]
+        res = ResidueData(residue_name="HO4", residue_global_idx=0,
+                          residue_idx_in_molecule=1, molecule_name="WAT",
+                          atoms=atoms, bonds=bonds)
+        sd = SystemData(system_name="t", residues=[res], inter_residue_bonds=[])
+        groups = OplsFFGroupIdentifier().identify(sd)
+        types = {g.group_type for g in groups}
+        assert "water" in types
+        assert "metal_binding" not in types, "HO4 水不应是 metal_binding"

@@ -34,6 +34,11 @@ class Reader(ABC):
 class GroupIdentifier(ABC):
     """基团识别器接口。"""
 
+    # 水分子残基名集合（子类必须覆盖为非空集合）。
+    # pipeline 与 _find_metal_binding / _find_water 统一经 self.WATER_RESIDUES 取用，
+    # 保证跨力场的水排除（如 CHARMM TIP3、OPLS HO4/HO5）正确。
+    WATER_RESIDUES = frozenset()
+
     @property
     @abstractmethod
     def name(self) -> str:

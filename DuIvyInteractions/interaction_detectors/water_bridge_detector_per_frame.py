@@ -78,12 +78,15 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
             raise NotImplementedError("PerFrame detector does not support parallelism yet")
 
         # 1. 分组
-        from ..group_identifiers.amber_ff_identifier import WATER_RESIDUES
-        donors = [g for g in groups
-                  if g.group_type == "H_donor" and g.residue_name not in WATER_RESIDUES]
+        # 分组：供体/受体排除水分子自身（按 water 组原子集合，跨力场通用，不依赖残基名）
         waters = [g for g in groups if g.group_type == "water"]
+        water_atoms = set()
+        for w in waters:
+            water_atoms.update(w.atom_indices)
+        donors = [g for g in groups
+                  if g.group_type == "H_donor" and not (set(g.atom_indices) & water_atoms)]
         acceptors = [g for g in groups
-                     if g.group_type == "H_acceptor" and g.residue_name not in WATER_RESIDUES]
+                     if g.group_type == "H_acceptor" and not (set(g.atom_indices) & water_atoms)]
 
         if not donors or not waters or not acceptors:
             return []

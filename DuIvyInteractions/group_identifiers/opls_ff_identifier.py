@@ -81,6 +81,9 @@ OPLS_NEGATIVE_RESIDUES = {
 class OplsFFGroupIdentifier(AmberFFGroupIdentifier):
     """OPLS 力场基团识别器（OPLS-AA/L）。"""
 
+    # 水残基名（OPLS: HOH/SPC、HO4/TIP4P、HO5/TIP5P + SOL/WAT）
+    WATER_RESIDUES = OPLS_WATER_RESIDUES
+
     @property
     def name(self) -> str:
         return "opls_ff"
@@ -246,24 +249,4 @@ class OplsFFGroupIdentifier(AmberFFGroupIdentifier):
             groups.append(g)
         return gid
 
-    # ============================================================
-    # B 类：水（换残基名集合）
-    # ============================================================
-
-    def _find_water(self, res: ResidueData,
-                    start_id: int) -> Tuple[List[Group], int]:
-        """检测水分子（残基名 ∈ OPLS_WATER_RESIDUES）。"""
-        groups: List[Group] = []
-        gid = start_id
-
-        if res.residue_name in OPLS_WATER_RESIDUES:
-            groups.append(Group(
-                group_id=gid, group_type="water",
-                molecule=res.molecule_name,
-                residue_name=res.residue_name,
-                residue_id=res.residue_global_idx,
-                atoms=res.atoms
-            ))
-            gid += 1
-
-        return groups, gid
+    # （_find_water / _find_metal_binding 继承父类，经 self.WATER_RESIDUES 取用）

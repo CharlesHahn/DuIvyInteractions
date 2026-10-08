@@ -15,7 +15,6 @@ from ..core.datas import Group, SystemData, ResidueData, AtomData
 from .amber_ff_identifier import (
     AmberFFGroupIdentifier,
     METAL_IONS,
-    WATER_RESIDUES,
 )
 
 
@@ -66,6 +65,9 @@ GROMOS_HYDROPHOBIC_EXCLUDED = frozenset({"O", "N", "S"})
 
 class GromosFFGroupIdentifier(AmberFFGroupIdentifier):
     """GROMOS 力场基团识别器。"""
+
+    # 水残基名（GROMOS 配 SPC/SPC-E，残基名 SOL）
+    WATER_RESIDUES = frozenset({"SOL"})
 
     @property
     def name(self) -> str:

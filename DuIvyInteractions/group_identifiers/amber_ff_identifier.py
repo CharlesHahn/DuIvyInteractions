@@ -95,6 +95,9 @@ NEGATIVE_RESIDUES = {
 class AmberFFGroupIdentifier(GroupIdentifier):
     """Amber 力场基团识别器。"""
 
+    # 水残基名（pipeline/水排除统一入口；引用模块级 WATER_RESIDUES）
+    WATER_RESIDUES = WATER_RESIDUES
+
     @property
     def name(self) -> str:
         return "amber_ff"
@@ -796,7 +799,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         groups: List[Group] = []
         gid = start_id
 
-        if res.residue_name in WATER_RESIDUES:
+        if res.residue_name in self.WATER_RESIDUES:
             groups.append(Group(
                 group_id=gid, group_type="water",
                 molecule=res.molecule_name,
@@ -845,7 +848,7 @@ class AmberFFGroupIdentifier(GroupIdentifier):
         groups: List[Group] = []
         gid = start_id
 
-        if res.residue_name in WATER_RESIDUES:
+        if res.residue_name in self.WATER_RESIDUES:
             return groups, gid
 
         for atom in res.atoms:

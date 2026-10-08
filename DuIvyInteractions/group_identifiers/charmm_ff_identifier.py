@@ -106,6 +106,9 @@ CHARMM_NEGATIVE_RESIDUES = {
 class CharmmFFGroupIdentifier(AmberFFGroupIdentifier):
     """CHARMM 力场基团识别器（CHARMM36 / C36m）。"""
 
+    # 水残基名（CHARMM 默认 TIP3/HOH，兼容 SOL/WAT）
+    WATER_RESIDUES = CHARMM_WATER_RESIDUES
+
     @property
     def name(self) -> str:
         return "charmm_ff"
@@ -272,24 +275,4 @@ class CharmmFFGroupIdentifier(AmberFFGroupIdentifier):
                 return False
         return True
 
-    # ============================================================
-    # B 类：水（换残基名集合）
-    # ============================================================
-
-    def _find_water(self, res: ResidueData,
-                    start_id: int) -> Tuple[List[Group], int]:
-        """检测水分子（残基名 ∈ CHARMM_WATER_RESIDUES）。"""
-        groups: List[Group] = []
-        gid = start_id
-
-        if res.residue_name in CHARMM_WATER_RESIDUES:
-            groups.append(Group(
-                group_id=gid, group_type="water",
-                molecule=res.molecule_name,
-                residue_name=res.residue_name,
-                residue_id=res.residue_global_idx,
-                atoms=res.atoms
-            ))
-            gid += 1
-
-        return groups, gid
+    # （_find_water / _find_metal_binding 继承父类，经 self.WATER_RESIDUES 取用）

@@ -8,7 +8,6 @@ import MDAnalysis as mda
 
 from .system_readers import GmxTprReader
 from .group_identifiers import IDENTIFIER_CLASSES
-from .group_identifiers.amber_ff_identifier import WATER_RESIDUES
 from .interaction_detectors import (
     HydrogenBondDetectorTwoPass, HydrogenBondDetectorPerFrame, HydrogenBondDetectorPerTuple,
     PiStackingDetectorTwoPass, PiStackingDetectorPerFrame, PiStackingDetectorPerTuple,
@@ -79,7 +78,8 @@ class Pipeline:
         sd = GmxTprReader().read(tpr)
         identifier = self._make_identifier()
         groups = identifier.identify(sd)
-        # 2. 加载轨迹（只做一次）
+        # 2. 加载轨迹（只做一次）；水残基名取识别器自带（跨力场：TIP3/HO4 等）
+        water_residues = identifier.WATER_RESIDUES
         u = mda.Universe(tpr, xtc)
         os.makedirs(output, exist_ok=True)
         # 3. 逐类型检测 + 保存（单个失败不中断其余）
@@ -87,7 +87,7 @@ class Pipeline:
         for name in names:
             try:
                 detector = self._make_detector(name)
-                filtered = self._filter_groups(groups, detector)
+                filtered = self._filter_groups(groups, detector, water_residues)
                 results = detector.detect(filtered, trajectory=u.trajectory)
                 save_interactions(results, os.path.join(output, f"{name}.h5"))
             except Exception as e:
@@ -106,9 +106,13 @@ class Pipeline:
         return cls()
 
     @staticmethod
-    def _filter_groups(groups, detector) -> List:
-        """按 required_group_types 过滤；除水桥外排除水分子。"""
+    def _filter_groups(groups, detector, water_residues) -> List:
+        """按 required_group_types 过滤；除水桥外排除水分子。
+
+        water_residues: 当前力场的水残基名集合（来自 identifier.WATER_RESIDUES），
+        跨力场正确排除（Amber SOL / CHARMM TIP3 / OPLS HO4/HO5）。
+        """
         needs_water = "water" in detector.required_group_types
         return [g for g in groups
                 if g.group_type in detector.required_group_types
-                and (needs_water or g.residue_name not in WATER_RESIDUES)]
+                and (needs_water or g.residue_name not in water_residues)]

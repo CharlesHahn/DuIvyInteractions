@@ -441,7 +441,8 @@ class TestRegistry:
         det = Pipeline("gromos", "two_pass")._make_detector("salt_bridge")
         sd = _make_system(["ARG", "ASP", "SOL"])
         gs = GromosFFGroupIdentifier().identify(sd)
-        filtered = Pipeline._filter_groups(gs, det)
+        water_residues = GromosFFGroupIdentifier.WATER_RESIDUES
+        filtered = Pipeline._filter_groups(gs, det, water_residues)
         types = {g.group_type for g in filtered}
         assert types == {"charged_positive", "charged_negative"}
         assert all(g.residue_name != "SOL" for g in filtered)
