@@ -78,23 +78,46 @@ class GromosFFGroupIdentifier(AmberFFGroupIdentifier):
     def _find_acceptors(self, res: ResidueData,
                         start_id: int,
                         exclude_atoms: Set[int] = None) -> Tuple[List[Group], int]:
-        """检测 H 键受体（类型 ∈ GROMOS_ACCEPTOR_TYPES + q<0，排除无孤对原子）。"""
+        """检测 H 键受体（类型 ∈ GROMOS_ACCEPTOR_TYPES + q<0，排除无孤对原子）。
+
+        GROMOS 类型粒度粗（`N` 通吃主链酰胺/Pro/芳香 N），无法纯类型区分，
+        故对 N 原子加结构判据（化学事实 + 文献，见 doc/force_field_compatibility_survey.md）：
+        - 键数 ≥ 4（铵）→ 非受体（教科书：铵无孤对）
+        - 带 H（普通酰胺/侧链酰胺/带 H 吡咯/胍基）→ 非受体
+          （Eildal 2013 JACS；教科书：吡咯 N 孤对参与芳香）
+        - 无 H（Pro N / His 吡啶型 N）→ 受体（Deepak 2016, Biophys J；教科书）
+        """
         exclude_atoms = exclude_atoms or set()
         groups: List[Group] = []
         gid = start_id
 
+        # 残基内键合（N 的 H 邻居均在残基内）
+        res_atom_map = {a.atom_global_idx: a for a in res.atoms}
+        res_bonds = {}
+        for b in res.bonds:
+            g1 = res.atoms[b.atom1_idx_in_residue].atom_global_idx
+            g2 = res.atoms[b.atom2_idx_in_residue].atom_global_idx
+            res_bonds.setdefault(g1, set()).add(g2)
+            res_bonds.setdefault(g2, set()).add(g1)
+
         for atom in res.atoms:
-            if atom.atom_type in GROMOS_ACCEPTOR_TYPES and atom.atom_charge < 0:
-                if atom.atom_global_idx in exclude_atoms:
+            if atom.atom_type not in GROMOS_ACCEPTOR_TYPES or atom.atom_charge >= 0:
+                continue
+            if atom.atom_element == "N":
+                neighbors = [res_atom_map[n] for n in res_bonds.get(atom.atom_global_idx, ())
+                             if n in res_atom_map]
+                if len(neighbors) >= 4 or any(n.atom_element == "H" for n in neighbors):
                     continue
-                groups.append(Group(
-                    group_id=gid, group_type="H_acceptor",
-                    molecule=res.molecule_name,
-                    residue_name=res.residue_name,
-                    residue_id=res.residue_global_idx,
-                    atoms=[atom]
-                ))
-                gid += 1
+            if atom.atom_global_idx in exclude_atoms:
+                continue
+            groups.append(Group(
+                group_id=gid, group_type="H_acceptor",
+                molecule=res.molecule_name,
+                residue_name=res.residue_name,
+                residue_id=res.residue_global_idx,
+                atoms=[atom]
+            ))
+            gid += 1
 
         return groups, gid
 

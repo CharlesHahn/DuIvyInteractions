@@ -343,6 +343,18 @@ class TestDonorAcceptor:
         assert "OD1" in acc_names and "OD2" in acc_names
         assert all(a.atoms[0].atom_charge < 0 for a in asp_acc)
 
+    def test_backbone_N_not_acceptor(self, groups):
+        """主链 N（opls_238）不应是受体（Eildal 2013, JACS）。
+
+        回归保护：opls_238(主链N)/opls_237(酰胺)/opls_287(铵)/opls_300,303(胍)/
+        opls_503(带H吡咯)/opls_512(双质子化His)/opls_749,750,751(中性胍)
+        已从 OPLS_ACCEPTOR_TYPES 剔除；仅保留 opls_239(Pro)/opls_511(吡啶)/opls_900(中性胺)。
+        """
+        acc_names = {a.atoms[0].atom_name for a in
+                     [g for g in _groups_of("PHE", groups)
+                      if g.group_type == "H_acceptor"]}
+        assert "N" not in acc_names, "主链肽键 N 不应是受体"
+
     def test_water_group(self, groups):
         waters = [g for g in _groups_of("SOL", groups)
                   if g.group_type == "water"]

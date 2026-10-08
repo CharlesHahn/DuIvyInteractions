@@ -24,9 +24,14 @@ from .amber_ff_identifier import AmberFFGroupIdentifier
 OPLS_ACCEPTOR_TYPES = frozenset({
     # 氧（O/O2/OH/O_3）
     "opls_236", "opls_272", "opls_154", "opls_167", "opls_268", "opls_269",
-    # 氮（N/N2/N3/NA/NB/NT/NY/NZ）
-    "opls_237", "opls_238", "opls_239", "opls_300", "opls_303", "opls_287",
-    "opls_503", "opls_511", "opls_512", "opls_900", "opls_749", "opls_750", "opls_751",
+    # 氮（保留受体类型，依据 OPLS-AA rtp 实测 + 文献）
+    # 剔除 opls_238(主链 N)/opls_237(侧链酰胺 N)/opls_287(LYSH 铵)/
+    #      opls_300,303(Arg 胍基)/opls_503(带 H 吡咯: HISD ND1, TRP NE1)/
+    #      opls_512(双质子化 His N)/opls_749,750,751(ARGN 中性胍)
+    #     —— 均为孤被共振占用/无孤对，非受体（Eildal 2013; 教科书）
+    # 保留 opls_239(Pro N，无 H，受体，Deepak 2016)、opls_511(无 H 吡啶型 His N，受体)、
+    #      opls_900(LYS 中性胺 NZ，受体，Luisi 1998; Baik 2003)
+    "opls_239", "opls_511", "opls_900",
     # 硫（S/SH）
     "opls_202", "opls_200",
     # 卤素（离子 F-/Cl-/Br-/I- + 有机卤素；卤素可作 H 键受体，Lin 2017；

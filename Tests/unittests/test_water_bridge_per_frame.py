@@ -126,7 +126,7 @@ class TestWaterBridgePerFrameResults:
         assert len(water_bridges) > 0
 
     def test_n_pairs(self, water_bridges):
-        assert water_bridges[0].n_pairs == 2541
+        assert water_bridges[0].n_pairs == 1698  # 修复后：剔除主链/侧链酰胺 N 伪受体，假水桥大幅减少
 
     def test_occupancy_range(self, water_bridges):
         occ = water_bridges[0].occupancy()

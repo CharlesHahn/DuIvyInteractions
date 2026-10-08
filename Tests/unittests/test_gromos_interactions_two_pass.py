@@ -83,7 +83,7 @@ class TestHydrogenBondTwoPass:
         assert len(hydrogen_bonds) > 0
 
     def test_n_pairs(self, hydrogen_bonds):
-        assert hydrogen_bonds[0].n_pairs == 379
+        assert hydrogen_bonds[0].n_pairs == 287  # 修复后：剔除带 H 非受体 N，H 键 pair 减少
 
     def test_all_inter_protein_ligand(self, hydrogen_bonds):
         it = hydrogen_bonds[0]

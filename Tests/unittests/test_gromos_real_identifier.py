@@ -5,12 +5,16 @@
 130 残基蛋白 + 6 个配体 ZIN1-6），验证 GromosFFGroupIdentifier 对
 真实力场数据的基团识别正确性（补充合成 SystemData 测试的覆盖）。
 
-断言基线（已实测）：H_donor=200, H_acceptor=336, aromatic_ring=10,
-charged_positive=10, charged_negative=15, hydrophobic=330, 总计 1584。
+断言基线（2026-09-30 修复后实测）：H_donor=200, H_acceptor=206, aromatic_ring=10,
+charged_positive=10, charged_negative=15, hydrophobic=330, 总计 1454。
 
-⚠️ 注意：本测试的全部数值断言（基团计数、pair 数）来自程序自动探测，
-【尚未经人工核验】（未与 gmx dump 或人工分子分析交叉确认）。
-数值可能与真实化学不符，请谨慎引用，待人工核验后更新。
+修复说明（2026-09-30）：此前 H_acceptor=336 含 130 个主链/侧链酰胺 N 的误判
+（带 H 的 N 无可用孤对，非受体，Eildal 2013 JACS）。修复后 336 → 206，
+恰减去 130（= 蛋白残基数），与化学事实吻合——这是修复正确性的数值证据。
+Pro N（无 H，受体，Deepak 2016）仍保留在受体池（见 TestChargedSemantics 负向断言）。
+
+⚠️ 注意：除上述修复外，其余数值断言（供体/芳香/疏水等）仍来自程序自动探测，
+尚未经人工核验（未与 gmx dump 或人工分子分析交叉确认），请谨慎引用。
 """
 
 import pytest
@@ -64,15 +68,29 @@ class TestSystemRead:
 class TestGroupCounts:
 
     def test_total_groups(self, groups):
-        assert len(groups) == 1584
+        # 修复后：1584 → 1454（130 个带 H 的非受体 N 退出受体池）
+        assert len(groups) == 1454
 
     def test_donors(self, groups):
         n = sum(1 for g in groups if g.group_type == "H_donor")
         assert n == 200
 
     def test_acceptors(self, groups):
+        # 修复后：336 → 206（减去 130 个主链/侧链酰胺 N，与蛋白残基数吻合）
         n = sum(1 for g in groups if g.group_type == "H_acceptor")
-        assert n == 336
+        assert n == 206
+
+    def test_backbone_amide_N_not_acceptor(self, groups):
+        """主链肽键 N（带 H 普通酰胺）不应是受体（Eildal 2013）——修复回归保护。"""
+        acceptor_ids = {g.atoms[0].atom_global_idx for g in groups
+                        if g.group_type == "H_acceptor"}
+        backbone_n = [g for g in groups if g.group_type == "H_donor"
+                      and g.atoms[0].atom_element == "N"
+                      and g.atoms[0].atom_name == "N"]
+        assert backbone_n, "体系应含主链 N-H 供体"
+        for d in backbone_n:
+            assert d.atoms[0].atom_global_idx not in acceptor_ids, \
+                f"主链酰胺 N ({d.residue_name}{d.residue_id}) 不应是受体"
 
     def test_aromatic_rings(self, groups):
         n = sum(1 for g in groups if g.group_type == "aromatic_ring")
@@ -100,7 +118,8 @@ class TestProteinLigandSplit:
     def test_protein_ligand_group_split(self, groups):
         prot = [g for g in groups if g.residue_name not in LIGAND_RESIDUES]
         lig = [g for g in groups if g.residue_name in LIGAND_RESIDUES]
-        assert len(prot) == 1410
+        # 修复后：1410 → 1280（蛋白 acceptor 少 130 个主链/侧链酰胺 N）
+        assert len(prot) == 1280
         assert len(lig) == 174
 
     def test_ligand_has_no_aromatic_ring(self, groups):

@@ -35,13 +35,17 @@ COMPATIBLE_TYPES = frozenset({
 
 ACCEPTOR_TYPES = frozenset({
     "o", "o2", "oh", "os", "oe", "o1", "ow",  # GAFF 氧
-    "n", "n2", "n3",                            # GAFF 氮（酰胺/胺）
-    "nb", "ni", "nj", "nc", "ne", "nf", "nk",  # GAFF 芳香/胺氮（排除 na, nh）
+    "n2", "n3",                                # GAFF 氮（n3=中性胺，受体；n2 语义待查证，暂保留）
+    "nb", "ni", "nj", "nc", "ne", "nf", "nk",  # GAFF 无 H 芳香/吡啶型氮（受体）
     "s", "ss", "sh", "sx", "s2",              # GAFF 硫
     "f", "cl", "br", "i",                      # 卤素
     "O", "OH", "O2", "OS", "OW",              # Amber 蛋白氧 + 水氧
-    "N", "N2", "N3",                           # Amber 蛋白氮（酰胺/胺）
-    "NA", "NB", "N*", "NC",                    # Amber 芳香氮
+    "N", "N2",                                  # Amber 蛋白/核酸氮：
+    #   N   : 主链/侧链酰胺（带 H，非受体，Eildal 2013）与 Pro N（无 H，受体，Deepak 2016）
+    #         —— 同一类型二义，由 _find_acceptors 按 H 邻居数区分
+    #   N2  : 核酸氨基（如腺嘌呤 N6，带 2H，受体，Luisi 1998; Baik 2003）
+    "NB", "NC",                                # Amber 无 H 吡啶/环内氮（受体）
+    "N*",                                      # 核酸糖苷 N（嘌呤 N9；受体资格证据不足，暂保留待查）
     "S", "SH",                                 # Amber 硫
 })
 
@@ -391,23 +395,44 @@ class AmberFFGroupIdentifier(GroupIdentifier):
 
         exclude_atoms: 需排除的原子集合（正电基团成员 + 环内带 H 的吡咯型 N），
         这些原子无可用孤对，化学上不可作 H 键受体。
+
+        另外：amber 类型 ``N`` 同时承载两类原子（rtp 证据）：
+        - 带 H 的普通酰胺 N（主链/Asn/Gln 侧链）——非受体（Eildal 2013, JACS）
+        - 无 H 的 Pro N——受体（Deepak 2016, Biophys J）
+        故对类型 ``N`` 按 H 邻居数区分：带 H 者跳过，无 H 者（Pro）保留。
         """
         exclude_atoms = exclude_atoms or set()
         groups: List[Group] = []
         gid = start_id
 
+        # 残基内键合（N 的 H 邻居均在残基内）
+        res_atom_map = {a.atom_global_idx: a for a in res.atoms}
+        res_bonds = {}
+        for b in res.bonds:
+            g1 = res.atoms[b.atom1_idx_in_residue].atom_global_idx
+            g2 = res.atoms[b.atom2_idx_in_residue].atom_global_idx
+            res_bonds.setdefault(g1, set()).add(g2)
+            res_bonds.setdefault(g2, set()).add(g1)
+
         for atom in res.atoms:
-            if atom.atom_type in ACCEPTOR_TYPES and atom.atom_charge < 0:
-                if atom.atom_global_idx in exclude_atoms:
+            if atom.atom_type not in ACCEPTOR_TYPES or atom.atom_charge >= 0:
+                continue
+            # 类型 `N`：带 H 的普通酰胺 N 非受体，无 H 的 Pro N 受体
+            if atom.atom_type == "N" and atom.atom_element == "N":
+                neighbors = [res_atom_map[n] for n in res_bonds.get(atom.atom_global_idx, ())
+                             if n in res_atom_map]
+                if any(n.atom_element == "H" for n in neighbors):
                     continue
-                groups.append(Group(
-                    group_id=gid, group_type="H_acceptor",
-                    molecule=res.molecule_name,
-                    residue_name=res.residue_name,
-                    residue_id=res.residue_global_idx,
-                    atoms=[atom]
-                ))
-                gid += 1
+            if atom.atom_global_idx in exclude_atoms:
+                continue
+            groups.append(Group(
+                group_id=gid, group_type="H_acceptor",
+                molecule=res.molecule_name,
+                residue_name=res.residue_name,
+                residue_id=res.residue_global_idx,
+                atoms=[atom]
+            ))
+            gid += 1
 
         return groups, gid
 

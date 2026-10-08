@@ -90,7 +90,9 @@ class TestGroupCounts:
 
     def test_total_groups(self, group_counts):
         total = sum(group_counts.values())
-        assert total == 152307
+        # 修复后（2026-09-30）：剔除带 H 的非受体 N 类型（普通酰胺/铵/带 H 吡咯），
+        # acceptor 减少 322，总数随之减少 322（152307 → 151985）
+        assert total == 151985
 
     def test_H_donor(self, group_counts):
         assert group_counts["H_donor"] == 74623
@@ -105,7 +107,39 @@ class TestGroupCounts:
         assert sample.metadata == {}
 
     def test_H_acceptor(self, group_counts):
-        assert group_counts["H_acceptor"] == 37876
+        # 修复后：37876 → 37554（322 个带 H 的非受体 N 退出受体池）
+        assert group_counts["H_acceptor"] == 37554
+
+    def test_backbone_amide_N_not_acceptor(self, groups):
+        """主链肽键 N（带 H 的普通酰胺）不应是 H 键受体（Eildal 2013, JACS）。
+
+        回归保护：amber 类型 `N` 同时承载普通酰胺（非受体）与 Pro N（受体），
+        此断言锁定普通酰胺 N 必须退出受体池。
+        """
+        acceptor_ids = {g.atoms[0].atom_global_idx for g in groups
+                        if g.group_type == "H_acceptor"}
+        backbone_n = [g for g in groups if g.group_type == "H_donor"
+                      and g.atoms[0].atom_element == "N"
+                      and g.atoms[0].atom_name == "N"]
+        assert backbone_n, "测试体系应包含主链 N-H 供体"
+        for d in backbone_n:
+            assert d.atoms[0].atom_global_idx not in acceptor_ids, \
+                f"主链酰胺 N ({d.residue_name}{d.residue_id}) 不应是 H 键受体"
+
+    def test_proline_N_is_acceptor(self, groups):
+        """Pro N（无 H）仍应为 H 键受体（Deepak 2016, Biophys J）。
+
+        与 test_backbone_amide_N_not_acceptor 联合锁定 amber 类型 `N` 的二义处理。
+        若体系不含 Pro 则跳过。
+        """
+        pro_res = {g.residue_id for g in groups if g.residue_name == "PRO"}
+        if not pro_res:
+            return
+        for rid in pro_res:
+            acc = [g for g in groups if g.group_type == "H_acceptor"
+                   and g.residue_id == rid]
+            assert any(g.atoms[0].atom_name == "N" for g in acc), \
+                f"Pro 残基 {rid} 的 N 应是 H 键受体"
 
     def test_water(self, group_counts):
         assert group_counts["water"] == 37021

@@ -370,10 +370,21 @@ class TestDonorAcceptor:
         """受体应带负电荷（q<0）；ASP 含 OD1/OD2 羧基氧受体。"""
         asp_acc = [g for g in _groups_of("ASP", groups)
                    if g.group_type == "H_acceptor"]
-        # OD1、OD2 必须为受体；主链 O、主链 N（q<0）也会是受体
+        # OD1、OD2 必须为受体；主链 O 为受体
         acc_names = {a.atoms[0].atom_name for a in asp_acc}
         assert "OD1" in acc_names and "OD2" in acc_names
         assert all(a.atoms[0].atom_charge < 0 for a in asp_acc)
+
+    def test_backbone_N_not_acceptor(self, groups):
+        """主链肽键 N（带 H）不应是受体——GROMOS 结构判据（Eildal 2013, JACS）。
+
+        GROMOS 类型粒度粗（`N` 通吃），靠结构判据排除：带 H 的 N（普通酰胺/
+        侧链酰胺/带 H 吡咯/胍基）无可用孤对，非受体；无 H 的 N（Pro/His 吡啶）保留。
+        """
+        acc_names = {a.atoms[0].atom_name for a in
+                     [g for g in _groups_of("PHE", groups)
+                      if g.group_type == "H_acceptor"]}
+        assert "N" not in acc_names, "主链肽键 N 不应是受体"
 
     def test_water_group(self, groups):
         waters = [g for g in _groups_of("SOL", groups)

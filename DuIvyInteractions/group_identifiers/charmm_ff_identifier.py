@@ -32,8 +32,12 @@ CHARMM_ACCEPTOR_TYPES = frozenset({
     "OG2P1", "OG2R50", "OG301", "OG302", "OG303",
     "OG304", "OG311", "OG312", "OG3C51", "OG3C61", "OG3R60",
     # 蛋白氮
-    "N", "NH1", "NH2", "NH3", "NC2", "NR1", "NR2", "NR3", "NY",
-    # CGenFF 氮（配体扩展）
+    # 剔除 NH1(peptide)/NH2(amide)/NH3(ammonium)/NC2(guanidinium)/NY(pyrrole)/
+    #      NR1/NR3(protonated his)——孤对被共振占用或无孤对，非受体
+    #     （Eildal 2013; 教科书；CHARMM rtf MASS 段类型名自证语义）
+    # 保留 N(proline N，无 H，受体，Deepak 2016)、NR2(unprotonated his N，吡啶型，受体)
+    "N", "NR2",
+    # CGenFF 氮（配体扩展；各 NG* 类型的受体资格逐项待查证，暂保留）
     "NG2D1", "NG2O1", "NG2P1", "NG2R50", "NG2R51", "NG2R52",
     "NG2R60", "NG2R61", "NG2R62", "NG2RC0", "NG2S0", "NG2S1",
     "NG2S2", "NG3N1",
