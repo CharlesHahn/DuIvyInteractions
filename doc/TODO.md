@@ -163,9 +163,13 @@ detector.detect(groups, trajectory,
 
 **优先级**：低（当前 101 帧测试场景无压力，1μs 轨迹时再做）。
 
-### 14. Interaction 结果序列化（保存/加载） ❌
+### 14. Interaction 结果序列化（保存/加载） ✅（已被 HDF5 替代实现）
 
 **需求**：将 Interaction 数据结构保存到文件，支持后续分析、可视化、跨工具共享。
+
+> **实现状态（2026-10-09）**：本条的"JSON + .npz 双文件方案"未采用——已由
+> `DuIvyInteractions/io/h5.py`（HDF5 单文件，format v1.0：existence/metrics/groups/
+> metadata 无损存取 + gzip 压缩）**替代实现**。本条关闭。
 
 **方案**：JSON + .npz 双文件格式。
 
@@ -220,6 +224,14 @@ MDAnlysis提供了自动处理周期性的KDTree，或许之后可以替换到MD
 - 注意：需与 H_donor 判定（N-H 键）协调，避免剔除参与供体的氮
 
 **实现位置**：`group_identifiers/*_ff_identifier.py` 的 `_find_acceptors`
+
+> **修复状态（2026-09-30，✅ 已修复）**：四力场（amber/gromos/charmm/opls）已按
+> "力场类型 + 化学事实 + 文献"锚定完成修复——剔除普通酰胺/铵/带 H 吡咯/胍基的受体资格，
+> 保留 Pro N / His 无 H 吡啶 / 中性胺 / 核酸氨基（含三待查项查证：GAFF n2=亚胺受体、
+> CGenFF NG* 剔 10 留 6、核酸糖苷 N* 剔）。
+> 逐项判定依据见 `doc/acceptor_identification_evidence.md`；实证效果：
+> GROMOS 真实体系 acceptor 336→206（=减 130 主链 N）、H 键 pair 108→86、水桥 2541→1698。
+> 本条关闭。
 
 **优先级**：低（当前阳性影响有限，作为已知现状记录）
 

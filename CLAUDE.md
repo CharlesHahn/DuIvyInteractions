@@ -50,7 +50,7 @@ PLIP/ProLIF 通过 OpenBabel/RDKit 重建化学（键序/芳香/加氢），丢�
 
 ## 两个工程难点与对策
 
-1. **力场类型语义映射**：类型名跨力场不同义（GAFF `ca` vs CHARMM `CG2R61` vs OPLS `CA`）。对策：建**特征空间映射**（类型→{杂化, 芳香性, 极性, 带H, 孤对}），基团由特征组合；新力场入库 = 填特征表。首版支持 Amber 系。**边界**：全原子力场（GROMOS 联合原子无显式 H → 供体鉴定失效，声明不支持）。
+1. **力场类型语义映射**：类型名跨力场不同义（GAFF `ca` vs CHARMM `CG2R61` vs OPLS `CA`）。对策：建**特征空间映射**（类型→{杂化, 芳香性, 极性, 带H, 孤对}），基团由特征组合；新力场入库 = 填特征表。已入库：**Amber 家族 / GROMOS 53A6·54A7 / CHARMM36+CGenFF / OPLS-AA**。**边界**：GROMOS 类型粒度粗（`N`/`C` 通吃）→ 靠结构判据（见 `doc/force_field_compatibility_survey.md`）；GROMOS 配体不支持（ATB 参数化，声明过）；非全原子力场无显式 H → 供体/疏水判定受限。
 2. **tpr 二进制读取**：MDAnalysis 垫底 → 自研解析 → `gmx dump` 文本兜底（验收基准）。
 
 ## 目录结构
@@ -60,7 +60,7 @@ DuIvyInteraction/
 ├── DuIvyInteractions/            # 主包
 │   ├── core/                     # datas.py(数据类), interfaces.py(ABC), constants.py
 │   ├── system_readers/           # gmx_tpr_reader.py, gmx_tpr_dump_reader.py
-│   ├── group_identifiers/        # amber_ff_identifier.py
+│   ├── group_identifiers/        # 4 力场识别器（amber/gromos/charmm/opls）+ __init__ 注册表
 │   ├── interaction_detectors/    # 8 类型 × 3 策略（*_detector_{per_tuple,per_frame,two_pass}.py）
 │   ├── io/                       # h5.py(序列化), interaction_exporter.py + 8 导出子类
 │   ├── pipeline.py               # 编排：Reader→Identifier→Detector→h5
@@ -68,8 +68,10 @@ DuIvyInteraction/
 │   ├── utils/                    # （空，待实现）
 │   └── visualizers/              # （空，待实现）
 ├── Tests/                        # 单元测试
-│   ├── unittests/                # 单元测试用例
-│   ├── test_MD_case/             # 测试数据（KRAS-RBD 体系，已 gitignore）
+│   ├── unittests/                # 单元测试用例（含 3 力场真实集成测试）
+│   ├── test_MD_case_amber/       # Amber 真实测试数据（KRAS-RBD D927，已追踪）
+│   ├── test_MD_case_gromos/      # GROMOS 真实测试数据（53A6 蛋白+6 配体，已追踪）
+│   ├── test_MD_case_charmm36/    # CHARMM36 真实测试数据（SMO-BST，已追踪）
 │   └── original_draft/           # 早期验证脚本与调研（历史参考，不随包发布）
 ├── doc/                          # 中文设计文档 + project_background.md(论证归档)
 ├── docs/  docs_en/               # 文档站点（中/英，ReadTheDocs）
@@ -83,7 +85,7 @@ DuIvyInteraction/
 ## 使用
 
 ```bash
-dii run -t md.tpr -f md.xtc -o out/ --ff amber     # 检测→h5（--ff 必选，当前仅 amber）
+dii run -t md.tpr -f md.xtc -o out/ --ff amber     # 检测→h5（--ff 支持 amber/gromos/charmm/opls）
 #   --interactions hydrogen_bond,pi_stacking      # 只检部分类型（默认 all=8）
 #   --strategy two_pass|per_frame|per_tuple       # 策略（默认 two_pass）
 dii export -i out/salt_bridge.h5 -o out_export/   # 导出 xvg/xpm/csv + 概览（支持多 Interaction h5）
@@ -94,14 +96,24 @@ from DuIvyInteractions.pipeline import Pipeline
 Pipeline(ff="amber", strategy="two_pass").run("md.tpr", "md.xtc", "out/", interactions=None)
 ```
 
-## 当前代码状态（2026-09-16）
+## 当前代码状态（2026-10-09）
 
-- ✅ 阶段一：基团鉴定（D927 验证完成，已迁移进新架构；`Tests/original_draft/` 保留历史脚本与调研，不随包发布）
+- ✅ 阶段一：基团鉴定——**4 力场识别器**（amber / gromos / charmm / opls），
+  跨力场受体语义统一（`WATER_RESIDUES` 类属性 + 结构判据，见 `doc/acceptor_identification_evidence.md`）
 - ✅ 阶段二：相互作用检测（8 类型 × 3 策略，TwoPass 水桥 KDTree 优化 65h→~5s）
 - ✅ 阶段三：结果存储与导出（HDF5 序列化 + xvg/xpm/CSV 导出器 + XPM 手动构建修复）
 - ✅ 阶段四：命令行（dii run / dii export，多 Interaction 遍历 + 空数据/损坏 h5/0 帧防护 + 索引校验）
+- ✅ 真实测试案例：**3 力场**（Amber KRAS-RBD / GROMOS 53A6 / CHARMM36 SMO-BST，8 类相互作用全覆盖）
 
-**未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果人工审查、长轨迹 PerFrame 内存优化、PBC 处理等。
+**H 键受体误判修复（2026-09-30，A1）**：剔除带 H 的非受体 N 类型（普通酰胺/铵/带 H 吡咯/胍基），
+保留 Pro N / His 无 H 吡啶 / 中性胺 / 核酸氨基（力场 rtp/rtf + 化学 + 文献锚定，证据清单见
+`doc/acceptor_identification_evidence.md`）。
+
+**跨力场水残基处理（2026-10-08）**：`GroupIdentifier.WATER_RESIDUES` 类属性统一入口，
+pipeline 与 `_find_metal_binding`/water_bridge 检测器按力场正确排除水（CHARMM TIP3 / OPLS HO4/HO5）。
+
+**未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果人工审查、
+长轨迹 PerFrame 内存优化、PBC 处理、疏水-芳香去重等。
 
 ## 测试约定（2026-09-30）
 
