@@ -1,0 +1,13 @@
+AA-MD simulation beta-sitosterol (BST), sonidegib (SNG) and cholesterol (CLR) with smoothened protein (SMO)
+
+Published: 11 September 2020
+
+DOI: 10.17632/v94vzbwzf3.1
+
+Contributor: Mohammad Tasyriq Che Omar
+
+LINK: https://data.mendeley.com/datasets/v94vzbwzf3/1
+
+Description
+
+The data provided here are the raw and supplementary data for all atom (AA) molecular dynamic simulations of beta-sitosterol, sonidegib and cholesterol with smoothened protein (SMO), respectively. There are three folder; SMO-BST, SMO-CLR and SMO-SNG. In each folder, the topology (.tpr) and trajectory (.xtc) of respected complex for 10 ns of MD simulation were embedded together with four sub-folders of raw data from GROMACS package simulation, PyContact, g_mmpbsa and distance analysis. The distance folder contains the index file for targeted residues and also the video (.mpg and .mp4 format) of distance simulation between ARG451 and TRP535 residues produced by VMD software and online conversion tool. The GROMACS folder contains important execution files for smoothened and ligand topology preparation, solvation, energy minimization, equilibration, and molecular dynamic productions. The g_mmpbsa folder contains the output files (.dat) from the calculation of energy component. This folder also comprises of  the PDB files containing energy values in B-factor which can be visualized by VMD software. The PyContact folder having the original outputs (.png) of interaction analysis between SMO and ligand that were generated from PyContact tool. The .tpr and .xtc files from MD production using GROMACS are important for the generation of raw data in g_mmpbsa, PyContact and distance analysis.
