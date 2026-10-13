@@ -133,6 +133,34 @@ class TestFilterGroups:
         assert types == {"charged_positive", "charged_negative"}
         assert all(g.residue_name not in ("SOL", "HOH") for g in filtered)
 
+    def test_explicit_water_select_exempts_water_exclusion(self):
+        """显式归属到具体 select 的水残基基团豁免 WATER_RESIDUES 排除（方案 A）。
+
+        无 assignment（无 select）时行为不变：水残基 H_donor 仍被排除。
+        """
+        groups = [self._make_group(0, "H_donor", "SOL"),
+                  self._make_group(1, "H_acceptor", "ASP")]
+        det = Pipeline("amber", "two_pass")._make_detector("hydrogen_bond")
+        # 无 select：SOL H_donor 被排除（既有行为）
+        filtered = Pipeline._filter_groups(groups, det, {"SOL", "HOH", "WAT"})
+        assert {g.group_type for g in filtered} == {"H_acceptor"}
+        # 带 select 且 SOL 供体归属 select 0：豁免水排除
+        assignment = {0: 0, 1: 0}
+        filtered = Pipeline._filter_groups(groups, det, {"SOL", "HOH", "WAT"},
+                                           assignment)
+        assert {g.group_type for g in filtered} == {"H_donor", "H_acceptor"}
+        # 归属水侧（WATER_SIDE）的水残基基团：仍被排除
+        from DuIvyInteractions.selection import WATER_SIDE
+        assignment = {0: WATER_SIDE, 1: 0}
+        filtered = Pipeline._filter_groups(groups, det, {"SOL", "HOH", "WAT"},
+                                           assignment)
+        assert {g.group_type for g in filtered} == {"H_acceptor"}
+        # 未归属（不在 assignment 中，get 返回 None）的基团：不豁免（显式优于隐式）
+        assignment = {1: 0}  # g0（SOL H_donor）不在 assignment 中
+        filtered = Pipeline._filter_groups(groups, det, {"SOL", "HOH", "WAT"},
+                                           assignment)
+        assert {g.group_type for g in filtered} == {"H_acceptor"}
+
     @pytest.mark.parametrize("water_type", ["charmm", "opls"])
     def test_cross_ff_water_excluded(self, water_type):
         """CHARMM TIP3 / OPLS HO4 水在非水桥检测中被排除（力场自洽回归保护）。"""

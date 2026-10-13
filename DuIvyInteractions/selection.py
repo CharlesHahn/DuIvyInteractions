@@ -89,12 +89,16 @@ def _match_select(group: Group, sets: List[frozenset]) -> Optional[int]:
     return None
 
 
-def assign_groups(groups: List[Group], sets: List[frozenset],
-                  water_residues: frozenset) -> Assignment:
-    """确定每个基团的归属（select 索引或 WATER_SIDE）；无归属的基团不返回。"""
+def assign_groups(groups: List[Group], sets: List[frozenset]) -> Assignment:
+    """确定每个基团的归属（select 索引或 WATER_SIDE）；无归属的基团不返回。
+
+    water 侧判定用 group_type == "water"（识别器统一产出），
+    与残基名/力场无关：水残基上的 H_donor/H_acceptor 不属于水侧，
+    需满足 select 覆盖才保留（与文档"water 基团恒属水侧"一致）。
+    """
     assignment: Assignment = {}
     for g in groups:
-        if g.residue_name in water_residues:
+        if g.group_type == "water":
             assignment[g.group_id] = WATER_SIDE
             continue
         matched = _match_select(g, sets)

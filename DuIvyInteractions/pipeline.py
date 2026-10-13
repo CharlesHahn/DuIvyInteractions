@@ -21,7 +21,7 @@ from .interaction_detectors import (
 )
 from .io.h5 import save_interactions
 from .selection import (
-    CROSS_MIN_SIDES, Assignment,
+    CROSS_MIN_SIDES, WATER_SIDE, Assignment,
     resolve_selection, validate_selections, assign_groups,
     filter_groups, build_tuple_filter,
 )
@@ -80,8 +80,7 @@ class Pipeline:
         water_residues = identifier.WATER_RESIDUES
         u = mda.Universe(tpr, xtc)
         os.makedirs(output, exist_ok=True)
-        groups, assignment = self._apply_selection(
-            groups, u, water_residues, select, pairing)
+        groups, assignment = self._apply_selection(groups, u, select, pairing)
         names = ALL_INTERACTIONS if interactions is None else interactions
         for name in names:
             self._detect_and_save(name, groups, u, water_residues,
@@ -94,7 +93,8 @@ class Pipeline:
         """单类型检测并保存 h5；失败只告警，不中断其余类型。"""
         try:
             detector = self._make_detector(name)
-            filtered = self._filter_groups(groups, detector, water_residues)
+            filtered = self._filter_groups(groups, detector, water_residues,
+                                           assignment)
             tuple_filter = None
             if assignment is not None:
                 tuple_filter = build_tuple_filter(pairing, assignment, name)
@@ -111,7 +111,6 @@ class Pipeline:
             raise ValueError("--pairing between 需要至少 2 个 --select")
 
     def _apply_selection(self, groups: List[Group], u: mda.Universe,
-                         water_residues: frozenset,
                          select: Optional[List[str]], pairing: str
                          ) -> Tuple[List[Group], Optional[Assignment]]:
         """应用 --select/--pairing 过滤；select 为空则返回 (原基团, None)。"""
@@ -121,11 +120,15 @@ class Pipeline:
         u.trajectory[0]  # 几何选择按第一帧静态求值
         sets = [resolve_selection(u, s) for s in select]
         validate_selections(sets)
-        assignment = assign_groups(groups, sets, water_residues)
+        assignment = assign_groups(groups, sets)
         kept = filter_groups(groups, assignment)
-        if not kept:
+        # 空池检查基于"非水基团"：水基团恒真保留（桥接水），
+        # 若用户选择未命中任何真实化学基团（如 name CA 只选到裸原子），
+        # 应报错而非静默产出空结果。
+        kept_non_water = [g for g in kept if assignment[g.group_id] != WATER_SIDE]
+        if not kept_non_water:
             raise ValueError(
-                "参与池内无基团（0 个基团保留）。若使用了 around/sphzone "
+                "参与池内无可用基团（非水基团 0 个）。若使用了 around/sphzone "
                 "几何选择，基团可能因部分原子在圈外被排除，请改用 byres around …")
         return kept, assignment
 
@@ -142,13 +145,25 @@ class Pipeline:
         return cls()
 
     @staticmethod
-    def _filter_groups(groups, detector, water_residues) -> List:
-        """按 required_group_types 过滤；除水桥外排除水分子。
+    def _filter_groups(groups, detector, water_residues,
+                       assignment: Optional[Assignment] = None) -> List:
+        """按 required_group_types 过滤；除水桥外排除水残基基团。
 
-        water_residues: 当前力场的水残基名集合（来自 identifier.WATER_RESIDUES），
-        跨力场正确排除（Amber SOL / CHARMM TIP3 / OPLS HO4/HO5）。
+        用户显式选择（assignment 非 None）时，**显式归属到具体 select 的
+        水残基基团豁免水排除**（如 --select "resname SOL" 让水参与氢键）；
+        无 select（assignment=None）时行为与既有完全一致。
         """
         needs_water = "water" in detector.required_group_types
-        return [g for g in groups
-                if g.group_type in detector.required_group_types
-                and (needs_water or g.residue_name not in water_residues)]
+        result = []
+        for g in groups:
+            if g.group_type not in detector.required_group_types:
+                continue
+            if needs_water or g.residue_name not in water_residues:
+                result.append(g)
+                continue
+            # 水残基基团：仅显式归属到具体 select 索引（int）时豁免；
+            # WATER_SIDE（str）与未归属（None）均不豁免（显式优于隐式）
+            side = assignment.get(g.group_id) if assignment is not None else None
+            if isinstance(side, int):
+                result.append(g)
+        return result

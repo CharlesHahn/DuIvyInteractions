@@ -67,9 +67,18 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
 - 水的角色由力场 `WATER_RESIDUES` 系统定义（Amber `SOL/HOH/WAT`、CHARMM `TIP3`…），
   不属于用户自定义范畴，故隐式不违背显式哲学。
 
-**归属优先级（唯一规则）**：water 基团**恒属水侧、跳过 select 归属判定**。
+**归属优先级（唯一规则）**：**group_type == "water" 的基团**恒属水侧、跳过 select
+归属判定。水残基（SOL 等）上识别出的 H_donor/H_acceptor 等基团**不属于水侧**——
+它们须满足 select 覆盖才保留（防止水残基供体污染参与池）。
 即使用户显式 `--select "resname SOL"` 选中水原子，也不改变 water 基团的归属
 （仍在水侧、不参与配对判定）——保证显式选水不会破坏水桥的配对语义。
+
+**显式选水的参与（方案 A，2026-10-09 补）**：`_filter_groups` 对非水桥检测器
+默认排除 `WATER_RESIDUES` 残基的基团；但当用户**显式** `--select` 选中水残基时，
+被归属到**具体 select（非水侧）**的水残基 H_donor/H_acceptor 基团**豁免该排除**，
+可参与氢键等检测（如"蛋白 × 水之间的氢键"）。
+- 无 select（`assignment=None`）时行为与既有完全一致（水仍被排除）；
+- 归属为水侧（`WATER_SIDE`）的水基团仍不参与非水桥检测。
 
 ### 4.3 配对规则（tuple 层）
 
@@ -99,10 +108,13 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
 | 2 | 某 select 匹配 0 原子 | 报错（"select 未选中任何原子"） |
 | 3 | select 间原子重叠 | 报错（列出重叠原子：resid/残基名），用户自行修正（如 `and not`） |
 | 4 | `between` 且 select 数 < 2 | 报错（"between 需要至少 2 个 select"） |
-| 5 | 基团池为空（0 个基团保留） | 报错（提示：若使用 `around`/`sphzone` 请考虑 `byres`，基团要求全部原子被选中） |
+| 5 | 基团池中**非水基团为 0**（用户选择未命中任何真实化学基团） | 报错（提示：若使用 `around`/`sphzone` 请考虑 `byres`，基团要求全部原子被选中） |
 | 6 | 结果因过滤为 0 对 | 正常（有基团无对是合法结果），统计为空 |
 
-> 第 5 条常见触发：`--select "around 6 (resname LIG)"` 未加 `byres` ——
+> 第 5 条说明：**group_type=="water" 的桥接水基团恒真保留**，故空池检查以
+> "非水基团为 0" 为准——避免用户选错（如 `name CA` 只选到裸原子）时被水基团
+> 撑满池而静默产出空结果。
+> 常见触发：`--select "around 6 (resname LIG)"` 未加 `byres` ——
 > 接触残基部分原子在圈外 → 基团全被排除 → 报错，用户自己加 `byres`。
 
 ## 6. 执行流程（帧无关）
@@ -113,8 +125,8 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
 3. 每个 --select 串 → u.select_atoms()（第一帧坐标求值）→ frozenset Sᵢ
 4. 校验：语法 / 空 / 两两重叠（§5）
 5. 基团归属：非水基团 → 找 i 使 atoms ⊆ Sᵢ（select 两两不相交 → 归属唯一）
-             水基团 → 恒属水侧（跳过 select 判定，见 §4.2）
-6. 基团池 = 归属成功（含水侧）的全部基团；池空 → 报错
+              水基团（group_type == "water"）→ 恒属水侧（跳过 select 判定，见 §4.2）
+6. 基团池 = 归属成功（含水侧）的全部基团；非水基团为 0 → 报错（见 §5 第 5 条）
 7. 组装 tuple_filter 谓词 → 传给 detector.detect(..., tuple_filter=)
    - any：不传 tuple_filter（None，等价恒真、零开销）
    - between：两端基团 select 归属不同（水侧不参与）
@@ -169,8 +181,17 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
 - **原子级 select**（如 `name N` + `name H`）会使基团横跨 → 基团不保留（规则确定，非报错）；
   残基/分子级选择（`segid`/`resname`/`byres`）永不触发该分支；
 - **重叠必须由用户手写修正**（如 `protein and not (byres around 6 ...)`），不做自动去重/归属；
+- **显式选水 + water_bridge**：water_bridge 的水是桥接体非端（检测器内部排除水的
+  供/受体），用户显式 `--select "resname SOL"` 选水时水不做端 → 供/受两端若同侧则
+  无跨侧对 → 空结果（设计语义，非 bug）；如需水桥分析用默认隐式水侧（不显式选水）；
 - 复杂自定义过滤（如"只保留不同分子间的 pair"之外的特殊规则）仍回落 Python API `tuple_filter`；
-- 与 `WATER_RESIDUES`/`needs_water` 既有机制正交，无冲突。
+- 空池报错基于**非水基团**：用户只选水（如 `--select "resname SOL"` + 非水桥类型）
+  时，水的供/受体基团归属具体 select 而豁免——此时"非水基团"含水的显式基团，
+  空池检查按归属判定（非 WATER_SIDE 即计入），不误报。若用户希望强制排除水，
+  用 `--select "resname SOL and not name H*"` 等显式写法或回落 Python API；
+- 与 `WATER_RESIDUES`/`needs_water` 既有机制正交：`_filter_groups` 的 WATER_RESIDUES
+  排除在无 select（assignment=None）时保持既有行为完全不变；仅显式归属到具体
+  select 索引（int）的水残基基团豁免。
 
 ---
 

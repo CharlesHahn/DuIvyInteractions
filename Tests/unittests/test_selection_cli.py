@@ -103,25 +103,37 @@ class TestAssignGroups:
 
     def test_assign_disjoint(self):
         sets = [frozenset({0, 1, 2, 3}), frozenset({6, 7})]
-        a = assign_groups(self._groups(), sets, frozenset({"SOL"}))
+        a = assign_groups(self._groups(), sets)
         assert a == {0: 0, 1: 0, 2: WATER_SIDE, 3: 1}
 
     def test_water_always_water_side(self):
         # 即使 select 含 SOL 原子，water 基团仍恒属水侧
         sets = [frozenset({0, 1, 2, 3, 4}), frozenset({6, 7})]
-        a = assign_groups(self._groups(), sets, frozenset({"SOL"}))
+        a = assign_groups(self._groups(), sets)
         assert a[2] == WATER_SIDE
 
     def test_partial_group_not_kept(self):
         # 基团只有部分原子在 select 内 → 不保留
         sets = [frozenset({0, 2})]  # g0 atoms={0,1} → 原子 1 不在 → 不全
-        a = assign_groups(self._groups(), sets, frozenset({"SOL"}))
+        a = assign_groups(self._groups(), sets)
         assert 0 not in a
+
+    def test_water_residue_hdonor_not_auto_water_side(self):
+        # 回归：残基名 SOL 的 H_donor（group_type 非 water）不属于水侧，
+        # 必须满足 select 覆盖才保留（防止 11 万水残基供体污染参与池）；
+        # 而 group_type=="water" 的桥接水基团恒属水侧保留。
+        groups = [
+            _group(0, "H_donor", "SOL", [0, 1]),   # 水残基供体
+            _group(1, "water", "SOL", [4, 5]),     # 水桥水基团
+            _group(2, "H_donor", "LYS", [8, 9]),   # 蛋白供体
+        ]
+        a = assign_groups(groups, [frozenset({8, 9})])
+        assert a == {1: WATER_SIDE, 2: 0}
 
     def test_filter_groups_keeps_only_assigned(self):
         groups = self._groups()
         sets = [frozenset({0, 1, 2, 3}), frozenset({6, 7})]
-        a = assign_groups(groups, sets, frozenset({"SOL"}))
+        a = assign_groups(groups, sets)
         kept = filter_groups(groups, a)
         assert {g.group_id for g in kept} == {0, 1, 2, 3}
 
@@ -144,7 +156,7 @@ class TestBuildTupleFilter:
     def _assign(self):
         groups = self._groups()
         sets = [frozenset({0, 1, 2, 3}), frozenset({6, 7})]
-        return assign_groups(groups, sets, frozenset({"SOL"}))
+        return assign_groups(groups, sets)
 
     def test_any_returns_none(self):
         assert build_tuple_filter("any", self._assign(),
@@ -226,6 +238,22 @@ class TestRealAmberAny:
         assert it.n_pairs > 0
         for pair in it.groups:
             assert all(g.molecule == "seg_0_RBD_pro" for g in pair)
+
+
+class TestRealExplicitWater:
+    """方案 A：显式选水时，水残基 H_donor/H_acceptor 豁免 WATER_RESIDUES 排除。"""
+
+    def test_protein_water_hbond_between(self, tmp_path):
+        out = tmp_path / "out"
+        Pipeline("amber", "two_pass").run(
+            str(AMBER_TPR), str(AMBER_XTC), str(out),
+            interactions=["hydrogen_bond"],
+            select=["segid seg_0_RBD_pro", "resname SOL"],
+            pairing="between")
+        it = load_interactions(str(out / "hydrogen_bond.h5"))[0]
+        assert it.n_pairs > 0
+        for a, b in it.groups:
+            assert {a.molecule, b.molecule} == {"seg_0_RBD_pro", "seg_5_SOL"}
 
 
 class TestRealCharmm:
