@@ -28,14 +28,20 @@ DuIvyInteractions（命令 `dii`）是分子动力学（MD）相互作用分析�
 > 3. `dii export -i out/salt_bridge.h5 -o out_export/`
 > 4. 向用户汇报 `out_export/salt_bridge_summary.csv` 中 occupancy 最高的前几对
 
+> **输入**：用户提供轨迹，要求"只看分子 A 与 B 之间（界面）的相互作用"
+> **输出**：
+> 1. `dii run -t md.tpr -f md.xtc -o out/ --ff amber --select "segid A" --select "segid B" --pairing between`
+> 2. 说明：`--select` 各定义一侧原子集合（MDAnalysis 语法），`--pairing between` 只保留跨侧对（界面分析）
+> 3. 单 select（如 `--select "segid A"`）为分子内分析；`--select "byres around 6 (resname LIG)"` 限定口袋残基
+
 ## dii run —— 检测相互作用
 
 ```
 dii run -t <topology.tpr> -f <trajectory.xtc> -o <out_dir> --ff amber [选项]
 ```
 
-- 必填：`-t/--tpr`、`-f/--xtc`、`-o/--output`、`--ff`（仅接受字面值 `amber`，内部覆盖 Amber 全家族 + GAFF 类型映射）
-- 可选：`--interactions`（逗号分隔，默认 all）；`--strategy`（`two_pass` 默认 / `per_frame` / `per_tuple`）
+- 必填：`-t/--tpr`、`-f/--xtc`、`-o/--output`、`--ff`（支持 `amber` / `gromos` / `charmm` / `opls` 四个取值，分别对应 Amber 全家族 + GAFF、GROMOS 53A6/54A7、CHARMM36/C36m、OPLS-AA/L 的类型映射）
+- 可选：`--interactions`（逗号分隔，默认 all）；`--strategy`（`two_pass` 默认 / `per_frame` / `per_tuple`）；`--select`（MDAnalysis 选择串，可重复/多值，限定参与池）；`--pairing`（`any` 默认 / `between`，仅保留跨 select 对）
 - 8 种类型：`hydrogen_bond, pi_stacking, salt_bridge, hydrophobic, halogen_bond, metal_coordination, water_bridge, pi_cation`
 
 要点：
@@ -61,8 +67,8 @@ dii export -i <result.h5> -o <export_dir>
 
 ## 能力边界（避免误用）
 
-1. **CLI 不支持按分子/残基过滤**相互作用来源（如"只看分子 A 与 B 之间"）。需要时用 Python API 的 `tuple_filter` 参数（Pipeline 检测器的 `detect(..., tuple_filter=...)`，接受 `(Tuple[Group, ...]) -> bool` 函数）
-2. `--ff` 仅支持 amber；**联合原子力场**（无显式 H，如 GROMOS）不支持——供体鉴定依赖显式 H，会失效
+1. **`--select` 限定参与池**（`--pairing between` 做界面分析）：基团须**完整属于某一个 select**（全部原子被覆盖）才进入参与池；select 间原子重叠会报错，需用 `and not` 显式剔除；几何选择（`around`/`sphzone`/`point`/`prop`）按**第一帧坐标静态求值**；更复杂的自定义过滤回落 Python API 的 `tuple_filter` 参数（Pipeline 检测器的 `detect(..., tuple_filter=...)`，接受 `(Tuple[Group, ...]) -> bool` 函数）
+2. **联合原子力场**（无显式 H，如 GROMOS）供体鉴定依赖显式 H 会受限——GROMOS 识别器已用结构判据补偿，但 GROMOS **配体**不支持（需 ATB 参数化）
 3. **策略差异**：`--strategy per_frame` / `per_tuple` 用第一帧坐标做候选预筛（硬编码 cutoff），会遗漏"首帧相距远、后续帧才靠近"的相互作用；默认 `two_pass` 逐帧精确发现，无此问题。构象变化大的体系务必用默认 `two_pass`
 
 ## 常见错误与处理
@@ -72,7 +78,10 @@ dii export -i <result.h5> -o <export_dir>
 | `cannot read h5 file: <path>` | h5 损坏或路径不存在 | 检查路径；重新 `dii run` |
 | `no interaction results in h5: <path>` | h5 为空（0 个 Interaction） | 确认 run 是否成功产出 |
 | `unknown interaction type: '<name>'` | 类型名拼错 | 用 8 类之一 |
-| `unknown force field: '<name>'` | `--ff` 仅支持 amber | 改用 `--ff amber` |
+| `unknown force field: '<name>'` | `--ff` 传了 4 力场之外的值 | 改用 `--ff amber` / `gromos` / `charmm` / `opls` 之一 |
+| `error: select 语法错误: ...` | `--select` 选择串语法错误 | 用 MDAnalysis 选择语法（如 `segid X`、`resname LIG`） |
+| `error: select #N 与 select #M 原子重叠` | 两个 select 选中同一批原子 | 用 `and not` 从其中一侧显式剔除重叠原子 |
+| `error: --pairing between 需要至少 2 个 --select` | `between` 只给了 0/1 个 select | 至少给 2 个 `--select` |
 | `'all' cannot be mixed with other types` | `all` 与具体类型混用 | 要么只用 `all`，要么只列具体类型 |
 | `[skip] <type>: nothing to export` | 该类型 0 对或 0 帧 | 正常提示，跳过导出 |
 | `[WARN] <type> detection failed: ...` | 该类型检测异常 | 看错误原因；其余类型不受影响 |
