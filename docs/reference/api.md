@@ -7,6 +7,7 @@
 ```
 DuIvyInteractions/
 ├── pipeline.py              # Pipeline 主流程（编排 Reader→Identifier→Detector→h5）
+├── selection.py             # 用户基团选择与过滤（--select/--pairing 核心逻辑）
 ├── DII.py                   # 命令行入口（dii run / dii export）
 ├── system_readers/          # 拓扑读取器（GmxTprReader / GmxTprDumpReader）
 ├── group_identifiers/       # 基团识别器（amber/gromos/charmm/opls 4 力场，IDENTIFIER_CLASSES 注册表）
@@ -26,8 +27,11 @@ from DuIvyInteractions.pipeline import Pipeline
 pipeline = Pipeline(ff="amber", strategy="two_pass")
 
 # 运行：tpr + xtc → 识别 → 检测 → 在 output/ 下写 <类型>.h5
-pipeline.run("md.tpr", "md.xtc", "out/", interactions=None)
+pipeline.run("md.tpr", "md.xtc", "out/", interactions=None,
+             select=None, pairing="any")
 # interactions=None 表示检测全部 8 类；也可传子集列表
+# select: MDAnalysis 选择串列表（可选），限定参与池；pairing: "any"（默认）/"between"。
+# 完整签名：run(tpr, xtc, output, interactions=None, select=None, pairing="any") -> None
 ```
 
 | 参数 | 类型 | 说明 |
@@ -35,6 +39,8 @@ pipeline.run("md.tpr", "md.xtc", "out/", interactions=None)
 | `ff` | str | 力场名：`"amber"` / `"gromos"` / `"charmm"` / `"opls"`（`IDENTIFIER_CLASSES` 的键；未知力场抛 `ValueError`） |
 | `strategy` | str | `"two_pass"`（默认，性能最优）/ `"per_frame"` / `"per_tuple"` |
 | `interactions` | list[str] \| None | 检测类型子集（`pipeline.ALL_INTERACTIONS` 中的名称），None=全部 8 类 |
+| `select` | list[str] \| None | （`run()` 参数）MDAnalysis 选择串列表，可选，限定参与池：每个串求值为一个独立原子集合，基团保留 ⇔ 其全部原子完整属于**某一个** select（不合并、不横跨）；None=不限制 |
+| `pairing` | str | （`run()` 参数）`"any"`（默认，池内全部候选不设配对约束）或 `"between"`（仅保留两端基团分属不同 select 的候选对，需 ≥2 个 select，否则抛 `ValueError`） |
 
 `run()` 的行为细节：
 
@@ -42,6 +48,62 @@ pipeline.run("md.tpr", "md.xtc", "out/", interactions=None)
 - 水残基排除使用识别器自带的 `WATER_RESIDUES`（见下文）：`_filter_groups` 对除水桥外的类型剔除残基名 ∈ `WATER_RESIDUES` 的基团，保证跨力场正确（如 CHARMM TIP3、OPLS HO4/HO5）。
 - 逐类型检测并保存 `<output>/<类型>.h5`；单个类型失败只打印 `[WARN]`，不中断其余类型。
 - 全部 8 类名称见 `pipeline.ALL_INTERACTIONS`；类型→检测器注册表为 `DETECTOR_CLASSES`（8 类型 × 3 策略，24 个类，键值为 `(TwoPass类, PerFrame类, PerTuple类)` 三元组），`STRATEGY_INDEX = {"two_pass": 0, "per_frame": 1, "per_tuple": 2}` 负责策略切换。
+- 用户基团选择（`select` / `pairing`）：`select` 的每个选择串在 Universe（显式加载**第一帧**坐标）上求值为**独立的原子集合**（不合并）；基团保留 ⇔ 其全部原子完整属于某一个 select，`group_type == "water"` 的基团恒属"水侧"（隐式 select，跳过归属判定）；`pairing="between"` 时仅保留两端基团分属不同 select 的候选对（水侧不参与配对判定）。CLI 通过 `dii run --select/--pairing` 暴露同一能力（`DII.py`），详见下节与[命令参考](../guide/command.md)。
+
+## 用户基团选择（selection）
+
+`DuIvyInteractions/selection.py` 实现 `--select`/`--pairing` 的核心逻辑（设计见 `doc/group_selection_design.md`），被 `Pipeline.run(select=..., pairing=...)` 调用，CLI 层（`DII.py`）通过 `--select`/`--pairing` 透传同一参数。
+
+```python
+from DuIvyInteractions.selection import (
+    WATER_SIDE, CROSS_MIN_SIDES, CONSTRAINT_POSITIONS,
+    resolve_selection, validate_selections, assign_groups,
+    filter_groups, build_tuple_filter,
+)
+```
+
+公共函数：
+
+| 函数 | 签名 | 说明 |
+|:-----|:-----|:-----|
+| `resolve_selection` | `(universe, sel_str) -> frozenset[int]` | 将一条选择串在 Universe（已 seek 到第一帧）上求值为原子索引集合；选择语法错误抛 `ValueError` |
+| `validate_selections` | `(sets) -> None` | 校验 select 集合：某 select 匹配 0 原子、或 select 间原子重叠 → 抛 `ValueError` |
+| `assign_groups` | `(groups, sets) -> Assignment` | 确定每个基团的归属：非水基团 → 完整覆盖其全部原子的 select 索引；`group_type == "water"` 的基团恒属水侧（`WATER_SIDE`）；无 select 完整覆盖的基团不返回 |
+| `filter_groups` | `(groups, assignment) -> List[Group]` | 按归属过滤基团池：仅保留有归属（含水侧）的基团 |
+| `build_tuple_filter` | `(pairing, assignment, interaction_type=None) -> 谓词 \| None` | 组装 tuple 层过滤谓词：`pairing != "between"` → `None`；`between` → 按 `CONSTRAINT_POSITIONS` 判约束位置基团分属不同 select |
+
+常量：
+
+| 常量 | 值 | 含义 |
+|:-----|:--|:-----|
+| `WATER_SIDE` | `"water"` | 水侧的恒定归属标记（隐式 select，用户不可关闭、无需选择） |
+| `CROSS_MIN_SIDES` | `2` | `between` 判定所需的不同侧最小数（跨侧 = 至少 2 个不同 select） |
+| `CONSTRAINT_POSITIONS` | `{类型: (位置, ...)}` | 各检测器 tuple 中参与配对判定的成员位置（固定不开放）：`hydrogen_bond`/`pi_stacking`/`salt_bridge`/`hydrophobic`/`halogen_bond`/`metal_coordination`/`pi_cation` 为 `(0, 1)`；`water_bridge` 为 `(0, 2)` —— 判 (供体, 受体) 两端，水分子中立 |
+
+**校验与报错**：以下情况抛 `ValueError`（消息原文与代码一致）；CLI（`dii run`，`DII.main`）捕获后统一输出 `error: <消息>`（`SystemExit`），不暴露 traceback：
+
+| 情况 | 消息原文 |
+|:-----|:-----|
+| select 串语法错误 | `select 语法错误: '<串>' → <MDAnalysis原因>` |
+| 某 select 匹配 0 原子 | `select #N 未选中任何原子` |
+| select 间原子重叠 | `select #N 与 select #M 原子重叠 (K 个原子)，请用 and not 显式剔除后重试` |
+| `between` 且 select 数 < 2 | `--pairing between 需要至少 2 个 --select` |
+| 参与池内非水基团为 0 | `参与池内无可用基团（非水基团 0 个）。若使用了 around/sphzone 几何选择，基团可能因部分原子在圈外被排除，请改用 byres around …` |
+
+示例：只检测链 RBD_pro 与 KRAS_pro 之间（跨 select）的相互作用：
+
+```python
+from DuIvyInteractions.pipeline import Pipeline
+
+Pipeline(ff="amber").run(
+    "md.tpr", "md.xtc", "out/",
+    interactions=["hydrogen_bond", "salt_bridge"],
+    select=["segid RBD_pro", "segid KRAS_pro"],
+    pairing="between",
+)
+```
+
+> 提示：基团（如一个供体、一个芳香环）须**完整属于某一个 select** 才保留——`--select "name N" --select "name H"` 这类原子级选择会使基团横跨多个 select 而被排除（规则确定，非报错）；残基/分子级选择（`segid`/`resname`/`byres`）不触发。
 
 ## 数据读取（system_readers）
 
@@ -107,7 +169,7 @@ detect(groups, trajectory=None, n_workers=1,
 | `groups` | 已按 `required_group_types` 过滤的基团列表 |
 | `trajectory` | MDAnalysis 轨迹对象（串行必需；`PerFrame`/`TwoPass` 忽略 `n_workers`，必须传） |
 | `n_workers` | 并行 worker 数（>1 时需同时提供 `topology_path` 与 `trajectory_path`；并行实现仅在 `PerTuple` 策略） |
-| `tuple_filter` | 可选回调 `(Tuple[Group, ...]) -> bool`，对候选基团组做用户自定义过滤（如只保留不同分子间的 pair）；在候选生成后、几何计算前应用 |
+| `tuple_filter` | 可选回调 `(Tuple[Group, ...]) -> bool`，对候选基团组做用户自定义过滤（如只保留不同分子间的 pair）；在候选生成后、几何计算前应用。该机制已由 CLI 的 `--select`/`--pairing` 暴露（见上文"顶层流程：Pipeline"与"用户基团选择"节） |
 
 - 三个策略基类：`InteractionDetectorPerTuple` / `InteractionDetectorPerFrame` / `InteractionDetectorTwoPass`（模板方法模式），`detect()` 接口一致、结果统一为 `List[Interaction]`。
 - 子类须实现：`name`、`required_group_types`、`metric_names` 三个属性，以及策略对应的检测方法——PerTuple 为 `get_candidate_tuples`/`compute_metrics`/`apply_threshold`；PerFrame 为 `get_candidate_tuples`/`compute_metrics_for_frame`/`apply_threshold`；TwoPass 为 `initialize_candidates`/`compute_pair_metrics`/`apply_threshold`（后三者基类提供返回空值的默认实现，须覆写）。三者均可选覆写 `filter_candidate_tuples`（用首帧坐标预筛）与 `_post_process`（跨对后处理钩子）。

@@ -80,6 +80,29 @@ Pipeline(ff="amber", strategy="two_pass").run(
 )
 ```
 
+### Restricting the Analysis Scope (--select / --pairing)
+
+By default the whole system is analyzed. `--select` (MDAnalysis selection expressions, repeatable or space-separated multi-values; each value defines an **independent** atom set, never merged) restricts the participation pool to the groups that are fully covered by one select, and `--pairing` (`any` by default / `between`) decides whether only cross-select candidate pairs are kept. Runnable examples on the repository test data:
+
+```bash
+# Protein–protein interface (Amber real data: RBD × KRAS, keep only cross-select pairs)
+dii run -t Tests/test_MD_case_amber/md.tpr -f Tests/test_MD_case_amber/md1ns.xtc \
+        -o out_rbd/ --ff amber \
+        --select "segid seg_0_RBD_pro" --select "segid seg_2_KRAS_pro" --pairing between
+
+# Intra-molecular analysis: only one segment, pairing defaults to any
+dii run -t Tests/test_MD_case_amber/md.tpr -f Tests/test_MD_case_amber/md1ns.xtc \
+        -o out_rbd_only/ --ff amber --select "segid seg_0_RBD_pro"
+
+# Protein–ligand interface (CHARMM36 real data: SMO protein × BST ligand)
+dii run -t Tests/test_MD_case_charmm36/SMO-BST_md_complex.tpr \
+        -f Tests/test_MD_case_charmm36/SMO-BST_md_complex.xtc \
+        -o out_smo/ --ff charmm \
+        --select "protein" --select "resname BST" --pairing between
+```
+
+All three commands detect all 8 types on the restricted scope (add `--interactions` to narrow the types, as shown above). A group is retained only if one select fully covers all its atoms; water groups always belong to the constant implicit "water side". Note that a geometric selection without `byres` (e.g. `around 6 (resname LIG)`) may leave some atoms outside the region and trigger the empty-pool error — use `byres around ...` instead. The same options are available in Python as `Pipeline.run(..., select=[...], pairing="between")`. The full syntax, semantics, error messages and further examples are in the [Command Reference](command).
+
 ## 3. Export Results
 
 Use `dii export` to export the h5 results to xvg/xpm/csv and print an overview:

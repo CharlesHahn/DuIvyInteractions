@@ -16,6 +16,7 @@ dii [-h] {run,export} ...
 
 ```bash
 dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATEGY]
+           [--select SELEXP ...] [--pairing any|between]
 ```
 
 ### 参数
@@ -28,6 +29,8 @@ dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATE
 | `--ff` | ✅ | — | 力场类型，取值 `amber` / `gromos` / `charmm` / `opls`（argparse choices 由 `IDENTIFIER_CLASSES` 注册表生成） |
 | `--interactions` | 否 | `all` | 要检测的相互作用类型，逗号分隔（大小写不敏感），如 `hydrogen_bond,pi_stacking` |
 | `--strategy` | 否 | `two_pass` | 检测策略：`two_pass` / `per_frame` / `per_tuple` |
+| `--select` | 否 | 无 | MDAnalysis 选择串，`action="append", nargs="+"`：可**重复出现**或**单次多值**（如 `--select "segid A" "segid B"`）；每个值定义一个**独立**的原子集合（不合并）。基团须**完整属于**某一个 select 才进入参与池（见下文"用户基团选择与过滤"） |
+| `--pairing` | 否 | `any` | 配对规则：`any` = 参与池内全部候选不设配对约束（默认）；`between` = 仅保留两端基团分属不同 select 的候选对（需 ≥2 个 select，否则报错） |
 
 `--ff` 四个取值对应的识别器（`DuIvyInteractions/group_identifiers/__init__.py`）：
 
@@ -38,7 +41,7 @@ dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATE
 | `charmm` | `CharmmFFGroupIdentifier` | CHARMM36 / C36m（含 CGenFF 配体） |
 | `opls` | `OplsFFGroupIdentifier` | OPLS-AA / L |
 
-传入未知 `--ff` 会报错并列出全部可用值；传入未知 `--interactions` 类型会报错退出并列出全部可用类型（`ALL_INTERACTIONS`）。
+传入未知 `--ff` 会报错并列出全部可用值；传入未知 `--interactions` 类型会报错退出并列出全部可用类型（`ALL_INTERACTIONS`）；`--select` / `--pairing` 配置错误（语法错误、空 select、select 间重叠、`between` 数量不足、空池）一律以 `error: ...` 形式友好报错退出（见下文"用户基团选择与过滤"与"退出码"）。
 
 ### 支持的 8 种相互作用类型
 
@@ -48,11 +51,112 @@ dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATE
 - `all` 是默认值，等价于"全部 8 类"；**`all` 不得与其他类型混用**，混用时报错 `'all' cannot be mixed with other types`。
 - 单类型检测失败（如体系不含金属、无卤素）只打印 `[WARN] <类型> detection failed: <原因>`，不中断其余类型。
 
+### 用户基团选择与过滤（--select / --pairing）
+
+`--select` 与 `--pairing` 用于限定检测的作用范围：`--select` 定义参与检测的基团**参与池**，`--pairing` 定义候选对的配对规则。选择语法复用 **MDAnalysis Atom selection language**（本项目已依赖 MDAnalysis，不引入新语法）；选择与配对仅作用于基团池与候选对层面，**检测器内部的几何判据与阈值零改动**。核心用法：
+
+```bash
+dii run -t md.tpr -f md.xtc -o out/ --ff amber \
+       [--select "SELEXP" ["SELEXP" ...]] [--pairing any|between]
+```
+
+- `--select` 为 `action="append", nargs="+"`：可**重复出现**，也可**单次多值**，最终拍平为一列选择串。每个值是一条 MDAnalysis 选择串，定义一个**独立**的原子集合，多个 select **不合并**。以下两种写法等价：
+
+```bash
+dii run -t md.tpr -f md.xtc -o out/ --ff amber --select "segid A" --select "segid B"
+dii run -t md.tpr -f md.xtc -o out/ --ff amber --select "segid A" "segid B"
+```
+
+- `--pairing` 取 `any`（默认）或 `between`：`any` = 参与池内全部候选不设配对约束；`between` = 仅保留**跨 select** 的候选对（需 ≥2 个 select，否则报错）。
+
+#### 语法速查
+
+`--select` 的值是一条 MDAnalysis 选择语法字符串，常用写法：
+
+| 类别 | 语法 | 示例 |
+|:-----|:-----|:-----|
+| 属性选择 | `segid` / `resname` / `resid` / `resnum` / `name` / `type` / `moltype` / `index` / `bynum` | `segid seg_0_RBD_pro`、`resname LIG`、`resid 1:30`、`resnum 1 to 5`、`name CA`、`type X`、`moltype M`、`index 0:100`、`bynum 1:100` |
+| 标准集 | `protein` / `backbone` / `nucleic` / `nucleicbase` / `nucleicsugar` | `--select "protein"` |
+| 布尔组合 | `and` / `or` / `not`、括号分组 | `protein and not (resname ALA or resname LYS)` |
+| 通配符 | `*` / `[ ]` / `?` | `GL*`、`GL[YN]`、`?` |
+| 几何关键字（第一帧静态求值） | `around` / `byres` / `sphzone` / `point` / `prop` | `around 6 (resname LIG)`、`byres around 6 (resname LIG)`、`sphzone 6 (protein)`、`point X Y Z D`、`prop z > 5` |
+
+> 完整语法与各关键字定义以 MDAnalysis 官方 Atom selection language 文档为准。
+
+#### 语义
+
+**基团保留规则**（参与池的构成）：
+
+- 基团保留 ⇔ 该基团**全部原子**都被**某一个** select 集合完整覆盖（全部原子 ∈ 某个 select）；
+- 不接受"仅属多个 select 的并集"、不接受横跨（原子散落于不同 select）的基团；
+- 因此**原子级** select（如 `name N` + `name H`）会使基团横跨 → 不保留，属确定规则而非报错；**残基/分子级**选择（`segid` / `resname` / `byres`）不会触发该分支。
+
+**水侧（隐式恒定）**：
+
+- `group_type == "water"` 的桥接水基团**恒属"水侧"**——隐式 select，用户不可关闭、无需选择；水基团始终保留，跳过 select 归属判定；
+- 水残基（SOL 等）上识别出的 H_donor/H_acceptor **不属于水侧**，须满足 select 覆盖才保留（防止水残基供体污染参与池）；
+- between 配对判定**跳过水侧**。
+
+**配对规则（between）**：
+
+- 仅保留两端基团分属**不同 select** 的候选对；任一端归属为水侧（或未归属）的对被排除；
+- 约束位置表固定、不开放给用户：氢键 / π-堆积 / 盐桥 / 疏水 / 卤键 / 金属配位 / π-阳离子 → `(0, 1)`（两端）；水桥 `(donor, water, acceptor)` → `(0, 2)`，水分子中立（不参与配对判定）；
+- 分子内分析 = 单个 `--select` + 默认 `any`（不设配对约束），无需额外参数。
+
+**显式选水（方案 A）**：
+
+- 未指定 `--select`（`assignment=None`）时，水残基基团按 `WATER_RESIDUES` 排除（与既有行为完全一致）；
+- 显式选中水残基（如 `--select "resname SOL"`）时，被归属到**具体 select（非水侧）**的水残基 H_donor/H_acceptor 基团**豁免** `WATER_RESIDUES` 排除，可参与氢键等检测（如"蛋白 × 水之间的氢键"）。
+
+#### 示例
+
+```bash
+# 蛋白-蛋白界面（Amber 真实数据：RBD × KRAS，between）
+dii run -t Tests/test_MD_case_amber/md.tpr -f Tests/test_MD_case_amber/md1ns.xtc \
+        -o out_rbd/ --ff amber \
+        --select "segid seg_0_RBD_pro" --select "segid seg_2_KRAS_pro" --pairing between
+
+# 蛋白-配体界面（CHARMM36 真实数据：SMO 蛋白 × BST 配体，between）
+dii run -t Tests/test_MD_case_charmm36/SMO-BST_md_complex.tpr \
+        -f Tests/test_MD_case_charmm36/SMO-BST_md_complex.xtc \
+        -o out_smo/ --ff charmm \
+        --select "protein" --select "resname BST" --pairing between
+
+# 分子内分析（单 select，pairing 默认 any）
+dii run -t Tests/test_MD_case_amber/md.tpr -f Tests/test_MD_case_amber/md1ns.xtc \
+        -o out_rbd_only/ --ff amber --select "segid seg_0_RBD_pro"
+```
+
+通用写法（占位符替换）：蛋白-配体界面 `--select "protein" --select "resname LIG" --pairing between`；三聚体两两界面 `--select "segid A" --select "segid B" --select "segid C" --pairing between`（N 个 select 的两两之间均保留）；配体口袋残基 `--select "byres around 6 (resname LIG)"`；显式选水（蛋白 × 水氢键）`--select "segid seg_0_RBD_pro" --select "resname SOL" --pairing between`。
+
+> **几何选择注意**：`around 6 (resname LIG)` 未加 `byres` 时，接触残基的部分原子可能在圈外，基团因"未完整覆盖"被排除，可能触发空池报错（见下文错误表）；加 `byres` 可保证整残基进入选中集合。
+
+#### 错误信息
+
+选择配置错误一律转换为**友好报错**（`SystemExit`，输出 `error: ...`，不暴露 traceback）：
+
+| 情况 | 输出示例 |
+|:-----|:-----|
+| select 串语法错误 | `error: select 语法错误: '<串>' → <MDAnalysis原因>` |
+| 某 select 匹配 0 原子 | `error: select #N 未选中任何原子` |
+| select 间原子重叠 | `error: select #N 与 select #M 原子重叠 (K 个原子)，请用 and not 显式剔除后重试` |
+| `between` 且 select 数 < 2 | `error: --pairing between 需要至少 2 个 --select` |
+| 参与池内非水基团为 0（选择未命中任何真实化学基团） | `error: 参与池内无可用基团（非水基团 0 个）。若使用了 around/sphzone 几何选择，基团可能因部分原子在圈外被排除，请改用 byres around …` |
+
+空池检查以**非水基团为 0** 为准：水侧桥接水基团恒真保留，因此用户选错（如 `--select "name CA"` 只选到裸原子）时不会因水基团撑满参与池而静默产出空结果。select 间原子重叠**必须由用户手写修正**（如 `protein and not ...`），工具不做自动去重/归属。
+
+#### 限制
+
+- **几何选择是静态近似**：`around` / `sphzone` / `point` / `prop` 按**第一帧坐标**静态求值，非逐帧动态；配体大幅漂移后选中集合不更新。select 求值是唯一的坐标依赖点，第一帧完成后即固定，与"基团鉴定一次、与帧无关"的架构不冲突；
+- **显式选水 + 水桥**：water_bridge 中水是桥接体（非端），显式选水时水不做端；若供体/受体两端同属一个 select，则无跨侧候选对 → 空结果（设计语义，非缺陷）；如需水桥分析，使用默认隐式水侧（不显式选水）；
+- 复杂自定义配对规则（超出"跨 select"语义）请回落 Python API 的 `tuple_filter`（见{doc}`/reference/api`）。
+
 ### 内部流程
 
 1. 用 `GmxTprReader` 读取 tpr，识别器做一次基团鉴定（与帧无关，只做一次）；
 2. 用 `mda.Universe(tpr, xtc)` 加载轨迹；水残基名取识别器的 `WATER_RESIDUES`（跨力场正确排除水）；
-3. 对每个类型：按检测器的 `required_group_types` 过滤基团（除水桥外排除水分子），逐帧检测，结果保存为 `<output>/<类型>.h5`。
+3. （若指定了 `--select`）先 `u.trajectory[0]` 定位第一帧，把每条选择串求值为独立原子集合（几何选择按第一帧坐标静态求值）；校验语法 / 空 / 两两重叠后，将基团归属到对应的 select（`group_type == "water"` 的桥接水基团恒属水侧），过滤出参与池（见上文"用户基团选择与过滤"）；
+4. 对每个类型：按检测器的 `required_group_types` 过滤基团（除水桥外排除水分子；显式归属到具体 select 的水残基基团豁免），`between` 时经 tuple 层谓词只保留跨 select 候选对，逐帧检测，结果保存为 `<output>/<类型>.h5`。
 
 ### 输出
 
@@ -149,6 +253,7 @@ Top 5 occupancies:
 
 - `0`：成功
 - 非零：参数错误、文件不存在/损坏、未知类型、空结果等，均通过 `SystemExit` 抛出（如 `unknown interaction type: 'xxx'. Available: ...`、`'all' cannot be mixed with other types`、`cannot read h5 file: ...`）。
+- `--select` / `--pairing` 相关错误同样非零退出：输出带 `error:` 前缀的友好提示（如 `error: select 语法错误: ...`、`error: select #1 未选中任何原子`、`error: --pairing between 需要至少 2 个 --select`、`error: 参与池内无可用基团（非水基团 0 个）...`），不暴露 traceback。
 
 ## 下一步
 

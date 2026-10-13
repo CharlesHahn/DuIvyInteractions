@@ -134,7 +134,47 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
 dii run -t md.tpr -f md.xtc -o out/ --ff amber --strategy two_pass
 ```
 
-## 5. 性能参考
+## 5. 限定分析范围（--select / --pairing）
+
+`dii run` 默认把**全部已识别基团**都纳入检测。若只想分析特定界面或特定分子的相互作用（蛋白-蛋白界面、蛋白-配体界面、分子内分析等），用 `--select` 限定**参与池**，用 `--pairing between` 限定配对范围：
+
+```bash
+dii run -t TPR -f XTC -o OUTPUT --ff FF \
+    [--select "SELEXP" ["SELEXP" ...]] [--pairing any|between]
+```
+
+- `--select`：值是一条 MDAnalysis 选择语法字符串，可**重复出现**或**单次多值**；每个值定义一个**独立**的原子集合（不合并）。基团须**完整属于**某一个 select 才进入参与池（不接受"属于并集"、不接受横跨）。
+- `--pairing`：`any`（默认，参与池内全部候选不设配对约束）；`between`（仅保留两端基团分属**不同** select 的候选对，需 ≥2 个 select，否则报错；适用于界面两侧之间的分析）。
+
+基于仓库真实数据的可运行示例：
+
+**蛋白-蛋白界面**（Amber KRAS-RBD：RBD × KRAS 两端之间，`between`）：
+
+```bash
+dii run -t Tests/test_MD_case_amber/md.tpr -f Tests/test_MD_case_amber/md1ns.xtc \
+        -o out_rbd_interface/ --ff amber \
+        --select "segid seg_0_RBD_pro" --select "segid seg_2_KRAS_pro" --pairing between
+```
+
+**蛋白-配体界面**（CHARMM36 SMO-BST：SMO 蛋白 × BST 配体之间，`between`）：
+
+```bash
+dii run -t Tests/test_MD_case_charmm36/SMO-BST_md_complex.tpr \
+        -f Tests/test_MD_case_charmm36/SMO-BST_md_complex.xtc \
+        -o out_smo_interface/ --ff charmm \
+        --select "protein" --select "resname BST" --pairing between
+```
+
+**分子内分析**（只分析 RBD 链内部，单 select + 默认 `any`）：
+
+```bash
+dii run -t Tests/test_MD_case_amber/md.tpr -f Tests/test_MD_case_amber/md1ns.xtc \
+        -o out_rbd_only/ --ff amber --select "segid seg_0_RBD_pro"
+```
+
+> 语义要点：桥接水基团恒属隐式"水侧"，无需选择、始终可用；显式选水（如 `--select "segid seg_0_RBD_pro" --select "resname SOL"`）时，被归属到具体 select 的水残基 H_donor/H_acceptor 豁免水排除，可参与氢键等检测（蛋白 × 水氢键）；选择配置错误（语法错误、空 select、select 间重叠、`between` 数量不足、空池）一律以 `error: ...` 友好报错退出。完整语义、语法速查与错误表见[命令参考](command)。
+
+## 6. 性能参考
 
 以下为 Amber 测试体系（KRAS-RBD，116,383 原子，101 帧）上水桥检测的参考耗时（数字来自项目设计文档与 `Tests/unittests/`，环境为仓库开发环境；实际耗时随体系规模与机器而异）：
 
@@ -146,7 +186,7 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber --strategy two_pass
 
 水桥候选三元组可达 24.9 万个，`per_tuple` 逐对遍历轨迹是其慢的根因。**大体系/长轨迹/候选组合多时请使用默认 `two_pass`**。
 
-## 6. 已知限制与后续阅读
+## 7. 已知限制与后续阅读
 
 - 完整已知限制清单（PBC 未处理、水桥 TwoPass 缺 Ow-A 距离下界、疏水-芳香未去重、PerFrame 长轨迹内存占用等）见{doc}`/reference/limitations`。
 - 8 类相互作用的检测判据与结果解读，见[结果解读](result)。

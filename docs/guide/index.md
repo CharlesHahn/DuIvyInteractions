@@ -12,6 +12,7 @@ DuIvyInteractions 是一个基于 MD 拓扑力场参数的分子间相互作用�
 - **4 个力场识别器**（`DuIvyInteractions/group_identifiers/__init__.py` 的 `IDENTIFIER_CLASSES` 注册表）：Amber 家族（amber03/94/96/99/99sb/99sb-ildn/GS/14sb 蛋白 + GAFF/GAFF2 配体）、GROMOS 53A6/54A7、CHARMM36/C36m（含 CGenFF）、OPLS-AA/L。`dii run --ff` 的取值（`amber`/`gromos`/`charmm`/`opls`）与之一一对应。
 - **8 类相互作用**：氢键、π-π 堆积、盐桥、疏水、卤键、金属配位、水桥、π-阳离子（`pipeline.py` 的 `ALL_INTERACTIONS`）。
 - **检测策略**：`two_pass`（默认；两轮遍历 + KDTree 预筛 + 稀疏存储，性能最优）与 `per_frame`（逐帧向量化）为现行策略；`per_tuple`（逐候选组遍历）处于"可能被舍弃"状态，仅作对照参考。
+- **用户自定义基团选择与过滤**：`dii run --select/--pairing` 基于 MDAnalysis 选择语法限定参与池与配对规则——基团须完整属于某一个 select 才进入参与池，`--pairing between` 仅保留跨 select 的候选对（蛋白-蛋白/蛋白-配体界面、分子内分析），水恒属隐式"水侧"；歧义/空状态一律友好报错。详见[命令参考](command)。
 - **结果存储与导出**：HDF5 序列化（格式版本 1.0，`io/h5.py`）+ xvg/xpm/CSV 导出（`dii export`，与 GROMACS/DuIvyTools 工具链兼容）。
 - **真实测试案例（3 力场）**：仓库自带 3 套真实 GROMACS 数据——Amber KRAS-RBD D927（116,383 原子，含 GNP/Mg²⁺）、GROMOS 53A6（130 残基蛋白 + 6 配体）、CHARMM36 SMO-BST——配套 `Tests/unittests/` 集成测试覆盖全部 8 类相互作用；OPLS-AA 的基团识别由单测验证（暂未配套真实轨迹数据）。
 

@@ -54,6 +54,16 @@ The analysis is divided into two stages:
 
 Group identification is the difficult stage: it must map tpr atom types to chemical groups correctly. The tool maintains per-force-field feature tables and the necessary structural criteria, and identifies groups once, to be reused for all frames.
 
+## Participation Pool and User Group Selection (--select / --pairing)
+
+On top of the two-stage "group identification → geometric evaluation" flow, `dii run --select/--pairing` adds a layer of **user constraints** that restricts the analysis scope to user-specified groups and pairings:
+
+- `--select`: defines several **independent** atom sets with MDAnalysis selection syntax; a group is retained ⇔ **all** of its atoms belong to **one** select set (neither "belongs to the union" nor spanning across selects); the retained groups form the **participation pool**;
+- `--pairing`: `any` (default: all pool candidates, no pairing constraint) or `between` (keep only candidate pairs whose two ends belong to different selects, for interface / cross-side analysis);
+- Bridging water groups (`group_type == "water"`) always belong to the implicit "water side": always in the pool, no selection required, and never participating in `between` pairing judgment.
+
+Selection and pairing act only at the group-pool and candidate-pair level: they do not change the identified groups themselves, nor the detectors' geometric criteria — group identification remains "once, frame-independent" (the only exception: geometric selections such as `around`/`sphzone`/`point`/`prop` are evaluated **statically once at the first frame**). Full semantics, a syntax cheat-sheet, and examples are in the [command reference](../guide/command.md).
+
 ## Explicit Hydrogens and Chemical Information
 
 The following chemical information is explicitly present in the tpr topology and read directly from it, with no coordinate inference:

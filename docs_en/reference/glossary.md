@@ -33,6 +33,15 @@ This document summarizes the terms and symbols used in the tool for quick refere
 | **occupancy** | Occupancy = number of frames in which a pair exists / total number of frames |
 | **h5** | HDF5 result file, the output of `dii run` (format version 1.0) |
 
+## User Group Selection and Pairing (--select / --pairing)
+
+| Term | Description |
+|:-----|:-----|
+| `--select` | CLI argument of `dii run` (parameter `select` of `Pipeline.run()`): one or more MDAnalysis selection expressions (`action="append", nargs="+"`, so it may be repeated or given as space-separated multi-values). Each expression defines an **independent** atom set (never merged); a group is retained only if one select fully covers all its atoms |
+| `--pairing` | CLI argument of `dii run` (parameter `pairing` of `Pipeline.run()`): `any` (default) — all pool candidates without a pairing constraint; `between` — keep only candidate pairs whose two ends belong to different selects (requires ≥ 2 selects) |
+| participation pool | The group pool that enters detection after applying `--select`: all groups retained by the coverage rule (one select fully covering all atoms of the group) plus the constant water side |
+| water side | The constant, implicit affiliation of water groups: `group_type == "water"` bridging water groups always belong to the water side, skip select assignment, and never participate in `between` pairing (water_bridge pairs are judged on their donor/acceptor ends, with water neutral) |
+
 ## Group Types (GROUP_TYPES)
 
 | Group Type | Meaning | Participating Interactions |

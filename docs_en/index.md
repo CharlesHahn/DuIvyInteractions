@@ -15,6 +15,8 @@ An intermolecular interaction determination tool based on MD topology force fiel
 1. **Group identification** (frame-independent, performed once): tpr atom types + bonding graph + explicit hydrogens + charges → deterministic identification of groups (donors/acceptors/aromatic rings/charged/hydrophobic/halogen/metal/water). H-bond acceptor determination was revised in fix A1 (2026-09-30), which removed H-bearing non-acceptor N types; the evidence list is in `doc/acceptor_identification_evidence.md`.
 2. **Geometric determination** (per frame): distance/angle/planarity criteria → per-frame interaction lists → temporal statistics.
 
+**User-defined group selection & filtering**: `dii run` accepts repeatable `--select` (MDAnalysis selection expressions — each value is an independent atom set, never merged; a group is retained only if one select fully covers all its atoms) and `--pairing` (`any`, default — all pool candidates without a pairing constraint; `between` — keep only cross-select candidate pairs, requiring at least 2 selects). Water groups always belong to the constant implicit "water side".
+
 **Real-data test cases (3 force fields)**: Amber KRAS–RBD D927 (with GNP/Mg metal centre), GROMOS 53A6 (130-residue protein + 6 ligands ZIN1–6), and CHARMM36 SMO–BST (Smoothened–β-sitosterol, Mendeley v94vzbwzf3, two tpr variants — a water-stripped complex and a full-atom system with 63,055 SOL waters — and 64 tests) are covered by integration tests (`Tests/test_MD_case_*` and `Tests/unittests/`); all eight interaction types are validated on real data (halogen bonds and metal coordination are asserted as zero-result in the SMO–BST system, which contains no halogen or metal centre).
 
 ## Quick Start
