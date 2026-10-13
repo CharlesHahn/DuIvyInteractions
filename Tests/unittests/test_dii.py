@@ -117,11 +117,14 @@ class TestMainRun:
                 calls["ff"] = ff
                 calls["strategy"] = strategy
 
-            def run(self, tpr, xtc, output, interactions):
+            def run(self, tpr, xtc, output, interactions,
+                    select=None, pairing="any"):
                 calls["tpr"] = tpr
                 calls["xtc"] = xtc
                 calls["output"] = output
                 calls["interactions"] = interactions
+                calls["select"] = select
+                calls["pairing"] = pairing
 
         import DuIvyInteractions.pipeline as pipeline_mod
         monkeypatch.setattr(pipeline_mod, "Pipeline", FakePipeline)

@@ -31,6 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--strategy", default="two_pass",
                        choices=["two_pass", "per_frame", "per_tuple"],
                        help="detection strategy, default two_pass")
+    run_p.add_argument("--select", action="append", nargs="+",
+                       metavar="SELEXP", default=None,
+                       help="MDAnalysis selection string defining one participant set "
+                            "(repeatable or space-separated multi-value; "
+                            "each group must be fully covered by one select)")
+    run_p.add_argument("--pairing", default="any", choices=["any", "between"],
+                       help="pairing rule between selects: any (default) or between "
+                            "(keep only cross-select pairs; requires >=2 --select)")
 
     # export 子命令
     export_p = sub.add_parser("export", help="export h5 results to xvg/xpm/csv and print overview")
@@ -139,8 +147,15 @@ def main():
                 if name not in ALL_INTERACTIONS:
                     raise SystemExit(
                         f"unknown interaction type: '{name}'. Available: {', '.join(ALL_INTERACTIONS)}")
-        Pipeline(args.ff, args.strategy).run(
-            args.tpr, args.xtc, args.output, interactions)
+        try:
+            # append+nargs='+' → [[sel, ...], ...] 拍平为 [sel, ...]
+            selects = (sum(args.select, []) if args.select else None)
+            Pipeline(args.ff, args.strategy).run(
+                args.tpr, args.xtc, args.output, interactions,
+                select=selects, pairing=args.pairing)
+        except ValueError as e:
+            # 用户输入/选择歧义 → 友好报错（不暴露 traceback）
+            raise SystemExit(f"error: {e}")
     elif args.command == "export":
         _run_export(args)
 
