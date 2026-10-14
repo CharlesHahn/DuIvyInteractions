@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents when working with code in this repository.
 
 ## 编程哲学（项目规范）
 
@@ -63,7 +63,8 @@ DuIvyInteraction/
 │   ├── group_identifiers/        # 4 力场识别器（amber/gromos/charmm/opls）+ __init__ 注册表
 │   ├── interaction_detectors/    # 8 类型 × 3 策略（*_detector_{per_tuple,per_frame,two_pass}.py）
 │   ├── io/                       # h5.py(序列化), interaction_exporter.py + 8 导出子类
-│   ├── pipeline.py               # 编排：Reader→Identifier→Detector→h5
+│   ├── pipeline.py               # 编排：Reader→Identifier→Selection→Detector→h5
+│   ├── selection.py              # 用户基团选择与过滤（--select/--pairing 核心逻辑）
 │   ├── DII.py                    # 命令行入口（dii run / dii export）
 │   ├── utils/                    # （空，待实现）
 │   └── visualizers/              # （空，待实现）
@@ -78,7 +79,7 @@ DuIvyInteraction/
 └── dist/                         # PyPI 构建产物（发布用）
 ```
 
-**架构原则**：单一职责；依赖高层→低层不反向（detectors/identifiers → core）；策略模式可插拔。
+**架构原则**：单一职责；依赖高层→低层不反向（detectors/identifiers/selection → core）；策略模式可插拔。
 
 **检测器接口**：3 个基类（PerTuple/PerFrame/TwoPass，模板方法模式），`detect()` 接口一致、结果统一为矩阵式 `List[Interaction]`，由 `pipeline.py` 的 `STRATEGY_INDEX` 切换。详见 `core/interfaces.py`。
 
@@ -88,12 +89,16 @@ DuIvyInteraction/
 dii run -t md.tpr -f md.xtc -o out/ --ff amber     # 检测→h5（--ff 支持 amber/gromos/charmm/opls）
 #   --interactions hydrogen_bond,pi_stacking      # 只检部分类型（默认 all=8）
 #   --strategy two_pass|per_frame|per_tuple       # 策略（默认 two_pass）
+#   --select "segid A" "segid B" --pairing between  # 用户基团选择：只检跨 select 界面（可重复/多值）
 dii export -i out/salt_bridge.h5 -o out_export/   # 导出 xvg/xpm/csv + 概览（支持多 Interaction h5）
 ```
 
 ```python
 from DuIvyInteractions.pipeline import Pipeline
 Pipeline(ff="amber", strategy="two_pass").run("md.tpr", "md.xtc", "out/", interactions=None)
+# 限定参与池/配对：
+Pipeline(ff="amber").run("md.tpr", "md.xtc", "out/",
+    select=["segid seg_0_RBD_pro", "segid seg_2_KRAS_pro"], pairing="between")
 ```
 
 ## 当前代码状态（2026-10-09）
@@ -103,6 +108,7 @@ Pipeline(ff="amber", strategy="two_pass").run("md.tpr", "md.xtc", "out/", intera
 - ✅ 阶段二：相互作用检测（8 类型 × 3 策略，TwoPass 水桥 KDTree 优化 65h→~5s）
 - ✅ 阶段三：结果存储与导出（HDF5 序列化 + xvg/xpm/CSV 导出器 + XPM 手动构建修复）
 - ✅ 阶段四：命令行（dii run / dii export，多 Interaction 遍历 + 空数据/损坏 h5/0 帧防护 + 索引校验）
+- ✅ 阶段五：**用户基团选择与过滤**（`--select` / `--pairing`，CLI + Pipeline，见下）
 - ✅ 真实测试案例：**3 力场**（Amber KRAS-RBD / GROMOS 53A6 / CHARMM36 SMO-BST，8 类相互作用全覆盖）
 
 **H 键受体误判修复（2026-09-30，A1）**：剔除带 H 的非受体 N 类型（普通酰胺/铵/带 H 吡咯/胍基），
@@ -111,6 +117,14 @@ Pipeline(ff="amber", strategy="two_pass").run("md.tpr", "md.xtc", "out/", intera
 
 **跨力场水残基处理（2026-10-08）**：`GroupIdentifier.WATER_RESIDUES` 类属性统一入口，
 pipeline 与 `_find_metal_binding`/water_bridge 检测器按力场正确排除水（CHARMM TIP3 / OPLS HO4/HO5）。
+
+**用户基团选择与过滤（2026-10-09，--select / --pairing）**：CLI 与 `Pipeline.run()` 新增
+`--select`（MDAnalysis 选择语法，可重复/单次多值，各定义独立原子集合）与 `--pairing`
+（`any` 默认 / `between` 仅跨 select 对）参数，基于 `tuple_filter` 机制（检测器零改动）。
+规则：**基团保留 ⇔ 全部原子完整属于某一个 select**；`group_type=="water"` 桥接水恒属
+隐式"水侧"（不可关闭、不参与配对）；select 重叠/空池等歧义一律友好报错（`error: ...`）。
+显式选水（如 `--select "resname SOL"`）时水残基 H_donor/H_acceptor 豁免 WATER_RESIDUES
+排除，可参与蛋白-水氢键。设计见 `doc/group_selection_design.md`。
 
 **未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果人工审查、
 长轨迹 PerFrame 内存优化、PBC 处理、疏水-芳香去重等。

@@ -171,7 +171,7 @@ os  → {元素: O, sp3, 醚氧, 有孤对 → 受体}
 
 特征向量字段：`(element, hyb, aromatic, lone_pair, polarity)`
 
-### 5.2 映射来源（两条独立证据链，详见 CLAUDE.md）
+### 5.2 映射来源（两条独立证据链，详见 AGENTS.md）
 
 类型→化学特征的映射不是从命名"推导"的，也不是"我的知识"——而是来自两条独立的、可验证的来源：
 
@@ -474,7 +474,7 @@ metals = [a for a in mt.atoms if a.z in (3, 11, 12, 19, 20, 30, 26, 25, 29)]
 
 ```
 DuIvyInteraction/
-├── CLAUDE.md                          # 项目文档（含第一性原理分析）
+├── AGENTS.md                          # 项目文档（含第一性原理分析）
 ├── plip_md_research_survey.md         # 竞品调研报告
 ├── dump_md_D927.tpr.txt               # gmx dump 输出（4.2MB，含全部拓扑）
 ├── dump_md_D927.tpr.log               # dump 日志

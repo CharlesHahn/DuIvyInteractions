@@ -79,7 +79,7 @@ DII 的基团鉴定指标（见 `amber_ff_identifier.py`）依赖四类证据源
 
 ## 5. 核心结论
 
-1. **CHARMM 与 OPLS-AA 都能对应上**，走的就是代码架构已设计好的"新力场入库 = 填特征表"路线（CLAUDE.md 原话）。工作量 = 各建一套 STRONG_AROMATIC + ACCEPTOR_TYPES 表 + 水残基名单（TIP3/TIP4）+ HIS 三态命名，识别器逻辑零改动；
+1. **CHARMM 与 OPLS-AA 都能对应上**，走的就是代码架构已设计好的"新力场入库 = 填特征表"路线（AGENTS.md 原话）。工作量 = 各建一套 STRONG_AROMATIC + ACCEPTOR_TYPES 表 + 水残基名单（TIP3/TIP4）+ HIS 三态命名，识别器逻辑零改动；
 2. **GROMOS 是唯一特例**：类型名不编码化学（`C` 通吃羰基/芳香），对应需降级证据源（① 类型语义 → 几何平面性 / rtp 反推）。这反证了"类型名语义"这条证据源的独立价值；
 3. **CHARMM 的 CA 双义坑（原子名 α 碳 vs 类型名芳香碳）** 与项目 Amber `C` 双身份属同类问题；DII 读 tpr `atom_type` 的架构天然免疫；
 4. **对论文图 6"适用域"表述的升级**：不是"只支持 Amber"，而是"**支持类型名编码化学环境的全原子力场**（Amber / CHARMM / OPLS 均可填表接入）；不支持的仅是 GROMOS 这类类型无语义或 UA 的力场"。同时修正此前"GROMOS 无显式 H → 供体失效"的说法——**GROMOS 极性 H 显式，供体鉴定实际可用**，真正障碍是类型无语义（芳香）与疏水 H 缺失。
@@ -124,7 +124,7 @@ DII 的基团鉴定指标（见 `amber_ff_identifier.py`）依赖四类证据源
 - `doc/paper_framework_v1.md` —— 论文框架 v1（图 6 适用域据此精确化）
 - `doc/why_force_field_group_identification.md` —— 差异化论证与文献证据链
 - `doc/competitor_landscape_survey.md` —— 竞品全景
-- `CLAUDE.md` —— "新力场入库 = 填特征表"架构承诺
+- `AGENTS.md` —— "新力场入库 = 填特征表"架构承诺
 
 ---
 

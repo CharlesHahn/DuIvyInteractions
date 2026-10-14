@@ -30,7 +30,7 @@
 - [五、差异化窗口评估](#五差异化窗口评估)
 - [六、下一步建议](#六下一步建议)
 - [附录 A：检索数据汇总](#附录-a检索数据汇总)
-- [附录 B：与 CLAUDE.md 的技术对照](#附录-b与claudemd的技术对照)
+- [附录 B：与 AGENTS.md 的技术对照](#附录-b与agentsmd的技术对照)
 
 ---
 
@@ -262,9 +262,9 @@ ProLIF CHANGELOG 里 20 条>=修 SMARTS 规则的记录（如 "HBond acceptor �
 
 ---
 
-## 附录 B：与 CLAUDE.md 的跟进
+## 附录 B：与 AGENTS.md 的跟进
 
-- 本项目 D927/CY 体系正是"非标准残基"场景：**tpr 中 GAFF 类型 `c/n/ca/nb/cp/c2/c3/os/f/ss`** 全部直接可用（见 CLAUDE.md中的 D927.itp）——验证" tpr 自带化学语义"为切实可行。
+- 本项目 D927/CY 体系正是"非标准残基"场景：**tpr 中 GAFF 类型 `c/n/ca/nb/cp/c2/c3/os/f/ss`** 全部直接可用（见 AGENTS.md中的 D927.itp）——验证" tpr 自带化学语义"为切实可行。
 - 该调研不改变现有 MD 方案方法（PLIP 继续用于单帧交互，不在轨迹上跑）；仅在志愿开发新分析工具时作为依据。
 
 ---
