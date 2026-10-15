@@ -1,12 +1,18 @@
 # 变更日志
 
-## v0.1.0（开发中）
+## v0.0.3（2026-10-09）
+
+### 2026-10-09
+
+- **CLI 用户基团选择与过滤**：`dii run` 新增 `--select`（MDAnalysis 选择语法，可重复出现或单次多值，每个值定义一个**独立**的原子集合，不合并）与 `--pairing`（`any`/`between`，默认 `any`；`between` 仅保留跨 select 候选对，需 ≥2 个 select）；基团须**完整属于某 select** 才保留、select 间原子重叠报错、显式选水豁免水排除（方案 A）；`Pipeline.run()` 同步新增 `select`/`pairing` 参数。设计见 `doc/group_selection_design.md`
+- **文档同步**：docs/ 与 docs_en/ 中英双站同步该功能（command/quickstart/api/concepts/glossary/limitations/changelog）；`CLAUDE.md` 重命名为 `AGENTS.md`（目录结构、使用示例、阶段五状态同步）；`skills/duivyinteractions-skill/SKILL.md` 能力边界与参数说明对齐（--ff 四力场、--select/--pairing）
+
+## v0.0.2（2026-10-09）
 
 ### 2026-10-09
 
 - **CHARMM36 真实测试案例（SMO-BST）**：新增 CHARMM36 真实测试数据（Smoothened–β-谷甾醇复合物，CHARMM36 + CGenFF + SPC/E 水，GROMACS 2018.1，来源 Mendeley v94vzbwzf3，Omar et al. 2020, *Data in Brief*）与 64 项真实数据测试（识别器 28 项 + 策略二/三各 16 项 + 水桥 4 项）；含两套 tpr（删水复合物 / 全原子 63055 个 SOL 水）；真实数据测试覆盖全部 8 类相互作用（SMO-BST 体系无卤素/金属中心，卤键与金属配位以零结果断言覆盖）
 - **测试输出 gitignore**：`Tests/interaction_h5data/` 整目录加入 `.gitignore`（测试运行生成的 h5/csv/xpm 等产物，不进入版本库）
-- **CLI 用户基团选择与过滤**：`dii run` 新增 `--select`（MDAnalysis 选择语法，可重复出现或单次多值，每个值定义一个**独立**的原子集合，不合并）与 `--pairing`（`any`/`between`，默认 `any`；`between` 仅保留跨 select 候选对，需 ≥2 个 select）；基团须**完整属于某 select** 才保留、select 间原子重叠报错、显式选水豁免水排除（方案 A）；`Pipeline.run()` 同步新增 `select`/`pairing` 参数。设计见 `doc/group_selection_design.md`
 
 ### 2026-10-08
 
@@ -31,6 +37,8 @@
 ### 2026-09-28
 
 - **英文文档站点**：新增 `docs_en/`（独立 ReadTheDocs 项目）并由 CLI 同步英文化
+
+## v0.0.1（2026-09-19）
 
 ### 2026-09-18 ~ 09-19
 

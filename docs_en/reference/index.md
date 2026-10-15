@@ -4,7 +4,7 @@ This section is intended for **researchers who want to understand the principles
 
 ## Current-State Overview
 
-The reference implementation state of DuIvyInteractions v0.0.1 is as follows (each item corresponds to the code in `DuIvyInteractions/`):
+The reference implementation state of DuIvyInteractions v0.0.3 is as follows (each item corresponds to the code in `DuIvyInteractions/`):
 
 - **Two-stage architecture**: ① group identification — performed once and frame-independent, deterministically identifying groups from tpr atom types + bonding graph + explicit hydrogens + charges; ② geometric determination — per-frame distance/angle/planarity criteria for 8 interaction types. See [Core Concepts](concepts), [Group Identification Rules](group_rules), and [Interaction Criteria](criteria).
 - **4 force-field identifiers**: the Amber family (proteins + GAFF/GAFF2), GROMOS 53A6/54A7, CHARMM36/C36m (including CGenFF), and OPLS-AA/L, managed by the `IDENTIFIER_CLASSES` registry; water exclusion uses each identifier's own `WATER_RESIDUES` class attribute (correctly excluding CHARMM TIP3, OPLS HO4/HO5, etc.). See [Force-Field Type Mapping](force_field) and [Python API](api).

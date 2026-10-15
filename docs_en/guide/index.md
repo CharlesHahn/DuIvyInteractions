@@ -6,7 +6,7 @@ This section is for **end users** (computational chemistry and structural biolog
 
 DuIvyInteractions is a tool for determining intermolecular interactions based on MD topology force-field parameters. Its core idea is to **read force-field atom types directly from the GROMACS tpr topology to identify chemical groups**, rather than rebuilding chemical structures (bond orders, aromaticity, protonation) from coordinates as PLIP/ProLIF do, so the chemical information already present in the MD topology is never discarded; the results are **deterministic** and **consistent with the force field used**.
 
-Key features of the current version (package version v0.0.1, `pyproject.toml`):
+Key features of the current version (package version v0.0.3, `pyproject.toml`):
 
 - **Two-stage architecture**: ① group identification — performed once, frame-independent, deterministically identifying groups (donor / acceptor / aromatic ring / charged / hydrophobic / halogen / metal / water) from the tpr atom types + bonding graph + explicit hydrogens + charges; ② geometric determination — frame-by-frame distance/angle/planarity criteria, followed by temporal statistics.
 - **4 force-field identifiers** (the `IDENTIFIER_CLASSES` registry in `DuIvyInteractions/group_identifiers/__init__.py`): Amber family (amber03/94/96/99/99sb/99sb-ildn/GS/14sb proteins + GAFF/GAFF2 ligands), GROMOS 53A6/54A7, CHARMM36/C36m (including CGenFF), and OPLS-AA/L. The choices of `dii run --ff` (`amber`/`gromos`/`charmm`/`opls`) correspond one-to-one.

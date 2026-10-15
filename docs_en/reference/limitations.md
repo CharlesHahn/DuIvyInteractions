@@ -6,7 +6,7 @@ This document describes the tool's version information, supported scope, and kno
 
 | Item | Value |
 |:---|:---|
-| Software version | v0.0.1 |
+| Software version | v0.0.3 |
 | HDF5 result format version | 1.0 |
 | Supported Python | >= 3.9 |
 | Package name (PyPI) | `duivyinteractions` |

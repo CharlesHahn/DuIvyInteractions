@@ -4,7 +4,7 @@
 
 ## 当前状态概览
 
-DuIvyInteractions v0.0.1 的参考实现状态如下（与代码——`DuIvyInteractions/`——逐项对应）：
+DuIvyInteractions v0.0.3 的参考实现状态如下（与代码——`DuIvyInteractions/`——逐项对应）：
 
 - **两段式架构**：① 基团鉴定——只做一次、与帧无关，从 tpr 原子类型 + 键合图 + 显式 H + 电荷确定性地识别基团；② 几何判定——逐帧按距离/角度/平面临近判据判定 8 类相互作用。详见[核心概念](concepts)、[基团识别规则](group_rules)与[相互作用判据](criteria)。
 - **4 力场识别器**：Amber 家族（蛋白 + GAFF/GAFF2）、GROMOS 53A6/54A7、CHARMM36/C36m（含 CGenFF）、OPLS-AA/L，经 `IDENTIFIER_CLASSES` 注册表统一管理；水残基排除用各识别器自带的 `WATER_RESIDUES` 类属性（跨力场正确排除 CHARMM TIP3、OPLS HO4/HO5 等）。详见[力场类型映射](force_field)与[Python API](api)。

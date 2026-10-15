@@ -3,8 +3,8 @@
 project = "DuIvyInteractions"
 copyright = "2026, DuIvy Team"
 author = "DuIvy Team"
-version = "0.1.0"
-release = "0.1.0"
+version = "0.0.3"
+release = "0.0.3"
 
 # -- Extensions ---------------------------------------------------------------
 

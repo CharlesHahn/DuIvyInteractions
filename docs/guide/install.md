@@ -1,6 +1,6 @@
 # 安装与环境配置
 
-本文档说明如何安装 DuIvyInteractions 并验证环境。包发布版本为 v0.0.1（`pyproject.toml`），结果文件采用 HDF5 格式版本 1.0。
+本文档说明如何安装 DuIvyInteractions 并验证环境。包发布版本为 v0.0.3（`pyproject.toml`），结果文件采用 HDF5 格式版本 1.0。
 
 ## 系统要求
 

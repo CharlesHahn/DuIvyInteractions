@@ -6,7 +6,7 @@
 
 DuIvyInteractions 是一个基于 MD 拓扑力场参数的分子间相互作用判定工具。其核心思路是**直接从 GROMACS tpr 拓扑读取力场原子类型来识别化学基团**，而非像 PLIP/ProLIF 那样从坐标重建化学结构（键序、芳香性、加氢），因此不会丢失 MD 拓扑中已有的化学信息，结果**确定**且与所用**力场自洽**。
 
-当前版本（包版本 v0.0.1，`pyproject.toml`）功能要点：
+当前版本（包版本 v0.0.3，`pyproject.toml`）功能要点：
 
 - **两段式架构**：① 基团鉴定——只做一次、与帧无关，从 tpr 的原子类型 + 键合图 + 显式 H + 电荷确定性地识别基团（供体/受体/芳香环/带电/疏水/卤素/金属/水）；② 几何判定——逐帧按距离/角度/平面临近判据判定相互作用，再做时间统计。
 - **4 个力场识别器**（`DuIvyInteractions/group_identifiers/__init__.py` 的 `IDENTIFIER_CLASSES` 注册表）：Amber 家族（amber03/94/96/99/99sb/99sb-ildn/GS/14sb 蛋白 + GAFF/GAFF2 配体）、GROMOS 53A6/54A7、CHARMM36/C36m（含 CGenFF）、OPLS-AA/L。`dii run --ff` 的取值（`amber`/`gromos`/`charmm`/`opls`）与之一一对应。
