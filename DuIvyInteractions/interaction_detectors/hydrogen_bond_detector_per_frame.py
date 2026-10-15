@@ -3,14 +3,17 @@
 
 判据：D-A 距离 ≤ 4.1 Å 且 D-H···A 角度 ≥ 100°。
 参考：PLIP, Hubbard & Haider 2001（距离 +0.6 Å，角度 +10°）。
+
+PBC：候选预筛 capped_distance(box)、逐帧距离 calc_bonds(box)、角度 calc_angles(box)，
+见 doc/pbc_design.md §6A。
 """
 
 import numpy as np
 from typing import List, Tuple, Dict
-from scipy.spatial import KDTree
 
 from ..core.interfaces import InteractionDetectorPerFrame
 from ..core.datas import Group, Interaction
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -78,26 +81,22 @@ class HydrogenBondDetectorPerFrame(InteractionDetectorPerFrame):
         self._donor_h_idx = np.array([g.atoms[1].atom_global_idx for g in donors])
         self._acceptor_a_idx = np.array([g.atoms[0].atom_global_idx for g in acceptors])
 
-        # 3. 第一帧 KDTree 预筛选
+        # 3. 第一帧 KDTree 预筛选（PBC 感知）
+        from MDAnalysis.lib.distances import capped_distance
         first_pos = trajectory[0].positions
         d_pos = first_pos[self._donor_d_idx]     # (n_donors, 3)
         a_pos = first_pos[self._acceptor_a_idx]  # (n_acceptors, 3)
 
-        tree = KDTree(d_pos)
-        pairs = tree.query_ball_point(a_pos, PREFILTER_CUTOFF)
+        # ref=a_pos, conf=d_pos → pairs[:,0]=acceptor, pairs[:,1]=donor
+        pairs = capped_distance(
+            a_pos, d_pos, PREFILTER_CUTOFF,
+            box=get_box(trajectory[0]), method='pkdtree', return_distances=False)
 
-        pair_donor = []
-        pair_acceptor = []
-        for ai, nearby_donors in enumerate(pairs):
-            for di in nearby_donors:
-                pair_donor.append(di)
-                pair_acceptor.append(ai)
-
-        if not pair_donor:
+        if len(pairs) == 0:
             return []
 
-        pair_donor = np.array(pair_donor)
-        pair_acceptor = np.array(pair_acceptor)
+        pair_acceptor = pairs[:, 0]
+        pair_donor = pairs[:, 1]
 
         # 4. tuple_filter
         if tuple_filter is not None:
@@ -123,11 +122,11 @@ class HydrogenBondDetectorPerFrame(InteractionDetectorPerFrame):
         angle = np.zeros((n_pairs, n_frames))
         times = np.empty(n_frames)
 
-        # 6. 逐帧计算
+        # 6. 逐帧计算（PBC 感知）
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
-            dist, ang = self._compute_metrics(positions)
+            dist, ang = self._compute_metrics(positions, get_box(ts))
             distance[:, f] = dist
             angle[:, f] = ang
             existence[:, f] = (dist <= HBOND_DIST_MAX) & (ang >= HBOND_DON_ANGLE_MIN)
@@ -153,29 +152,26 @@ class HydrogenBondDetectorPerFrame(InteractionDetectorPerFrame):
 
     # ==================== 内部辅助方法 ====================
 
-    def _compute_metrics(self, positions):
-        """向量化计算全部候选 pair 的 D-A 距离和 D-H-A 角度。
+    def _compute_metrics(self, positions, box=None):
+        """向量化计算全部候选 pair 的 D-A 距离和 D-H-A 角度（MIC）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
 
         Returns:
             dist: (n_pairs,) Å
             ang: (n_pairs,) °
         """
+        from MDAnalysis.lib.distances import calc_bonds, calc_angles
+
         # 取坐标：(n_pairs, 3)
         d_pos = positions[self._donor_d_idx[self._pair_donor_idx]]
         h_pos = positions[self._donor_h_idx[self._pair_donor_idx]]
         a_pos = positions[self._acceptor_a_idx[self._pair_acceptor_idx]]
 
-        # D-A 距离
-        da_vec = d_pos - a_pos
-        dist = np.linalg.norm(da_vec, axis=1)
+        # D-A 距离（MIC）
+        dist = calc_bonds(d_pos, a_pos, box=box)
 
-        # D-H···A 角度
-        hd_vec = d_pos - h_pos    # H→D
-        ha_vec = a_pos - h_pos    # H→A
-        cos_angle = np.sum(hd_vec * ha_vec, axis=1) / (
-            np.linalg.norm(hd_vec, axis=1) * np.linalg.norm(ha_vec, axis=1)
-        )
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        ang = np.degrees(np.arccos(cos_angle))
+        # D-H···A 角度（MIC，顶点 h；calc_angles 返回弧度）
+        ang = np.degrees(calc_angles(d_pos, h_pos, a_pos, box=box))
 
         return dist, ang

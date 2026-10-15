@@ -93,6 +93,30 @@ class TestPbcDistance:
         assert mic[0] == pytest.approx(0.3, abs=1e-6)
         assert mic[0] < 3.0  # METAL_DIST_MAX
 
+    def test_hbond_cross_box_distance(self):
+        """氢键跨盒：D 与 A 跨盒（MIC ≤4.1）→ 应判存在；欧氏 >4.1 → 旧逻辑漏检。"""
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        d = np.array([[0.5, 5.0, 5.0]])   # 供体（跨盒侧）
+        a = np.array([[9.5, 5.0, 5.0]])   # 受体（盒另一侧）
+        mic = calc_bonds(d, a, box=box)
+        euclid = np.linalg.norm(d - a, axis=1)
+        assert mic[0] == pytest.approx(1.0, abs=1e-6)   # MIC = 10-9 = 1.0 Å
+        assert euclid[0] == pytest.approx(9.0, abs=1e-6)
+        assert mic[0] <= 4.1  # HBOND_DIST_MAX（闭区间）
+
+    def test_hbond_cross_box_angle(self):
+        """氢键跨盒角度：H 处 D-H···A 角经 MIC 正确（跨盒向量回绕）。"""
+        from MDAnalysis.lib.distances import calc_angles
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        d = np.array([[0.9, 5.0, 5.0]])   # D
+        h = np.array([[0.0, 5.0, 5.0]])   # H（顶点）
+        a = np.array([[9.9, 5.0, 5.0]])   # A（跨盒，h→a 欧氏 9.9 > 半盒 5）
+        mic = np.degrees(calc_angles(d, h, a, box=box))[0]
+        euclid = np.degrees(calc_angles(d, h, a, box=None))[0]
+        # h→d=(0.9,0,0)；h→a MIC 后 = (-0.1,0,0)（a-10）→ 夹角 180°
+        assert mic == pytest.approx(180.0, abs=1e-4)
+        assert euclid == pytest.approx(0.0, abs=1e-4)  # 无盒手写给出错误 0°
+
 
 # ============================================================
 # self_capped_distance 去重与返回结构（对抗性审查锁定）

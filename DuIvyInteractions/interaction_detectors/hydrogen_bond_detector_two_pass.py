@@ -4,8 +4,11 @@
 判据：D-A 距离 ≤ 4.1 Å 且 D-H···A 角度 ≥ 100°。
 参考：PLIP, Hubbard & Haider 2001（距离 +0.6 Å，角度 +10°）。
 
-Pass1：KDTree 筛选 D-A 距离 + 精确计算角度
-Pass2：从 InteractionSparse 重新构建索引 + 向量化计算
+Pass1：KDTree 筛选 D-A 距离 + 精确计算角度（PBC 感知）
+Pass2：从 InteractionSparse 重新构建索引 + 向量化计算（PBC 感知）
+
+PBC：距离 calc_bonds(box)、角度 calc_angles(box)、候选发现 capped_distance(box)，
+见 doc/pbc_design.md §6A。
 """
 
 import numpy as np
@@ -13,6 +16,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -59,7 +63,7 @@ class HydrogenBondDetectorTwoPass(InteractionDetectorTwoPass):
 
         for f, ts in enumerate(trajectory):
             active_donors, active_acceptors, distances, angles = \
-                self._kdtree_discover(ts.positions)
+                self._kdtree_discover(ts.positions, get_box(ts))
 
             for d_idx, a_idx, dist, angle in zip(
                     active_donors, active_acceptors, distances, angles):
@@ -89,41 +93,68 @@ class HydrogenBondDetectorTwoPass(InteractionDetectorTwoPass):
 
     def run_pass2(self, sparse: InteractionSparse,
                   trajectory) -> List[Interaction]:
-        """执行 Pass2：从 InteractionSparse 重新构建索引 + 向量化计算。"""
+        """执行 Pass2：补全全帧数据（逐帧 PBC 距离/角度）。
+
+        自写循环（基类 run_pass2 不暴露帧/box）：逐帧取 get_box(ts) 传入
+        compute_pair_metrics，使 PBC 距离/角度逐帧正确（NPT 系综盒逐帧不同）。
+        """
         if not sparse.data:
             return []
 
         # 从 InteractionSparse 重新构建索引数组
         self._build_indices_from_sparse(sparse)
 
-        # 调用父类的 run_pass2
-        return super().run_pass2(sparse, trajectory)
+        group_tuples = [entry["groups"] for entry in sparse.data.values()]
+        n_groups = len(group_tuples)
+        n_frames = trajectory.n_frames
+
+        # 预分配稠密数组
+        existence = np.zeros((n_groups, n_frames), dtype=bool)
+        metrics = {name: np.full((n_groups, n_frames), np.nan)
+                   for name in self.metric_names}
+
+        times = np.empty(n_frames)
+        for f, ts in enumerate(trajectory):
+            times[f] = ts.time
+            frame_metrics = self.compute_pair_metrics(
+                group_tuples, ts.positions, box=get_box(ts))
+            existence[:, f] = self.apply_threshold(frame_metrics)
+            for name in self.metric_names:
+                metrics[name][:, f] = frame_metrics[name]
+
+        # 构建 results 列表（与基类一致：不过滤从未存在的 pair）
+        results = [
+            (entry["groups"], existence[i],
+             {k: v[i] for k, v in metrics.items()})
+            for i, entry in enumerate(sparse.data.values())
+        ]
+
+        results = self._post_process(results)
+        return self._build_interaction(results, times=times)
 
     # ==================== compute_pair_metrics ====================
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算距离和角度（使用 _build_indices_from_sparse 缓存的索引）。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算距离和角度（使用 _build_indices_from_sparse 缓存的索引）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
         if not hasattr(self, '_donor_d_idx'):
             raise RuntimeError(
                 "compute_pair_metrics requires cached indices. "
                 "Call _build_indices_from_sparse first via run_pass2.")
 
+        from MDAnalysis.lib.distances import calc_bonds, calc_angles
+
         d = all_positions[self._donor_d_idx]
         h = all_positions[self._donor_h_idx]
         a = all_positions[self._acceptor_a_idx]
 
-        # D-A 距离
-        da_vec = d - a
-        dist = np.linalg.norm(da_vec, axis=1)
+        # D-A 距离（MIC）
+        dist = calc_bonds(d, a, box=box)
 
-        # D-H···A 角度
-        hd_vec = d - h
-        ha_vec = a - h
-        cos_angle = np.sum(hd_vec * ha_vec, axis=1) / (
-            np.linalg.norm(hd_vec, axis=1) * np.linalg.norm(ha_vec, axis=1)
-        )
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        ang = np.degrees(np.arccos(cos_angle))
+        # D-H···A 角度（MIC，顶点 h；calc_angles 返回弧度）
+        ang = np.degrees(calc_angles(d, h, a, box=box))
 
         return {"distance": dist, "angle": ang}
 
@@ -150,41 +181,33 @@ class HydrogenBondDetectorTwoPass(InteractionDetectorTwoPass):
         self._donor_h_idx = np.array([g.atoms[1].atom_global_idx for g in donors])
         self._acceptor_a_idx = np.array([g.atoms[0].atom_global_idx for g in acceptors])
 
-    def _kdtree_discover(self, all_positions):
-        """KDTree 发现 D-A 距离 ≤ 4.1Å 的 pair + 精确计算角度。"""
-        from scipy.spatial import cKDTree
+    def _kdtree_discover(self, all_positions, box=None):
+        """PBC 感知发现 D-A 距离 ≤ 4.1Å 的 pair + 精确计算角度。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
+        from MDAnalysis.lib.distances import capped_distance, calc_angles
 
         # 获取 D 和 A 坐标
         d_coords = all_positions[self._donor_d_idx]
         a_coords = all_positions[self._acceptor_a_idx]
 
-        # 构建两棵树
-        tree_d = cKDTree(d_coords)
-        tree_a = cKDTree(a_coords)
+        # 交叉查询（MIC；capped_distance 返回 (pairs[:,0]=d, pairs[:,1]=a, dists)）
+        pairs, distances = capped_distance(
+            d_coords, a_coords, HBOND_DIST_MAX,
+            box=box, method='pkdtree', return_distances=True)
 
-        # 一步获取 (d_idx, a_idx) 对 + 精确距离
-        sparse_dist = tree_d.sparse_distance_matrix(tree_a, HBOND_DIST_MAX)
-
-        if sparse_dist.nnz == 0:
+        if len(pairs) == 0:
             return np.array([]), np.array([]), np.array([]), np.array([])
 
-        # 转换为 coo_matrix 并提取索引和距离
-        coo_dist = sparse_dist.tocoo()
-        active_donors = coo_dist.row
-        active_acceptors = coo_dist.col
-        distances = coo_dist.data
+        active_donors = pairs[:, 0]
+        active_acceptors = pairs[:, 1]
 
-        # 计算角度（向量化）
-        d = d_coords[active_donors]
-        h = all_positions[self._donor_h_idx[active_donors]]
-        a = a_coords[active_acceptors]
-
-        hd_vec = d - h
-        ha_vec = a - h
-        cos_angle = np.sum(hd_vec * ha_vec, axis=1) / (
-            np.linalg.norm(hd_vec, axis=1) * np.linalg.norm(ha_vec, axis=1))
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        angles = np.degrees(np.arccos(cos_angle))
+        # 计算角度（MIC，顶点 h；calc_angles 返回弧度）
+        angles = np.degrees(calc_angles(
+            d_coords[active_donors],
+            all_positions[self._donor_h_idx[active_donors]],
+            a_coords[active_acceptors], box=box))
 
         # 过滤角度 ≥ 100°
         angle_mask = angles >= HBOND_DON_ANGLE_MIN

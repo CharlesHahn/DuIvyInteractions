@@ -250,6 +250,116 @@ dist = np.linalg.norm(m - b, axis=1)
 dist = calc_bonds(m, b, box=_get_box(ts))
 ```
 
+## 6A. 氢键相互作用 PBC 方案（2026-10-14 追加）
+
+### 6A.1 判据（两种策略一致，apply_threshold 零改动）
+
+```
+D-A 距离 ≤ 4.1 Å 且 D-H···A 角度 ≥ 100°
+HBOND_DIST_MAX = 4.1, HBOND_DON_ANGLE_MIN = 100.0
+```
+
+注意与疏水/金属不同：氢键距离是 **≤ 4.1 闭区间**（非 strict <），
+`capped_distance`/`calc_bonds` 边界含 4.1 → 判定一致。
+
+### 6A.2 数据流（PBC 化计算点共 6 处）
+
+| 环节 | two_pass | per_frame |
+|---|---|---|
+| 候选发现 | 逐帧 `_kdtree_discover`（cKDTree 交叉查询 sparse 4.1） | 第一帧 `query_ball_point(a_pos, 12.3)` 预筛固定候选 |
+| 指标计算 | Pass1 记「活帧+距离/角度」→ Pass2 逐帧重算（norm + 手写角度） | 固定候选逐帧向量化（norm + 手写角度） |
+
+### 6A.3 角度 PBC 化（calc_angles 顶点核对）
+
+```
+现有手写（两策略一致）：hd_vec = d - h; ha_vec = a - h; cos = ... → degrees(arccos(clip))
+替换：ang = np.degrees(calc_angles(d, h, a, box=box))
+```
+- `calc_angles(c1, c2, c3)` 顶点是 **c2** → `calc_angles(d, h, a)` 计算 H 处 D-H···A 角，
+  与现有定义完全一致；PBC 下自动对构成角的两向量做 MIC。
+- ⚠️ 退化构型（D==H 或 A==H）：现有手写产生 NaN，`calc_angles` 返回 0（实测）——
+  两者 `apply_threshold` 均判 False（NaN≥100 与 0≥100 均假），**判定一致**；
+  h5 metrics 数值从 NaN 变 0。氢键 D-H 是键连的（供体 N-H/O-H），原子重合物理
+  不可能，实际不可达；实现后用既有测试确认无回归。
+
+### 6A.4 two_pass 替换
+
+**Pass1 `_kdtree_discover(all_positions, box)`（逐帧）**：
+
+```python
+# 现：tree_d/tree_a cKDTree + sparse_distance_matrix(tree_d, tree_a, 4.1)
+#     coo.row=d 索引, coo.col=a 索引；角度手写
+# 改
+pairs, distances = capped_distance(
+    d_coords, a_coords, HBOND_DIST_MAX, box=box, method='pkdtree')
+active_donors, active_acceptors = pairs[:, 0], pairs[:, 1]
+angles = np.degrees(calc_angles(
+    d_coords[active_donors],
+    all_positions[self._donor_h_idx[active_donors]],
+    a_coords[active_acceptors], box=box))
+```
+
+- 顺序核对：`capped_distance(d_coords, a_coords)` → `pairs[:,0]=d`（与
+  `sparse_distance_matrix(tree_d, tree_a)` 的 `row=d` 一致）✓
+
+**Pass2 `compute_pair_metrics(..., box)`（逐帧，run_pass2 自写循环传 box）**：
+
+```python
+# 现：dist = norm(d-a)；手写角度
+# 改
+dist = calc_bonds(d, a, box=box)
+ang = np.degrees(calc_angles(d, h, a, box=box))
+```
+
+`run_pass2` 自写循环同疏水/金属模式（基类零改动）：逐帧 `box=get_box(ts)` 传入，
+结果构建与基类一致（不过滤、`_post_process` + `_build_interaction`）。
+
+### 6A.5 per_frame 替换
+
+**候选预筛（第一帧一次）**：
+
+```python
+# 现：tree = KDTree(d_pos); pairs = tree.query_ball_point(a_pos, PREFILTER)
+#     pair_donor.append(di); pair_acceptor.append(ai)  # 按 acceptor 组织
+# 改
+pairs, _ = capped_distance(
+    a_pos, d_pos, PREFILTER_CUTOFF,
+    box=get_box(trajectory[0]), method='pkdtree', return_distances=False)
+pair_acceptor = pairs[:, 0]   # 注意方向：ref=a → pairs[:,0]=acceptor
+pair_donor = pairs[:, 1]      #               conf=d → pairs[:,1]=donor
+```
+
+⚠️ **方向核对**：`query_ball_point(a_pos, ...)` 语义是"每 acceptor 的邻近 donor"；
+替换为 `capped_distance(a_pos, d_pos)` → `pairs[:,0]=acceptor, pairs[:,1]=donor`，
+后续变量赋值需对应（现在 `pair_donor.append(di)` 对应 pairs[:,1]）。
+
+**逐帧 `_compute_metrics(positions, box)`**：
+
+```python
+# 现：dist = norm(d-a)；手写角度
+# 改
+dist = calc_bonds(d_pos, a_pos, box=box)
+ang = np.degrees(calc_angles(d_pos, h_pos, a_pos, box=box))
+```
+
+调用处逐帧 `_compute_metrics(positions, get_box(ts))`。
+
+### 6A.6 依赖与兼容
+
+- 基类接口 **零改动**（沿用疏水/金属模式：two_pass 自写 run_pass2）
+- `apply_threshold` / 阈值常量 / `metric_names` **零改动**（`≤4.1 & ≥100` 原样）
+- 其他检测器零影响；per_tuple 不动
+
+### 6A.7 测试策略
+
+1. **PBC 单测（test_pbc.py 追加）**：
+   - 跨盒氢键：D 与 A 跨盒（MIC ≤4.1）→ 存在 True；欧氏 >4.1 → 旧漏检
+   - 跨盒角度：H 在盒边、D/A 分居两侧 → `calc_angles(box)` 与回绕后手算一致
+   - 边界：恰 4.1 → `≤4.1` 保留（闭区间语义）
+2. **既有测试**：`test_hydrogen_bond_per_frame.py` / `test_hydrogen_bond_two_pass.py`
+   跑通；真实数据（KRAS-RBD 86 氢键对）新旧逐 pair 逐帧 existence 对比应一致
+3. **性能**：donor/acceptor 数量级小（KRAS-RBD 数百），pkdtree 每帧开销可接受
+
 ## 7. box 传递方案（对抗性审查修正：基类零改动）
 
 > **2026-10-14 对抗性审查修正（P0）**：原方案"基类 `compute_pair_metrics` 加
@@ -339,11 +449,19 @@ per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(t
   hydrophobic_detector_per_frame.py   — 预筛 self_capped_distance + 逐帧 calc_bonds
   metal_coordination_detector_two_pass.py — _kdtree_discover(box) + compute_pair_metrics(box)
   metal_coordination_detector_per_frame.py — 预筛 calc_bonds + 逐帧 calc_bonds
-新增 Tests/unittests/test_pbc.py — MIC 正确性单测（跨盒距离/下界/无盒退化）
+  hydrogen_bond_detector_two_pass.py  — _kdtree_discover(box) + compute_pair_metrics(box)
+  hydrogen_bond_detector_per_frame.py — 预筛 capped_distance + 逐帧 calc_bonds/calc_angles
+新增 Tests/unittests/test_pbc.py — MIC 正确性单测（跨盒距离/角度/下界/无盒退化）
 新增 doc/pbc_design.md — 本文档
 ```
 
 检测器阈值（`apply_threshold`）与判定逻辑**零改动**——只换距离计算来源。
+
+> **实现状态（2026-10-14）**：
+> - ✅ 疏水 two_pass + per_frame 已实现（commit 12832b8）
+> - ✅ 金属配位 two_pass + per_frame 已实现（commit 12832b8）
+> - ✅ 氢键 two_pass + per_frame 方案定稿（§6A，本次实现）
+> - ⏳ 水桥 / 卤键 / 盐桥 / π-堆积 / π-阳离子：待后续分支/章节
 
 ## 9. 测试策略
 
