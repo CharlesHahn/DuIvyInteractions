@@ -4,8 +4,10 @@
 判据：两个疏水碳原子之间距离在 0.5~4.0 Å。
 参考：PLIP。
 
-Pass1：KDTree 自查询发现近邻对 + 距离过滤
-Pass2：从 InteractionSparse 重建索引 + 向量化计算
+Pass1：KDTree 自查询发现近邻对 + 距离过滤（PBC 感知）
+Pass2：从 InteractionSparse 重建索引 + 向量化计算（PBC 感知）
+
+PBC：距离计算传 box（最小镜像约定），见 doc/pbc_design.md。
 """
 
 import numpy as np
@@ -13,6 +15,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -52,7 +55,8 @@ class HydrophobicDetectorTwoPass(InteractionDetectorTwoPass):
         sparse_data: Dict[Tuple[int, ...], dict] = {}
 
         for f, ts in enumerate(trajectory):
-            pairs, distances = self._kdtree_discover(ts.positions)
+            pairs, distances = self._kdtree_discover(ts.positions,
+                                                     get_box(ts))
 
             for i, j, dist in zip(pairs[0], pairs[1], distances):
                 g1 = hydro_groups[i]
@@ -84,24 +88,59 @@ class HydrophobicDetectorTwoPass(InteractionDetectorTwoPass):
 
     def run_pass2(self, sparse: InteractionSparse,
                   trajectory) -> List[Interaction]:
-        """执行 Pass2：从 InteractionSparse 重建索引。"""
+        """执行 Pass2：补全全帧数据（逐帧 PBC 距离）。
+
+        自写循环（基类 run_pass2 不暴露帧/box）：逐帧取 get_box(ts) 传入
+        compute_pair_metrics，使 PBC 距离逐帧正确（NPT 系综盒逐帧不同）。
+        结果构建与基类 run_pass2 一致（保留全部 pair、_post_process + _build_interaction）。
+        """
         if not sparse.data:
             return []
 
         self._build_indices_from_sparse(sparse)
-        return super().run_pass2(sparse, trajectory)
+        group_tuples = [entry["groups"] for entry in sparse.data.values()]
+        n_groups = len(group_tuples)
+        n_frames = trajectory.n_frames
+
+        # 预分配稠密数组
+        existence = np.zeros((n_groups, n_frames), dtype=bool)
+        metrics = {name: np.full((n_groups, n_frames), np.nan)
+                   for name in self.metric_names}
+
+        times = np.empty(n_frames)
+        for f, ts in enumerate(trajectory):
+            times[f] = ts.time
+            frame_metrics = self.compute_pair_metrics(
+                group_tuples, ts.positions, box=get_box(ts))
+            existence[:, f] = self.apply_threshold(frame_metrics)
+            for name in self.metric_names:
+                metrics[name][:, f] = frame_metrics[name]
+
+        # 构建 results 列表（与基类一致：不过滤从未存在的 pair）
+        results = [
+            (entry["groups"], existence[i],
+             {k: v[i] for k, v in metrics.items()})
+            for i, entry in enumerate(sparse.data.values())
+        ]
+
+        results = self._post_process(results)
+        return self._build_interaction(results, times=times)
 
     # ==================== compute_pair_metrics ====================
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算距离（使用 _build_indices_from_sparse 缓存的索引）。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算距离（使用 _build_indices_from_sparse 缓存的索引）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
         if not hasattr(self, '_pair_idx1'):
             raise RuntimeError(
                 "compute_pair_metrics requires cached indices. "
                 "Call _build_indices_from_sparse first via run_pass2.")
+        from MDAnalysis.lib.distances import calc_bonds
         pos1 = all_positions[self._pair_idx1]
         pos2 = all_positions[self._pair_idx2]
-        return {"distance": np.linalg.norm(pos1 - pos2, axis=1)}
+        return {"distance": calc_bonds(pos1, pos2, box=box)}
 
     def apply_threshold(self, metrics):
         """0.5 < 距离 < 4.0。"""
@@ -110,23 +149,20 @@ class HydrophobicDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== 内部辅助方法 ====================
 
-    def _kdtree_discover(self, all_positions):
-        """KDTree 自查询发现近邻对。返回 (pairs, distances)。"""
-        from scipy.spatial import cKDTree
+    def _kdtree_discover(self, all_positions, box=None):
+        """PBC 感知的自查询发现近邻对。返回 (pairs, distances)。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
+        from MDAnalysis.lib.distances import self_capped_distance
 
         coords = all_positions[self._atom_indices]
-        tree = cKDTree(coords)
-        sparse_dist = tree.sparse_distance_matrix(tree, HYDROPH_DIST_MAX)
-
-        coo = sparse_dist.tocoo()
-        # 去重 (i<j) + 排除自身 (i==j)
-        mask = coo.row < coo.col
-        pairs = (coo.row[mask], coo.col[mask])
-        distances = coo.data[mask]
-
-        # 最小距离过滤
-        dist_mask = distances > HYDROPH_MIN_DIST
-        return (pairs[0][dist_mask], pairs[1][dist_mask]), distances[dist_mask]
+        pairs, distances = self_capped_distance(
+            coords, HYDROPH_DIST_MAX, min_cutoff=HYDROPH_MIN_DIST,
+            box=box, method='pkdtree', return_distances=True)
+        if len(pairs) == 0:
+            return (np.array([]), np.array([])), np.array([])
+        return (pairs[:, 0], pairs[:, 1]), distances
 
     def _build_indices_from_sparse(self, sparse: InteractionSparse):
         """从 InteractionSparse 重建原子索引数组（Pass2 用）。"""
