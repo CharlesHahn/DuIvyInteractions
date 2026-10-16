@@ -360,6 +360,125 @@ ang = np.degrees(calc_angles(d_pos, h_pos, a_pos, box=box))
    跑通；真实数据（KRAS-RBD 86 氢键对）新旧逐 pair 逐帧 existence 对比应一致
 3. **性能**：donor/acceptor 数量级小（KRAS-RBD 数百），pkdtree 每帧开销可接受
 
+## 6B. 水桥相互作用 PBC 方案（2026-10-14 追加）
+
+### 6B.1 判据（两种策略一致，apply_threshold 零改动）
+
+```
+dist_dw < 4.1 且 dist_wa < 4.1      （水 O 到供体 D / 受体 A 距离）
+theta ≥ 100°                        （水O-供体H-供体D）
+71° ≤ omega ≤ 140°                  （受体-水O-供体H）
+WATER_BRIDGE_MAXDIST=4.1, THETA_MIN=100, OMEGA_MIN=71, OMEGA_MAX=140
+```
+
+### 6B.2 数据流（PBC 化计算点）
+
+| 环节 | two_pass | per_frame |
+|---|---|---|
+| 候选发现 | 逐帧三棵 cKDTree（d/a/w）→ 两两 sparse（w↔d、w↔a）→ **按水分子分组**组合三元组 → 角度初筛 | 第一帧逐水 `query_ball_point(8.2)` 收集近邻 d/a + `norm(d-a)<2.5` 排除 → 固定候选三元组 |
+| 指标存储 | Pass1 存 dist_dw/dist_wa/theta/omega 入 sparse；Pass2 重算全帧 4 指标 | 逐帧 `_compute_metrics` 向量化 4 指标 |
+| 角度定义 | theta: `_vec_angle(d-h, ow-h)` H 顶点；omega: `_vec_angle(a-ow, h-ow)` Ow 顶点 | 同左 |
+
+### 6B.3 角度顶点核对（calc_angles）
+
+| 指标 | 现有手写 | calc_angles 替换 | 顶点 |
+|---|---|---|---|
+| theta | `_vec_angle(d-h, ow-h)` | `np.degrees(calc_angles(ow, h, d, box))` | **h**（c2）✓ 实测一致 |
+| omega | `_vec_angle(a-ow, h-ow)` | `np.degrees(calc_angles(a, ow, h, box))` | **ow**（c2）✓ |
+
+### 6B.4 two_pass 替换
+
+**Pass1 `_kdtree_discover(positions, box)`（逐帧）**：
+
+```python
+# 现：三棵 cKDTree + dw_sparse(tree_w, tree_d) + wa_sparse(tree_w, tree_a)
+# 改
+dw_pairs, dw_dists = capped_distance(
+    w_coords, d_coords, WATER_BRIDGE_MAXDIST, box=box, method='pkdtree')
+wa_pairs, wa_dists = capped_distance(
+    w_coords, a_coords, WATER_BRIDGE_MAXDIST, box=box, method='pkdtree')
+if len(dw_pairs) == 0 or len(wa_pairs) == 0:
+    return tuple(np.array([]) for _ in range(7))
+
+# 分组逻辑保留（dw_pairs[:,0]=w 索引，与 dw_coo.row 语义一致，实测确认）
+dw_by_w = defaultdict(list)
+for i in range(len(dw_pairs)):
+    dw_by_w[dw_pairs[i, 0]].append((dw_pairs[i, 1], dw_dists[i]))
+# wa_by_w 同；组合三元组逻辑不变
+# 角度: theta = degrees(calc_angles(ow, h, d, box)); omega = degrees(calc_angles(a, ow, h, box))
+# 阈值筛选不变（mask 保留）
+```
+
+⚠️ **方向核对**：现 `tree_w.sparse_distance_matrix(tree_d)` → row=w、col=d；
+改 `capped_distance(w, d)` → pairs[:,0]=w、[:,1]=d ✓（实测确认唯一对、无重复像）
+
+⚠️ **Pass1 角度初筛从欧氏变 MIC**：跨盒帧的角度可能不同 → 初筛存活集可能变化
+（正是 PBC 修复目的）；Pass2 重算全帧 MIC 指标并 apply_threshold → 最终判定自洽。
+
+**Pass2 `compute_pair_metrics(..., box)`（逐帧，run_pass2 自写循环）**：
+
+```python
+dist_dw = calc_bonds(d, ow, box=box)
+dist_wa = calc_bonds(ow, a, box=box)
+theta = np.degrees(calc_angles(ow, h, d, box=box))
+omega = np.degrees(calc_angles(a, ow, h, box=box))
+```
+
+`run_pass2` 自写循环同前（逐帧 get_box(ts)），结果构建与基类一致。
+
+### 6B.5 per_frame 替换
+
+**候选预筛（第一帧一次）——结构调整**：
+
+```python
+# 现：for wi: donor_tree.query_ball_point(wp, 8.2) → 逐水收集近邻 d/a
+# 改（求全体 w↔d、w↔a 对，按 w 分组）
+dw_pairs = capped_distance(
+    w_pos, d_pos, PREFILTER_CUTOFF, box=first_box, method='pkdtree', return_distances=False)
+wa_pairs = capped_distance(
+    w_pos, a_pos, PREFILTER_CUTOFF, box=first_box, method='pkdtree', return_distances=False)
+# 按 w 分组 → 组合三元组（与 two_pass 分组逻辑同构）
+# D-A 最短距排除: calc_bonds(d, a, box) < WATER_BRIDGE_MINDIST → 排除
+```
+
+⚠️ **结构调整**：现实现是"逐水 query_ball_point 嵌入循环"，替换为"全部对 + 按 w 分组"
+——与 two_pass 分组逻辑同构，需重构候选生成循环（triple_d/w/a 列表构建方式变化，
+但后续逐帧 `_compute_metrics` 只依赖 `_triple_*` 索引，无需改）。
+
+**逐帧 `_compute_metrics(positions, box)`**：
+
+```python
+dist_dw = calc_bonds(d, ow, box=box)
+dist_wa = calc_bonds(ow, a, box=box)
+theta = np.degrees(calc_angles(ow, h, d, box=box))
+omega = np.degrees(calc_angles(a, ow, h, box=box))
+```
+
+调用处逐帧 `_compute_metrics(positions, get_box(ts))`。
+
+### 6B.6 性能实测（关键：37021 水）
+
+KRAS-RBD 水分子 **37021**、供体 581 —— 水桥是 pkdtree 慢基准的主要场景，实测：
+
+| 方法 | 耗时（w↔d 一帧） | 结论 |
+|---|---|---|
+| 旧三树 cKDTree sparse | 0.0093s | 基准 |
+| **capped_distance(pkdtree, box)** | **0.0118s** | ✅ **仅慢 1.3×，可接受** |
+| capped_distance 自动 method | 0.0398s | ❌ 慢 4.3×——**必须显式 pkdtree** |
+| apply_PBC+scipy（备选） | 0.0884s | 不必要 |
+
+**结论**：显式 `method='pkdtree'` 是水桥正确选择；候选对 1425 与旧完全一致；
+备选方案（apply_PBC 回绕+scipy）实测更慢，不需要。
+
+### 6B.7 测试策略
+
+1. **PBC 单测（test_pbc.py 追加）**：
+   - 跨盒水桥：水 O 与供体 D 跨盒（MIC dist_dw ≤4.1）→ 三元组存在
+   - 跨盒 theta/omega：H/Ow 在盒边 → `calc_angles(box)` MIC 正确
+2. **既有测试**：`test_water_bridge_per_frame.py` / `test_water_bridge_two_pass.py`
+3. **真实数据对比**：KRAS-RBD（水桥候选多）新旧逐三元组 existence 对比——判定应一致
+4. **性能实测**：水桥两策略全量耗时（PBC vs 旧）——重点项
+
 ## 7. box 传递方案（对抗性审查修正：基类零改动）
 
 > **2026-10-14 对抗性审查修正（P0）**：原方案"基类 `compute_pair_metrics` 加

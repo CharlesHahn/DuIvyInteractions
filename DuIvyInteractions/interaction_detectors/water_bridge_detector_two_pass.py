@@ -4,8 +4,11 @@
 判据：水分子位于供体和受体之间，距离和角度满足 PLIP 定义。
 参考：PLIP, Jiang et al. 2005。
 
-Pass1：KDTree 发现三元组 + 内联计算角度
-Pass2：从 InteractionSparse 重建索引 + 向量化计算
+Pass1：KDTree 发现三元组 + 内联计算角度（PBC 感知）
+Pass2：从 InteractionSparse 重建索引 + 向量化计算（PBC 感知）
+
+PBC：候选发现 capped_distance(box)、距离 calc_bonds(box)、角度 calc_angles(box)，
+见 doc/pbc_design.md §6B。
 """
 
 import numpy as np
@@ -14,6 +17,7 @@ from collections import defaultdict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -67,7 +71,7 @@ class WaterBridgeDetectorTwoPass(InteractionDetectorTwoPass):
 
         for f, ts in enumerate(trajectory):
             positions = ts.positions
-            triples = self._kdtree_discover(positions)
+            triples = self._kdtree_discover(positions, get_box(ts))
 
             for idx in range(len(triples[0])):
                 di = triples[0][idx]
@@ -101,36 +105,71 @@ class WaterBridgeDetectorTwoPass(InteractionDetectorTwoPass):
 
     def run_pass2(self, sparse: InteractionSparse,
                   trajectory) -> List[Interaction]:
-        """执行 Pass2：从 InteractionSparse 重建缓存索引。"""
+        """执行 Pass2：补全全帧数据（逐帧 PBC 距离/角度）。
+
+        自写循环（基类 run_pass2 不暴露帧/box）：逐帧取 get_box(ts) 传入
+        compute_pair_metrics，使 PBC 距离/角度逐帧正确（NPT 系综盒逐帧不同）。
+        """
         if not sparse.data:
             return []
 
         self._build_indices_from_sparse(sparse)
-        return super().run_pass2(sparse, trajectory)
+        group_tuples = [entry["groups"] for entry in sparse.data.values()]
+        n_groups = len(group_tuples)
+        n_frames = trajectory.n_frames
+
+        # 预分配稠密数组
+        existence = np.zeros((n_groups, n_frames), dtype=bool)
+        metrics = {name: np.full((n_groups, n_frames), np.nan)
+                   for name in self.metric_names}
+
+        times = np.empty(n_frames)
+        for f, ts in enumerate(trajectory):
+            times[f] = ts.time
+            frame_metrics = self.compute_pair_metrics(
+                group_tuples, ts.positions, box=get_box(ts))
+            existence[:, f] = self.apply_threshold(frame_metrics)
+            for name in self.metric_names:
+                metrics[name][:, f] = frame_metrics[name]
+
+        # 构建 results 列表（与基类一致：不过滤从未存在的 pair）
+        results = [
+            (entry["groups"], existence[i],
+             {k: v[i] for k, v in metrics.items()})
+            for i, entry in enumerate(sparse.data.values())
+        ]
+
+        results = self._post_process(results)
+        return self._build_interaction(results, times=times)
 
     # ==================== compute_pair_metrics ====================
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算 4 个指标（使用缓存索引）。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算 4 个指标（使用缓存索引）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
         if not hasattr(self, '_cached_d_idx'):
             raise RuntimeError(
                 "compute_pair_metrics requires cached indices. "
                 "Call _build_indices_from_sparse first via run_pass2.")
+
+        from MDAnalysis.lib.distances import calc_bonds, calc_angles
 
         d = all_positions[self._cached_d_idx]
         h = all_positions[self._cached_h_idx]
         ow = all_positions[self._cached_ow_idx]
         a = all_positions[self._cached_a_idx]
 
-        # 距离
-        dist_dw = np.linalg.norm(d - ow, axis=1)
-        dist_wa = np.linalg.norm(ow - a, axis=1)
+        # 距离（MIC）
+        dist_dw = calc_bonds(d, ow, box=box)
+        dist_wa = calc_bonds(ow, a, box=box)
 
-        # theta: 水O-供体H-供体D
-        theta = self._vec_angle(d - h, ow - h)
+        # theta: 水O-供体H-供体D（顶点 h；calc_angles 返回弧度）
+        theta = np.degrees(calc_angles(ow, h, d, box=box))
 
-        # omega: 受体-水O-供体H
-        omega = self._vec_angle(a - ow, h - ow)
+        # omega: 受体-水O-供体H（顶点 ow）
+        omega = np.degrees(calc_angles(a, ow, h, box=box))
 
         return {"dist_dw": dist_dw, "dist_wa": dist_wa,
                 "theta": theta, "omega": omega}
@@ -146,44 +185,43 @@ class WaterBridgeDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== 内部辅助方法 ====================
 
-    def _kdtree_discover(self, positions):
-        """KDTree 发现三元组 + 向量化计算角度。
+    def _kdtree_discover(self, positions, box=None):
+        """PBC 感知发现三元组 + 向量化计算角度。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
 
         Returns:
             (di_arr, wi_arr, ai_arr, dist_dw_arr, dist_wa_arr, theta_arr, omega_arr)
             每个都是 numpy 数组，长度 = 满足阈值的三元组数量。
         """
-        from scipy.spatial import cKDTree
+        from MDAnalysis.lib.distances import capped_distance, calc_angles
 
         d_coords = positions[self._donor_d_idx]
         w_coords = positions[self._water_ow_idx]
         a_coords = positions[self._acceptor_a_idx]
         h_coords = positions[self._donor_h_idx]
 
-        tree_d = cKDTree(d_coords)
-        tree_a = cKDTree(a_coords)
-        tree_w = cKDTree(w_coords)
+        # PBC 感知获取距离对（capped_distance(ref=w) → pairs[:,0]=w, [:,1]=d/a）
+        dw_pairs, dw_dists = capped_distance(
+            w_coords, d_coords, WATER_BRIDGE_MAXDIST,
+            box=box, method='pkdtree', return_distances=True)
+        wa_pairs, wa_dists = capped_distance(
+            w_coords, a_coords, WATER_BRIDGE_MAXDIST,
+            box=box, method='pkdtree', return_distances=True)
 
-        # KDTree 获取距离对
-        dw_sparse = tree_w.sparse_distance_matrix(tree_d, WATER_BRIDGE_MAXDIST)
-        wa_sparse = tree_w.sparse_distance_matrix(tree_a, WATER_BRIDGE_MAXDIST)
-
-        if dw_sparse.nnz == 0 or wa_sparse.nnz == 0:
+        if len(dw_pairs) == 0 or len(wa_pairs) == 0:
             return tuple(np.array([]) for _ in range(7))
 
-        dw_coo = dw_sparse.tocoo()
-        wa_coo = wa_sparse.tocoo()
-
-        # 按 wi 分组
+        # 按 wi 分组（dw_pairs[:,0]=w 索引，与稀疏 row 语义一致）
         dw_by_w = defaultdict(list)
-        for idx in range(len(dw_coo.row)):
-            dw_by_w[dw_coo.row[idx]].append(
-                (dw_coo.col[idx], dw_coo.data[idx]))
+        for idx in range(len(dw_pairs)):
+            dw_by_w[dw_pairs[idx, 0]].append(
+                (dw_pairs[idx, 1], dw_dists[idx]))
 
         wa_by_w = defaultdict(list)
-        for idx in range(len(wa_coo.row)):
-            wa_by_w[wa_coo.row[idx]].append(
-                (wa_coo.col[idx], wa_coo.data[idx]))
+        for idx in range(len(wa_pairs)):
+            wa_by_w[wa_pairs[idx, 0]].append(
+                (wa_pairs[idx, 1], wa_dists[idx]))
 
         # 向量化组合三元组（np.repeat + np.tile）
         common_w = set(dw_by_w) & set(wa_by_w)
@@ -223,9 +261,9 @@ class WaterBridgeDetectorTwoPass(InteractionDetectorTwoPass):
         ow = w_coords[wi_arr]
         a = a_coords[ai_arr]
 
-        # 向量化计算角度
-        theta = self._vec_angle(d - h, ow - h)
-        omega = self._vec_angle(a - ow, h - ow)
+        # 向量化计算角度（MIC；theta 顶点 h、omega 顶点 ow；calc_angles 返回弧度）
+        theta = np.degrees(calc_angles(ow, h, d, box=box))
+        omega = np.degrees(calc_angles(a, ow, h, box=box))
 
         # 向量化阈值筛选
         mask = (theta >= WATER_BRIDGE_THETA_MIN) & \
@@ -248,12 +286,3 @@ class WaterBridgeDetectorTwoPass(InteractionDetectorTwoPass):
             [gt[1].atoms[0].atom_global_idx for gt in group_tuples])
         self._cached_a_idx = np.array(
             [gt[2].atoms[0].atom_global_idx for gt in group_tuples])
-
-    @staticmethod
-    def _vec_angle(v1, v2):
-        """计算两组向量的夹角（度）。v1, v2: (n, 3) → (n,)"""
-        cos_angle = np.sum(v1 * v2, axis=1) / (
-            np.linalg.norm(v1, axis=1) * np.linalg.norm(v2, axis=1)
-        )
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        return np.degrees(np.arccos(cos_angle))
