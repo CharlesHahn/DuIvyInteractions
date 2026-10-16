@@ -574,6 +574,95 @@ acc_angle = all_acc_angles[np.arange(len(best_r)), best_r]
 3. **真实数据**：KRAS-RBD 无卤素（结果 0 对，断言不变）；跨盒需合成含卤素小体系验证
 4. **合成 MIC 用例**：构造含卤素跨盒体系验证 distance/don_angle/acc_angle
 
+## 6D. 盐桥相互作用 PBC 方案（2026-10-14 追加）
+
+### 6D.1 判据（两种策略一致，apply_threshold 零改动）
+
+```
+正电基团电荷中心 ↔ 负电基团电荷中心 距离 ≤ 5.5 Å
+SALTBRIDGE_DIST_MAX = 5.5（闭区间）
+```
+
+### 6D.2 数据流（关键：无 KDTree，候选发现无需替换）
+
+| 环节 | two_pass | per_frame |
+|---|---|---|
+| 候选发现 | `initialize_candidates` 笛卡尔积全候选（**无 KDTree**） | 自写 detect：笛卡尔积 + 第一帧 `all_dist < PREFILTER_CUTOFF` 预筛 |
+| 指标计算 | Pass2 逐帧 `compute_pair_metrics`：`_charge_centers`（**电荷中心加权平均**）→ norm | 逐帧 `_charge_centers` → norm |
+| 电荷中心 | `_charge_centers(positions, idx, q, valid)`：加权平均位点 `Σ(q·r)/Σq` | 同左 |
+
+**盐桥两策略候选都是笛卡尔积全组合（无 KDTree）**：候选本身跨盒正确，**无需候选
+发现替换**——只需电荷中心聚合 + 中心距离 PBC 化。
+
+### 6D.3 核心难点：电荷中心 PBC 化（对抗性审查实测确认）
+
+**科学定义**：电荷中心是**同一残基内多原子**加权平均位点。同一残基原子共价键连
+（间距 ~1.5Å），**正常残基不跨盒**；真正的跨盒风险是**两电荷中心之间的距离**。
+两层处理：
+1. **电荷中心本身**：先以**基团第一个原子为参考**做 MIC 回绕（保基团连续），再聚合
+   ——防御性保证：残基横跨盒边界时原子被拉回同一像，中心正确；正常残基回绕无影响
+   （实测：回绕中心 = 欧氏中心）
+2. **两中心间距**：跨盒时 MIC → `calc_bonds(pos_c, neg_c, box)`
+
+**⚠️ 实测发现：`minimize_vectors` 不支持三维**——只接受 `(3,)` 或 `(n, 3)`，
+不接受 `(n, max_atoms, 3)`（实测 ValueError）。必须**展平-回绕-还原**：
+
+```python
+# _charge_centers PBC 化（核心）
+def _charge_centers(positions, group_idx, group_q, group_valid, box=None):
+    coords = positions[group_idx]                    # (n, max_atoms, 3)
+    if box is not None:
+        n, ma = coords.shape[:2]
+        ref = coords[:, 0:1, :]                      # 每基团第一个原子作参考
+        rel = coords - ref                           # 相对位矢 (n, max_atoms, 3)
+        rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n, ma, 3)
+        coords = ref + rel_mic                       # 回绕后坐标（保基团连续）
+    weighted = coords * group_q[:, :, None] * group_valid[:, :, None]
+    q_sum = np.sum(group_q * group_valid, axis=1)
+    return np.sum(weighted, axis=1) / q_sum[:, None]
+```
+
+**对抗性审查实测确认**：
+- 跨盒残基（原子 x=1.0 与 9.9、L=10）：回绕后中心 x=0.4（物理正确），
+  不回绕欧氏中心 x=2.77（错误）✓
+- 正常残基（间距 <半盒）：回绕与欧氏中心**完全一致**（MIC 不触发）✓
+- `minimize_vectors` 展平 vs 逐组手算 maxdiff 0.0（完全等价）✓
+- 负坐标中心（回绕可能产出负坐标）：`calc_bonds` MIC 正确处理
+  （-0.133 vs 9.8 → 0.067Å）✓
+- **参考原子选择无关性**（关键）：同一跨盒残基对，参考原子取 0（0.2）或 1（9.9）
+  回绕 → 两中心 MIC 距离**完全一致**（4.3667Å 两种参考均同）——判定不依赖参考选择
+  （`calc_bonds` 距离对中心像的位置不变，像无关性）✓
+
+### 6D.4 two_pass 替换
+
+- `run_pass2` 自写循环（同前模式）：逐帧 `box=get_box(ts)` 传入
+  `compute_pair_metrics(..., box)`
+- `compute_pair_metrics(group_tuples, all_positions, box=None)`：
+  `_charge_centers(..., box)` 两处 + `calc_bonds(pos_c, neg_c, box)` 距离
+
+### 6D.5 per_frame 替换
+
+- **第一帧预筛**（现 `all_dist < PREFILTER_CUTOFF`）：
+  ```python
+  all_dist = calc_bonds(pos_centers[pos_flat], neg_centers[neg_flat],
+                        box=get_box(trajectory[0]))
+  mask = all_dist < PREFILTER_CUTOFF
+  ```
+- **逐帧**：`_charge_centers(positions, ..., box)` + `calc_bonds` 距离
+
+### 6D.6 测试策略
+
+1. **PBC 单测（test_pbc.py 追加）**：
+   - 跨盒残基回绕：残基原子跨盒（参考 1.0、另一原子 9.9、L=10）→ 回绕后中心正确；
+     不回绕中心错误
+   - 跨盒盐桥距离：正/负电荷中心跨盒（MIC ≤5.5）→ 判定存在；欧氏 >5.5 旧漏检
+   - 正常残基回绕无影响：原子间距 <半盒 → 回绕中心 = 欧氏中心
+   - 参考原子无关性：不同参考原子回绕 → 中心间距离一致
+   - `minimize_vectors` 展平：`(n,ma,3)` 展平-回绕-还原与逐组手算一致
+2. **既有测试**：`test_saltbridge_per_frame.py` / `test_saltbridge_two_pass.py`
+3. **真实数据对比**：KRAS-RBD 新旧逐 pair 逐帧 existence 对比应一致
+   （盐桥中心距离 ≤5.5Å ≪ 半盒 52.9Å，MIC 不触发，判定不变）
+
 ## 7. box 传递方案（对抗性审查修正：基类零改动）
 
 > **2026-10-14 对抗性审查修正（P0）**：原方案"基类 `compute_pair_metrics` 加
@@ -676,8 +765,9 @@ per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(t
 > - ✅ 金属配位 two_pass + per_frame 已实现（commit 12832b8）
 > - ✅ 氢键 two_pass + per_frame 已实现（commit d336c73，方案 §6A）
 > - ✅ 水桥 two_pass + per_frame 已实现（commit 4dd6c70，方案 §6B）
-> - ✅ 卤键 two_pass + per_frame 方案定稿（§6C，本次实现）
-> - ⏳ 盐桥 / π-堆积 / π-阳离子：待后续分支/章节
+> - ✅ 卤键 two_pass + per_frame 已实现（commit 8979827，方案 §6C）
+> - ✅ 盐桥 two_pass + per_frame 方案定稿（§6D，本次实现）
+> - ⏳ π-堆积 / π-阳离子：待后续分支/章节
 
 ## 9. 测试策略
 

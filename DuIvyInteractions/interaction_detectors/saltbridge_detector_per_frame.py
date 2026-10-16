@@ -3,6 +3,9 @@
 
 判据：两个相反电荷中心距离 ≤ SALTBRIDGE_DIST_MAX。
 参考：PLIP, Barlow and Thornton 1983（+1.5 Å 扩展）。
+
+PBC：电荷中心聚合先以基团参考原子做 MIC 回绕（minimize_vectors 展平-回绕-
+还原），中心距离 calc_bonds(box)，见 doc/pbc_design.md §6D。
 """
 
 import numpy as np
@@ -10,6 +13,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorPerFrame
 from ..core.datas import Group, Interaction
+from ..core.pbc import get_box
 
 
 # PLIP 阈值：5.5 Å
@@ -104,12 +108,16 @@ class SaltBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         if len(pos_flat) == 0:
             return []
 
-        # 4. 第一帧：向量化过滤
+        # 4. 第一帧：向量化过滤（PBC 感知）
+        from MDAnalysis.lib.distances import calc_bonds
         first_pos = trajectory[0].positions
-        pos_centers = self._charge_centers(first_pos, pos_idx, pos_q, pos_valid)
-        neg_centers = self._charge_centers(first_pos, neg_idx, neg_q, neg_valid)
-        all_dist = np.linalg.norm(
-            pos_centers[pos_flat] - neg_centers[neg_flat], axis=1)
+        first_box = get_box(trajectory[0])
+        pos_centers = self._charge_centers(
+            first_pos, pos_idx, pos_q, pos_valid, box=first_box)
+        neg_centers = self._charge_centers(
+            first_pos, neg_idx, neg_q, neg_valid, box=first_box)
+        all_dist = calc_bonds(
+            pos_centers[pos_flat], neg_centers[neg_flat], box=first_box)
 
         mask = all_dist < PREFILTER_CUTOFF
         if not np.any(mask):
@@ -132,14 +140,17 @@ class SaltBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         distance = np.zeros((n_tuples, n_frames))
         times = np.empty(n_frames)
 
-        # 5. 逐帧计算
+        # 5. 逐帧计算（PBC 感知）
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
-            pos_c = self._charge_centers(positions, pos_idx, pos_q, pos_valid)
-            neg_c = self._charge_centers(positions, neg_idx, neg_q, neg_valid)
-            dist = np.linalg.norm(
-                pos_c[self._pos_indices] - neg_c[self._neg_indices], axis=1)
+            box_f = get_box(ts)
+            pos_c = self._charge_centers(
+                positions, pos_idx, pos_q, pos_valid, box=box_f)
+            neg_c = self._charge_centers(
+                positions, neg_idx, neg_q, neg_valid, box=box_f)
+            dist = calc_bonds(
+                pos_c[self._pos_indices], neg_c[self._neg_indices], box=box_f)
             distance[:, f] = dist
             existence[:, f] = dist <= SALTBRIDGE_DIST_MAX
 
@@ -185,8 +196,8 @@ class SaltBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         return indices, charges, valid
 
     @staticmethod
-    def _charge_centers(positions, group_idx, group_q, group_valid):
-        """padding 向量化计算全部 group 的电荷中心。
+    def _charge_centers(positions, group_idx, group_q, group_valid, box=None):
+        """padding 向量化计算全部 group 的电荷中心（PBC 感知）。
 
         Args:
             positions: (n_atoms_total, 3)
@@ -198,6 +209,13 @@ class SaltBridgeDetectorPerFrame(InteractionDetectorPerFrame):
             centers: (n_groups, 3)
         """
         coords = positions[group_idx]                              # (n_groups, max_atoms, 3)
+        if box is not None:
+            from MDAnalysis.lib.distances import minimize_vectors
+            n, ma = coords.shape[:2]
+            ref = coords[:, 0:1, :]
+            rel = coords - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n, ma, 3)
+            coords = ref + rel_mic
         weighted = coords * group_q[:, :, None] * group_valid[:, :, None]
         q_sum = np.sum(group_q * group_valid, axis=1)              # (n_groups,)
         centers = np.sum(weighted, axis=1) / q_sum[:, None]        # (n_groups, 3)

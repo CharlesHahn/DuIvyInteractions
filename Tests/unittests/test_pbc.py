@@ -173,6 +173,73 @@ class TestPbcDistance:
         assert np.array_equal(hand_best, new_best)      # argmin 选择一致
         assert np.allclose(hand_acc, new_acc, atol=1e-4)  # 最终 acc_angle 一致
 
+    def test_saltbridge_cross_box_charge_center_wrap(self):
+        """盐桥跨盒残基：电荷中心以参考原子 MIC 回绕（保基团连续）→ 中心正确。"""
+        from MDAnalysis.lib.distances import minimize_vectors
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        # 残基原子跨盒: 参考 1.0、另两原子 9.9/9.5（L=10）→ 应回绕到参考附近
+        coords = np.array([[[1.0, 5.0, 5.0], [9.9, 5.0, 5.0], [9.5, 5.0, 5.0]]])
+        n, ma = coords.shape[:2]
+        ref = coords[:, 0:1, :]
+        rel = coords - ref
+        rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n, ma, 3)
+        wrapped = ref + rel_mic
+        # 期望: 9.9 → 参考 1.0 的最近像（9.9-10=-0.1），9.5 → -0.5
+        assert wrapped[0, 1, 0] == pytest.approx(-0.1, abs=1e-5)
+        assert wrapped[0, 2, 0] == pytest.approx(-0.5, abs=1e-5)
+        # 不回绕的欧氏中心（错误）: (1.0+9.9+9.5)/3=6.8 vs 回绕中心 (1.0-0.1-0.5)/3≈0.133
+        eu_center = coords[0].mean(axis=0)[0]
+        wrap_center = wrapped[0].mean(axis=0)[0]
+        assert eu_center == pytest.approx(6.8, abs=1e-5)
+        assert wrap_center == pytest.approx(0.1333, abs=1e-3)
+
+    def test_saltbridge_cross_box_distance_mic(self):
+        """盐桥跨盒：正/负电荷中心跨盒（MIC ≤5.5）→ 判存在；欧氏 >5.5 旧漏检。"""
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        pc = np.array([[0.2, 5.0, 5.0]])   # 正电中心
+        nc = np.array([[9.8, 5.0, 5.0]])   # 负电中心（跨盒）
+        mic = calc_bonds(pc, nc, box=box)
+        euclid = np.linalg.norm(pc - nc, axis=1)
+        assert mic[0] == pytest.approx(0.4, abs=1e-6)
+        assert euclid[0] == pytest.approx(9.6, abs=1e-6)
+        assert mic[0] <= 5.5  # SALTBRIDGE_DIST_MAX（闭区间）
+
+    def test_saltbridge_normal_residue_wrap_no_effect(self):
+        """盐桥正常残基（原子间距 <半盒）：回绕中心 = 欧氏中心（MIC 不触发）。"""
+        from MDAnalysis.lib.distances import minimize_vectors
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        coords = np.array([[[1.0, 5.0, 5.0], [2.0, 5.0, 5.0], [1.5, 5.0, 5.0]]])
+        n, ma = coords.shape[:2]
+        ref = coords[:, 0:1, :]
+        rel = coords - ref
+        rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n, ma, 3)
+        wrapped = ref + rel_mic
+        assert np.allclose(wrapped, coords)  # 回绕不改变（不跨盒）
+        wrap_center = wrapped[0].mean(axis=0)
+        eu_center = coords[0].mean(axis=0)
+        assert np.allclose(wrap_center, eu_center)
+
+    def test_saltbridge_reference_atom_independence(self):
+        """盐桥参考原子选择无关性：不同参考原子回绕 → 中心间 MIC 距离一致。"""
+        from MDAnalysis.lib.distances import minimize_vectors
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+
+        def center_with_ref(coords, ref_idx):
+            n, ma = coords.shape[:2]
+            ref = coords[:, ref_idx:ref_idx+1, :]
+            rel = coords - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n, ma, 3)
+            return (ref + rel_mic)[0].mean(axis=0)
+
+        cP = np.array([[0.2, 5.0, 5.0], [9.9, 5.0, 5.0], [9.5, 5.0, 5.0]])  # 跨盒残基
+        cN = np.array([[5.2, 5.0, 5.0], [5.8, 5.0, 5.0]])                    # 正常残基
+        pc0 = center_with_ref(cP[None], 0)
+        pc1 = center_with_ref(cP[None], 1)
+        nc = center_with_ref(cN[None], 0)
+        d0 = calc_bonds(pc0[None], nc[None], box=box)[0]
+        d1 = calc_bonds(pc1[None], nc[None], box=box)[0]
+        assert d0 == pytest.approx(d1, abs=1e-6)  # 判定不依赖参考原子选择
+
 
 # ============================================================
 # self_capped_distance 去重与返回结构（对抗性审查锁定）
