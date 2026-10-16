@@ -240,6 +240,84 @@ class TestPbcDistance:
         d1 = calc_bonds(pc1[None], nc[None], box=box)[0]
         assert d0 == pytest.approx(d1, abs=1e-6)  # 判定不依赖参考原子选择
 
+    def test_pi_cation_cross_box_ring_wrap(self):
+        """π-阳离子跨盒环：环原子跨盒（部分 wrap 到 L 侧）→ 回绕后环心/法向量正确。"""
+        from MDAnalysis.lib.distances import minimize_vectors
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        # 真实苯环（xy 平面 z=1, 环心 x=0.2 跨盒），部分原子 x<0 wrap 到 L 侧
+        R = 1.4
+        angles = np.arange(6) * np.pi / 3
+        ring_true = np.array([[0.2 + R*np.cos(a), 5 + R*np.sin(a), 1.0]
+                              for a in angles])
+        ring_wrap = ring_true.copy()
+        ring_wrap[:, 0][ring_wrap[:, 0] < 0] += 10   # wrap 到 [0,L)
+        # 回绕（以原子 0 为参考）
+        ref = ring_wrap[0:1]
+        rel = ring_wrap - ref
+        rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(-1, 3)
+        ring_back = ref + rel_mic
+        # 环心
+        c_back = ring_back.mean(axis=0)
+        c_true = ring_true.mean(axis=0)
+        assert np.linalg.norm(c_back - c_true) < 1e-5   # 环心正确（差整盒或 0）
+        # 法向量
+        def normal_of(r):
+            v1 = r - np.roll(r, 1, axis=0)
+            v2 = r - np.roll(r, -1, axis=0)
+            n = np.cross(v1, v2).sum(axis=0)
+            return n / np.linalg.norm(n)
+        n_back = normal_of(ring_back)
+        n_true = normal_of(ring_true)
+        cos_ang = np.clip(np.dot(n_back, n_true), -1, 1)
+        assert np.degrees(np.arccos(cos_ang)) < 1e-3   # 法向量一致
+
+    def test_pi_cation_cross_box_distance(self):
+        """π-阳离子跨盒：电荷中心与环心跨盒（MIC 0.5<d<6.0）→ 判存在；欧氏 >6.0 漏检。"""
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        ring_c = np.array([[0.5, 5.0, 5.0]])    # 环心
+        cat_c = np.array([[9.5, 5.0, 5.0]])     # 电荷中心（跨盒，MIC=1.0 ∈ (0.5,6.0)）
+        mic = calc_bonds(ring_c, cat_c, box=box)
+        euclid = np.linalg.norm(ring_c - cat_c, axis=1)
+        assert mic[0] == pytest.approx(1.0, abs=1e-6)
+        assert euclid[0] == pytest.approx(9.0, abs=1e-6)
+        assert 0.5 < mic[0] < 6.0   # PICATION_DIST_MAX（开区间）
+
+    def test_pi_cation_projection_offset_mic(self):
+        """π-阳离子投影偏移：跨盒时欧氏 t 偏移错（>2.0），MIC t 偏移对（<2.0）。"""
+        from MDAnalysis.lib.distances import minimize_vectors
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        # 环在 xy 平面 z=1（法向量 z），环心 x=0.2；电荷中心在环平面内、距环心 0.3Å 但跨盒
+        ring_c = np.array([[0.2, 5.0, 1.0]])
+        cat_c = np.array([[9.9, 5.0, 1.0]])    # MIC 距环心 0.3Å（x 方向）
+        n_hat = np.array([[0.0, 0.0, 1.0]])    # 环法向量
+
+        def proj_old(n, p, tgt):
+            d1 = np.linalg.norm(tgt - (p + n), axis=1)
+            d2 = np.linalg.norm(tgt - (p - n), axis=1)
+            sign = np.where(d1 < d2, 1.0, -1.0)[:, None]
+            on = n * sign
+            t = tgt - p
+            pd = np.sum(t * on, axis=1)
+            pp = tgt - pd[:, None] * on
+            return np.linalg.norm(pp - p, axis=1)
+
+        def proj_mic(n, p, tgt, box):
+            d1 = np.linalg.norm(tgt - (p + n), axis=1)
+            d2 = np.linalg.norm(tgt - (p - n), axis=1)
+            sign = np.where(d1 < d2, 1.0, -1.0)[:, None]
+            on = n * sign
+            t = minimize_vectors((tgt - p).reshape(-1, 3), box).reshape(-1, 3)
+            pd = np.sum(t * on, axis=1)
+            pp = p + (t - pd[:, None] * on)
+            return np.linalg.norm(pp - p, axis=1)
+
+        off_old = proj_old(n_hat, ring_c, cat_c)[0]
+        off_mic = proj_mic(n_hat, ring_c, cat_c, box)[0]
+        # 物理正确: 电荷中心在环平面内距环心 0.3Å → offset=0.3（<2.0 判存在）
+        assert off_mic == pytest.approx(0.3, abs=1e-3)
+        assert off_old > 2.0   # 欧氏 t 错误（电荷中心在 x=9.9 欧氏距 9.7 > 2.0）
+        assert off_mic < 2.0   # MIC t 正确 → 判定翻转（修复）
+
 
 # ============================================================
 # self_capped_distance 去重与返回结构（对抗性审查锁定）

@@ -663,6 +663,120 @@ def _charge_centers(positions, group_idx, group_q, group_valid, box=None):
 3. **真实数据对比**：KRAS-RBD 新旧逐 pair 逐帧 existence 对比应一致
    （盐桥中心距离 ≤5.5Å ≪ 半盒 52.9Å，MIC 不触发，判定不变）
 
+## 6E. π-阳离子相互作用 PBC 方案（2026-10-14 追加）
+
+### 6E.1 判据（两种策略一致，apply_threshold 零改动）
+
+```
+0.5 < distance < 6.0 Å      （电荷中心 ↔ 环心 距离，开区间）
+offset < 2.0 Å              （电荷中心到环平面的投影偏移）
+PICATION_DIST_MAX=6.0, OFFSET_MAX=2.0, MIN_DIST=0.5
+```
+
+### 6E.2 数据流（关键：无 KDTree，候选发现无需替换）
+
+| 环节 | two_pass | per_frame |
+|---|---|---|
+| 候选发现 | `initialize_candidates` 笛卡尔积全候选（**无 KDTree**） | 自写 detect：笛卡尔积 + 第一帧 `dist ∈ (0.5, 18.0)` 预筛 |
+| 环心 | `Σ(r_masked)/Σvalid`（环形 padding 原子平均） | `_ring_centers` 同 |
+| 环法向量 | `Σ cross(r_i-r_prev, r_i-r_next)/Σvalid` 再归一化 | `_ring_normals` 同 |
+| 电荷中心 | `Σ(q·r)/Σq` 加权平均 | `_cation_centers` 同 |
+| 指标 | distance + `_projection_distance(normal, ring_center, cation_center)` | 同左 |
+
+**π-阳离子两策略都是笛卡尔积全候选（无 KDTree）**：候选本身跨盒正确，**无需候选
+发现替换**——只需 5 处几何量 PBC 化（环心、环法向量、电荷中心、距离、投影偏移）。
+
+### 6E.3 三步链 PBC 化（对抗性审查实测确认）
+
+**关键洞察**（对抗性审查发现）：
+- **环心** = 环原子平均——环原子跨盒时平均位点错误（同盐桥，需回绕）
+- **环法向量** = `cross(r_i-r_prev, r_i-r_next)`——原子间向量在环跨盒时欧氏计算
+  错误（实测跨盒环原子键长被算成 9.8Å 而非 0.2Å，法向量完全错）→ **必须回绕环
+  原子到同一像后再算相对向量**（回绕法与直接对向量 MIC 均正确，实测夹角 0°；
+  采用回绕法与环心/电荷中心统一）
+- **投影偏移** = `_projection_distance(normal, ring_center, cation_center)` 内部
+  `t = target - plane_point` 是**欧氏 t**——电荷中心与环心跨盒（MIC 距离 <6Å 但
+  欧氏 t 跨盒）时 offset 错误（实测 2000 随机构型 798 跨盒：旧欧氏 t 误差
+  max 12.4Å、mean 4.6Å）→ **必须对 t 做 MIC**（minimize_vectors）
+
+**三步链 PBC 化**（实测验证：跨盒构型与真实物理完全一致——环心差 0.0000、
+法向量夹角 0.00°、距离 3.00Å、MIC 投影偏移误差 2.7e-15）：
+
+```python
+# ① 回绕环原子（以环第一个原子为参考做 MIC）
+ring_coords (n, max_atoms, 3)
+ref = ring_coords[:, 0:1, :]
+rel_mic = minimize_vectors((ring_coords - ref).reshape(-1,3), box).reshape(n, max_atoms, 3)
+ring_wrapped = ref + rel_mic
+
+# ② 环心（回绕后原子平均）
+r_center = Σ(ring_wrapped * valid) / Σvalid
+
+# ③ 环法向量（回绕后的相对向量 cross；prev/next 同样回绕）
+v1 = ring_wrapped - prev_wrapped
+v2 = ring_wrapped - next_wrapped
+atom_normals = np.cross(v1, v2)
+normal = Σ(atom_normals * valid) / Σvalid → 归一化
+
+# ④ 电荷中心（回绕，同盐桥 _charge_centers 逻辑）
+cation_center = 加权平均（回绕 cation 原子）
+
+# ⑤ 距离：calc_bonds(r_center, c_center, box)
+
+# ⑥ ⚠️ 投影偏移：_projection_distance 加 box，对 t 做 MIC
+def _projection_distance(normal, plane_point, target_point, box=None):
+    ...
+    t = target_point - plane_point
+    if box is not None:
+        t = minimize_vectors(t.reshape(-1, 3), box).reshape(-1, 3)   # t 做 MIC!
+    proj_dist = np.sum(t * oriented_normal, axis=1)
+    proj_point = plane_point + (t - proj_dist[:, None] * oriented_normal)
+    return np.linalg.norm(proj_point - plane_point, axis=1)
+```
+
+### 6E.4 对抗性审查结论（重要修正）
+
+**原方案"投影偏移逻辑零改动"是错误假设**——实测证明：
+- 跨盒构型（电荷中心与环心分居盒两侧、MIC 距离 <6Å）：欧氏 t 的投影偏移误差
+  max 12.4Å、mean 4.6Å（判定可能从 offset<2.0 翻转为 >2.0 → **错误漏判/误判**）
+- MIC t 的投影偏移误差 2.7e-15（机器精度）——**必须对 t 做 MIC**
+
+因此 `_projection_distance` **必须加 box 参数**，对 `t` 用 `minimize_vectors`。
+这是 π-阳离子与盐桥的关键区别（盐桥只测中心距离，π-阳离子还测投影偏移）。
+
+### 6E.5 two_pass 替换
+
+- `run_pass2` 自写循环（同前模式）：逐帧 `box=get_box(ts)` 传入
+  `compute_pair_metrics(..., box)`
+- `compute_pair_metrics(group_tuples, all_positions, box=None)`：
+  - 环原子回绕 → 环心 + 法向量（MIC）
+  - 电荷中心回绕（同盐桥）
+  - 距离 `calc_bonds(r_center, c_center, box)`
+  - 投影偏移 `_projection_distance(..., box)`（t 做 MIC）
+
+### 6E.6 per_frame 替换
+
+- **第一帧预筛**（现 `dist ∈ (0.5, 18.0)`）：
+  ```python
+  dist = calc_bonds(ring_centers[pair_ring], cation_centers[pair_cation],
+                    box=get_box(trajectory[0]))
+  mask = (dist > PICATION_MIN_DIST) & (dist < PREFILTER_CUTOFF)
+  ```
+- **逐帧 `_compute_metrics(positions, box)`**：同 §6E.3 三处回绕 + calc_bonds + 投影 box
+
+### 6E.7 测试策略
+
+1. **PBC 单测（test_pbc.py 追加）**：
+   - 跨盒环回绕：环原子跨盒（部分 x<0 wrap 到 L 侧）→ 回绕后环心 = 真实环心、
+     法向量与真实夹角 0°
+   - 跨盒距离：电荷中心与环心跨盒（MIC 0.5<d<6.0）→ 判存在；欧氏 >6.0 旧漏检
+   - **投影偏移 MIC**：电荷中心与环心跨盒 → 欧氏 t 偏移错（>2.0）、MIC t 偏移对
+     （<2.0）——判定翻转验证
+   - 正常环回绕无影响：环不跨盒 → 回绕 = 原坐标
+2. **既有测试**：`test_pi_cation_per_frame.py` / `test_pi_cation_two_pass.py`
+3. **真实数据对比**：KRAS-RBD 新旧逐 pair 逐帧 existence 对比应一致
+   （环/电荷中心距离 <6Å ≪ 半盒，MIC 不触发）
+
 ## 7. box 传递方案（对抗性审查修正：基类零改动）
 
 > **2026-10-14 对抗性审查修正（P0）**：原方案"基类 `compute_pair_metrics` 加
@@ -766,8 +880,9 @@ per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(t
 > - ✅ 氢键 two_pass + per_frame 已实现（commit d336c73，方案 §6A）
 > - ✅ 水桥 two_pass + per_frame 已实现（commit 4dd6c70，方案 §6B）
 > - ✅ 卤键 two_pass + per_frame 已实现（commit 8979827，方案 §6C）
-> - ✅ 盐桥 two_pass + per_frame 方案定稿（§6D，本次实现）
-> - ⏳ π-堆积 / π-阳离子：待后续分支/章节
+> - ✅ 盐桥 two_pass + per_frame 已实现（commit 212babc，方案 §6D）
+> - ✅ π-阳离子 two_pass + per_frame 方案定稿（§6E，本次实现）
+> - ⏳ π-堆积：待后续分支/章节
 
 ## 9. 测试策略
 
