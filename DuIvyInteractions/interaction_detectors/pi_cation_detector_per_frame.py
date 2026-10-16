@@ -289,6 +289,8 @@ class PiCationDetectorPerFrame(InteractionDetectorPerFrame):
         d2 = np.linalg.norm(target_point - (plane_point - normal), axis=1)
         sign = np.where(d1 < d2, 1.0, -1.0)[:, None]
         oriented_normal = normal * sign
+        # 审查注记：sign 基于原始 t、proj_dist 用 MIC 后的 t，偶发不一致无害——
+        # 最终量是垂直分量幅值 |t_⊥|，对符号不敏感；请勿"修复"为统一 t。
         t = target_point - plane_point
         if box is not None:
             t = minimize_vectors(t.reshape(-1, 3), box).reshape(-1, 3)

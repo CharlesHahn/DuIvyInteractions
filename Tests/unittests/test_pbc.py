@@ -413,3 +413,109 @@ class TestSelfCappedStructure:
             coords, 3.0, method='pkdtree', return_distances=True)
         assert pairs.shape == (0, 2)
         assert dists.shape == (0,)
+
+
+# ============================================================
+# 对抗性审查补测（2026-10-14）：未包裹坐标 / 三斜盒 / 退化构型 / 边界语义
+# ============================================================
+
+class TestPbcReviewAdditions:
+    """审查发现项的锁定测试。
+
+    - 未包裹坐标：capped_distance(box) 对 ±N 盒平移的坐标仍按最小像正确发现
+    - 三斜盒：沿晶胞矢量跨胞点对距离正确（不依赖正交假设）
+    - 退化构型：D==H / A==H 时 calc_angles 返回 0°（旧手写为 NaN）——行为锁定
+    - 边界语义：恰在 cutoff 的点因 float32 在两阶段一致排除（等价开区间）
+    """
+
+    def test_unwrapped_coordinates_found(self):
+        """未包裹坐标（±N 盒平移）：仍按最小像发现正确距离，不因绝对位置漏检。"""
+        from MDAnalysis.lib.distances import capped_distance
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        p1 = np.array([[1.0, 1.0, 1.0]])
+        p2_base = np.array([[1.5, 1.0, 1.0]])   # 真距 0.5 Å
+        for shift in ([0, 0, 0], [10, 0, 0], [-10, 0, 0], [50, 20, -30], [-50, -20, 30]):
+            pairs, dists = capped_distance(
+                p1, p2_base + np.array(shift), 2.0, box=box, return_distances=True)
+            assert dists.tolist() == [pytest.approx(0.5, abs=1e-4)], shift
+        # 真距 > cutoff（7.0 Å）即使被平移也不应发现
+        p3 = np.array([[8.0, 1.0, 1.0]]) + np.array([10, 0, 0])
+        pairs, dists = capped_distance(p1, p3, 2.0, box=box, return_distances=True)
+        assert len(pairs) == 0
+        assert dists.shape == (0,)
+
+    def test_triclinic_box_cross_vector(self):
+        """三斜盒：沿晶胞矢量跨 0/1/2 胞的点对，距离/发现均按最小像正确。"""
+        from MDAnalysis.lib.distances import capped_distance, calc_bonds
+        from MDAnalysis.lib.mdamath import triclinic_vectors
+        box = np.array([10.0, 12.0, 14.0, 70.0, 80.0, 60.0])   # 非正交
+        tv = triclinic_vectors(box)
+        p1 = np.array([[2.0, 2.0, 2.0]])
+        p2 = p1 + 0.5 * tv[0]                        # 沿 a 矢量 5.0 Å
+        assert float(calc_bonds(p1, p2, box=box)[0]) == pytest.approx(5.0, abs=1e-4)
+        for k in (0, 1, 2):
+            pairs, dists = capped_distance(
+                p1, p2 + k * tv[0], 6.0, box=box, return_distances=True)
+            assert dists.tolist() == [pytest.approx(5.0, abs=1e-4)], k
+            assert pairs.shape == (1, 2)
+
+    def test_degenerate_angle_returns_zero(self):
+        """退化构型（D==H / A==H）：calc_angles 返回 0°，旧手写为 NaN。
+
+        对氢键角度取下限判据，0° 与 NaN 均判 False（不报告）→ 行为一致；
+        本测试锁定该行为，防回归。见 doc/pbc_design.md §10。
+        """
+        from MDAnalysis.lib.distances import calc_angles
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        same = np.array([[1.0, 1.0, 1.0]])
+        other = np.array([[2.0, 1.0, 1.0]])
+        assert calc_angles(same, same, other, box=box)[0] == pytest.approx(0.0, abs=1e-6)
+        assert calc_angles(other, same, other, box=box)[0] == pytest.approx(0.0, abs=1e-6)
+        assert calc_angles(same, same, same, box=box)[0] == pytest.approx(0.0, abs=1e-6)
+
+    def test_cutoff_boundary_stage_consistent(self):
+        """边界语义锁定：恰在 cutoff 的点，发现与阈值两阶段使用同一 float32 数值、永不矛盾。
+
+        边界点是否保留由内部 float32 舍入方向决定、**随盒尺寸变化**（实测 ortho10 向上舍
+        →排除、ortho100 向下舍→保留、三斜盒恰 4.0 时精确）；本测试锁定
+        "发现 ⟺ 指标值 ≤ cutoff" 的一致性，不锁具体方向（防未来 MDAnalysis 改动
+        造成发现/阈值脱节）。见 doc/pbc_design.md §10。
+        """
+        from MDAnalysis.lib.distances import capped_distance, calc_bonds
+        cases = [
+            (np.array([10.0, 10.0, 10.0, 90, 90, 90]), 4.0),
+            (np.array([10.0, 10.0, 10.0, 90, 90, 90]), 4.1),
+            (np.array([100.0, 100.0, 100.0, 90, 90, 90]), 4.0),
+            (np.array([100.0, 100.0, 100.0, 90, 90, 90]), 4.1),
+            (np.array([12.0, 12.0, 12.0, 90, 90, 90]), 5.5),
+            (np.array([10.0, 12.0, 14.0, 70.0, 80.0, 60.0]), 4.0),
+        ]
+        for box, cutoff in cases:
+            a = np.array([[0.0, 0.0, 0.0]])
+            b = np.array([[cutoff, 0.0, 0.0]])
+            d = float(calc_bonds(a, b, box=box)[0])
+            pairs, _ = capped_distance(a, b, cutoff, box=box, return_distances=True)
+            assert (len(pairs) == 1) == (d <= cutoff), (box, cutoff, d, len(pairs))
+
+    def test_cutoff_boundary_random_boxes_consistent(self):
+        """随机盒×cutoff 属性测试：发现 ⟺ 指标值 ≤ cutoff（两阶段不自相矛盾）。
+
+        随机正交/三斜盒（4 种角度组合 × 随机边长）与随机 cutoff 下，恰在 cutoff 的
+        点对，capped_distance 是否发现必须与 calc_bonds ≤ cutoff 一致。
+        """
+        from MDAnalysis.lib.distances import capped_distance, calc_bonds
+        from MDAnalysis.lib.mdamath import triclinic_vectors
+        rng = np.random.default_rng(7)
+        for _ in range(40):
+            lengths = rng.uniform(12.0, 200.0, 3)
+            angles = rng.choice(
+                [[90.0, 90.0, 90.0], [70.0, 80.0, 60.0], [75.0, 72.0, 68.0], [85.0, 75.0, 80.0]],
+                size=1)[0]
+            box = np.array([*lengths, *angles])
+            cutoff = rng.uniform(3.5, 6.0)
+            p1 = rng.uniform(1.0, 5.0, (1, 3))
+            tv = np.eye(3) * lengths if np.allclose(angles, 90) else triclinic_vectors(box)
+            p2 = p1 + (cutoff / lengths[0]) * tv[0]      # 沿 a1 恰在 cutoff（cutoff < 半盒）
+            d = float(calc_bonds(p1, p2, box=box)[0])
+            pairs, _ = capped_distance(p1, p2, cutoff, box=box, return_distances=True)
+            assert (len(pairs) == 1) == (d <= cutoff), (box, cutoff, d, len(pairs))

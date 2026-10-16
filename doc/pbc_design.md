@@ -35,7 +35,7 @@ MDAnalysis `MDAnalysis.lib.distances` 的 `capped_distance` / `self_capped_dista
 
 | API | 语义 | 实测确认 |
 |---|---|---|
-| `capped_distance(ref, conf, max_cutoff, min_cutoff=None, box=None, method=None, return_distances=True)` | 返回 `(pairs[N,2] int64, distances[N] float64)`；区间 **(min, max]** 闭区间含 max；`pairs[:,0]=ref 索引, pairs[:,1]=conf 索引` | 4.1 精确被捕获（含边界） |
+| `capped_distance(ref, conf, max_cutoff, min_cutoff=None, box=None, method=None, return_distances=True)` | 返回 `(pairs[N,2] int64, distances[N] float64)`；区间 **(min, max]**；`pairs[:,0]=ref 索引, pairs[:,1]=conf 索引` | ⚠️ 恰在 max 的边界点因内部 float32 舍入方向随盒变化（含/不含不定），但发现与阈值两阶段同源、永不矛盾（测试已锁定） |
 | `self_capped_distance(ref, max_cutoff, min_cutoff=None, box=None, method=None, return_distances=True)` | 自查询；**自动去重 i<j、无自对**；返回 `(pairs, distances)` | pairs=[[0,1],[0,2],[1,2]] |
 | `calc_bonds(coords1, coords2, box=None)` | 逐对距离（**一对一，两数组长度必须相等**），MIC | 长度不等报错（防误用） |
 | `calc_angles(c1, c2, c3, box=None)` | 三原子夹角，顶点是 c2，返回**弧度**；MIC 应用于构成角的向量 | 180° 与手写一致 |
@@ -47,17 +47,20 @@ MDAnalysis `MDAnalysis.lib.distances` 的 `capped_distance` / `self_capped_dista
 
 ## 3. 范围（本版）
 
-本版只覆盖**纯距离类**相互作用：
+本版覆盖**全部 8 类相互作用**（two_pass + per_frame）的最小镜像化：
+距离类（疏水/金属）、角度类（氢键/卤键/水桥）、聚合坐标类（盐桥/π-堆积/π-阳离子），
+方案分别见 §5、§6、§6A–§6F：
 
-| 检测器 | two_pass | per_frame | 距离计算点 |
-|---|---|---|---|
-| 疏水 hydrophobic | ✅ | ✅ | 4 处（two_pass Pass1/Pass2 + per_frame 预筛/逐帧） |
-| 金属配位 metal_coordination | ✅ | ✅ | 4 处（two_pass Pass1/Pass2 + per_frame 预筛/逐帧） |
+| 检测器 | two_pass | per_frame |
+|---|---|---|
+| 疏水 / 金属配位 | ✅ | ✅ |
+| 氢键 / 水桥 / 卤键 | ✅ | ✅ |
+| 盐桥 / π-堆积 / π-阳离子 | ✅ | ✅ |
 
 - **per_tuple：不动**（将被舍弃；`--strategy per_tuple` 保持非 PBC，结果与
   per_frame/two_pass 在跨盒对上有差异，limitations 注明）。
-- 氢键/水桥/卤键/盐桥/π-堆积/π-阳离子：**不在本版**（角度类、聚合坐标类、
-  派生几何量类另开分支/追加章节）。
+- **水桥 two_pass D–A 距离下界（2.5 Å）**为既有问题（TODO #15），与 PBC 无关，
+  本版不动，另案处理。
 
 ## 4. 统一 box 获取函数（新增）
 
@@ -281,6 +284,7 @@ HBOND_DIST_MAX = 4.1, HBOND_DON_ANGLE_MIN = 100.0
   两者 `apply_threshold` 均判 False（NaN≥100 与 0≥100 均假），**判定一致**；
   h5 metrics 数值从 NaN 变 0。氢键 D-H 是键连的（供体 N-H/O-H），原子重合物理
   不可能，实际不可达；实现后用既有测试确认无回归。
+  行为已由 `Tests/unittests/test_pbc.py::TestPbcReviewAdditions::test_degenerate_angle_returns_zero` 锁定。
 
 ### 6A.4 two_pass 替换
 
@@ -1007,21 +1011,27 @@ per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(t
 | 项 | 结论 |
 |---|---|
 | 依赖 | `MDAnalysis>=2.0`（pyproject）；`self_capped_distance(method='pkdtree')` 从 1.0.1 起存在，实现时在最低支持版本验证 |
-| API 兼容 | **基类零改动**（§7 修正方案：子类 run_pass2 自写 / per_frame 自写 detect）→ 所有未 PBC 化检测器行为零变化 ✓；CLI/Pipeline 无签名变化 ✓；PBC 化的两检测器 `compute_pair_metrics(..., box=None)` 加可选参数 |
+| API 兼容 | 基类新增 `_get_box`/`_init_metrics`/`_build_indices_from_sparse` 三个钩子（DRY 重构，默认值保持旧行为）→ 未 PBC 化子类行为零变化 ✓；CLI/Pipeline 无签名变化 ✓；PBC 化的检测器 `compute_pair_metrics(..., box=None)` 加可选参数 |
 | 结果兼容 | **不兼容（预期内）**：PBC 化改变跨盒结果——这是修复目的；升级路径在 limitations 注明（旧结果与 v0.0.3 不可直接对比） |
 | 性能 | 小规模（疏水 734 点）实测 pkdtree 快于 scipy；5000 点带 box 慢 2.3× 的基准仅适用于大体系（水桥等，本版范围外） |
-| 精度 | `calc_bonds`/`capped_distance` 内部转 float32：`4.0000001` → `4.0`（实测）。对 `dist < 4.0` 开区间判定**边界恰好安全**（4.0 本身判 False）；Pass1/Pass2 同源 float32 保持一致；补精度锁定测试 |
-| 三斜盒 | MDAnalysis 官方支持正交/三斜；现有测试数据全正交（90°），三斜仅依赖官方保证，本版不补三斜用例 |
+| 精度 | `calc_bonds`/`capped_distance` 内部转 float32：恰在 cutoff 的输入，输出舍入方向**随盒尺寸变化**（实测：ortho 盒 10 Å → 4.00000006（上舍）、盒 100 Å → 3.99999991（下舍）、三斜盒恰 4.0（精确））；边界点是否保留由舍入方向决定、**并非恒为排除**。关键保证：发现（`capped_distance`）与阈值（`calc_bonds`）两阶段使用同一 float32 数值、**不自相矛盾**——由 6 组代表性边界组合 + 40 组随机盒属性测试锁定（`TestPbcReviewAdditions::test_cutoff_boundary_stage_consistent` / `test_cutoff_boundary_random_boxes_consistent`） |
+| 三斜盒 | MDAnalysis 官方支持正交/三斜；审查期新增单测 `test_triclinic_box_cross_vector`（10/12/14 Å + 70/80/60°，沿晶胞矢量跨 0/1/2 胞）✓；真实体系仍全正交 |
 | 无盒体系 | `_get_box` 防护：None/全 0 → box=None 退化欧氏 ✓ |
+| 未包裹坐标 | 坐标 ±N 盒平移（解包裹轨迹）下 `capped_distance(box)` 仍按最小像正确发现——实测 + `test_unwrapped_coordinates_found` 锁定 ✓ |
+| 回绕聚合适用边界 | 聚合型基团（环/电荷中心）以首原子为参考做 MIC 回绕，适用前提：**基团内原子间距 < 半盒**（环/残基成立）；极小盒 + 基团原子跨盒间距 ≥ 半盒的大基团不适用（未支持，需显式评估） |
+| 退化构型 | D==H / A==H 时 `calc_angles` 返回 0°（旧手写 NaN）；对取下限判据判定一致；已由 `test_degenerate_angle_returns_zero` 锁定 |
 | NPT 系综 | 逐帧取 `ts.dimensions`（two_pass Pass1/Pass2、per_frame 逐帧均用当前帧 box）→ 天然支持 |
 
-## 11. 不在本版范围（后续分支/章节）
+## 11. 范围与不在范围
 
-- **氢键/水桥**：含角度（`calc_angles(box)` 可 PBC 化），水桥还有三元组分组逻辑
-- **卤键**：`acc_angle` 为"多邻居 argmin 择优"结构，需展开 padding 批量算角再 argmin
-- **盐桥**：电荷中心为聚合坐标，需先 `apply_PBC` 回绕残基原子群再聚合
-- **π-堆积/π-阳离子**：环心/法向量/投影偏移为聚合与派生几何量，三步链 PBC 化
+**本版已实现**：全部 8 类相互作用（氢键/水桥/卤键/盐桥/疏水/金属/π-堆积/π-阳离子）
+× two_pass/per_frame 的最小镜像化（见 §5、§6、§6A–§6F）。
+
+**仍不在本版范围**：
 - **per_tuple**：全部不动（将被舍弃）
+- **水桥 two_pass D–A 距离下界（2.5 Å）**：既有 TODO #15，涉及两策略一致性，另案处理
+- **三斜盒真实体系回归**：单测已覆盖三斜盒（§10），真实体系回归留待合并门禁
+- **大体系性能基准**（5000 点带 box 慢 2.3× 仅适用于水桥级规模，本版未专项优化）
 
 ---
 

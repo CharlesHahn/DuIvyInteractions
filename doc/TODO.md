@@ -204,11 +204,21 @@ detector.detect(groups, trajectory,
 **待决定**：是否需要在 TwoPass 的 `apply_threshold` 中添加此下界。
 
 
-### 16. 周期性问题
+### 16. 周期性问题 ✅（feature/pbc-handling 实现，待合并）
 
-相互作用，尤其是水桥和氢键，可能还涉及到周期性处理的问题。
+**原问题**：相互作用（尤其水桥/氢键）可能受周期边界影响；原建议替换到 MDAnalysis 的周期接口。
 
-MDAnlysis提供了自动处理周期性的KDTree，或许之后可以替换到MDA的接口上来，而不是自己实现
+**实现状态（2026-10-14，✅ 已实现于 feature/pbc-handling）**：按设计 `doc/pbc_design.md`
+完成**全部 8 类相互作用 × two_pass/per_frame** 的最小镜像化——统一改用 MDAnalysis
+`capped_distance`/`calc_bonds`/`calc_angles`/`minimize_vectors`（传完整 `ts.dimensions`，
+正交/三斜自动处理）；聚合型基团（环/电荷中心）先以参考原子做 MIC 回绕再聚合；
+未包裹坐标亦正确（实测 + 单测锁定，见 `Tests/unittests/test_pbc.py`）。对应 7 个
+feat 提交 + 1 个 DRY 重构提交 + 29 个 PBC 单测。
+
+**仍遗留**：
+- `per_tuple` 策略保持非 PBC（将被舍弃，跨盒对有差异，limitations 注明）
+- 水桥 two_pass D–A 距离下界（2.5 Å）：既有 TODO #15，另案处理
+- 真实体系回归与三斜盒规模验证：留待分支合入门禁
 
 ### 17. 正电残基的铵/胍氮被误判为 H 键受体 ⚠️（新力场通用，已确认 OPLS/CHARMM/GROMOS 存在）
 
