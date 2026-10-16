@@ -3,6 +3,9 @@
 
 判据：X-A ≤ 4.0 Å，C-X···A 在 165°±30°，X···A-R 在 120°±30°。
 参考：PLIP, Auffinger et al.
+
+PBC：预筛 calc_bonds(box)、距离 calc_bonds(box)、角度 calc_angles(box)
+（acc_angle 经 R-padding 展开-还原 + argmin 择优），见 doc/pbc_design.md §6C。
 """
 
 import numpy as np
@@ -10,6 +13,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorPerFrame
 from ..core.datas import Group, Interaction
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -105,11 +109,12 @@ class HalogenBondDetectorPerFrame(InteractionDetectorPerFrame):
         if len(pair_donor) == 0:
             return []
 
-        # 5. 第一帧：X-A 距离预过滤
+        # 5. 第一帧：X-A 距离预过滤（PBC 感知）
+        from MDAnalysis.lib.distances import calc_bonds
         first_pos = trajectory[0].positions
         x_pos = first_pos[self._donor_x_idx[pair_donor]]
         a_pos = first_pos[self._acceptor_indices[pair_acceptor, 0]]
-        dist = np.linalg.norm(x_pos - a_pos, axis=1)
+        dist = calc_bonds(x_pos, a_pos, box=get_box(trajectory[0]))
         mask = dist < PREFILTER_CUTOFF
 
         pair_donor = pair_donor[mask]
@@ -131,11 +136,11 @@ class HalogenBondDetectorPerFrame(InteractionDetectorPerFrame):
         acc_angle = np.zeros((n_pairs, n_frames))
         times = np.empty(n_frames)
 
-        # 7. 逐帧计算
+        # 7. 逐帧计算（PBC 感知）
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
-            metrics = self._compute_metrics(positions)
+            metrics = self._compute_metrics(positions, get_box(ts))
             distance[:, f] = metrics["distance"]
             don_angle[:, f] = metrics["don_angle"]
             acc_angle[:, f] = metrics["acc_angle"]
@@ -193,8 +198,13 @@ class HalogenBondDetectorPerFrame(InteractionDetectorPerFrame):
 
     # ==================== 向量化计算 ====================
 
-    def _compute_metrics(self, positions):
-        """向量化计算全部候选对的指标。"""
+    def _compute_metrics(self, positions, box=None):
+        """向量化计算全部候选对的指标（MIC）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
+        from MDAnalysis.lib.distances import calc_bonds, calc_angles
+
         pd = self._pair_donor
         pa = self._pair_acceptor
 
@@ -206,26 +216,20 @@ class HalogenBondDetectorPerFrame(InteractionDetectorPerFrame):
         a = positions[self._acceptor_indices[pa, 0]]    # (n_pairs, 3)
         r = positions[self._acceptor_indices[pa, 1:]]   # (n_pairs, max_r, 3)
 
-        # X-A 距离
-        xa = x - a
-        distance = np.linalg.norm(xa, axis=1)
+        # X-A 距离（MIC）
+        distance = calc_bonds(x, a, box=box)
 
-        # C-X···A 角度（don_angle）
-        xc = c - x
-        xa2 = a - x
-        don_angle = self._vec_angle(xc, xa2)
+        # C-X···A 角度（顶点 x；calc_angles 返回弧度）
+        don_angle = np.degrees(calc_angles(c, x, a, box=box))
 
-        # X···A-R 角度（acc_angle）：对每个 R 计算，取最接近 120° 的
-        ax = x - a                              # (n_pairs, 3)
-        ar = r - a[:, None, :]                  # (n_pairs, max_r, 3)
-
-        # 向量化角度计算
-        cos = np.sum(ax[:, None, :] * ar, axis=2)  # (n_pairs, max_r)
-        norm_ax = np.linalg.norm(ax, axis=1, keepdims=True)  # (n_pairs, 1)
-        norm_ar = np.linalg.norm(ar, axis=2)                  # (n_pairs, max_r)
-        cos = cos / (norm_ax * norm_ar)
-        cos = np.clip(cos, -1.0, 1.0)
-        all_acc_angles = np.degrees(np.arccos(cos))  # (n_pairs, max_r)
+        # X···A-R 角度（顶点 a）：展开 → 批量 MIC 角 → argmin 择优
+        n_pairs = len(pd)
+        max_r = r.shape[1]
+        x_rep = np.repeat(x, max_r, axis=0)        # (n_pairs*max_r, 3)
+        a_rep = np.repeat(a, max_r, axis=0)
+        r_flat = r.reshape(-1, 3)
+        all_acc = np.degrees(calc_angles(x_rep, a_rep, r_flat, box=box))
+        all_acc_angles = all_acc.reshape(n_pairs, max_r)
 
         # 取最接近 120° 的 R
         diffs = np.abs(all_acc_angles - HALOGEN_ACC_ANGLE)
@@ -237,12 +241,3 @@ class HalogenBondDetectorPerFrame(InteractionDetectorPerFrame):
             "don_angle": don_angle,
             "acc_angle": acc_angle,
         }
-
-    @staticmethod
-    def _vec_angle(v1, v2):
-        """计算两组向量的夹角（度）。"""
-        cos_angle = np.sum(v1 * v2, axis=1) / (
-            np.linalg.norm(v1, axis=1) * np.linalg.norm(v2, axis=1)
-        )
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        return np.degrees(np.arccos(cos_angle))

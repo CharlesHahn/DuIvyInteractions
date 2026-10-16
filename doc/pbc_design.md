@@ -479,6 +479,101 @@ KRAS-RBD 水分子 **37021**、供体 581 —— 水桥是 pkdtree 慢基准的�
 3. **真实数据对比**：KRAS-RBD（水桥候选多）新旧逐三元组 existence 对比——判定应一致
 4. **性能实测**：水桥两策略全量耗时（PBC vs 旧）——重点项
 
+## 6C. 卤键相互作用 PBC 方案（2026-10-14 追加）
+
+### 6C.1 判据（两种策略一致，apply_threshold 零改动）
+
+```
+distance ≤ 4.0 Å                     （X···A 距离，闭区间）
+don_angle ∈ [135°, 195°]             （C-X···A 角，最优 165°±30°）
+acc_angle ∈ [90°, 150°]              （X···A-R 角，最优 120°±30°；R 从 acceptor
+                                      多个邻居原子中取最接近 120° 的——argmin 择优）
+HALOGEN_DIST_MAX=4.0, DON_ANGLE=165, ACC_ANGLE=120, ANGLE_DEV=30
+```
+
+### 6C.2 数据流（关键：无 KDTree，候选发现无需替换）
+
+| 环节 | two_pass | per_frame |
+|---|---|---|
+| 候选发现 | `initialize_candidates` 笛卡尔积全候选（**无 KDTree**） | 自写 detect：笛卡尔积 + 第一帧 `norm < 12.0` 预筛 |
+| 指标计算 | Pass2 逐帧 `compute_pair_metrics`（norm + 手写角度 + argmin） | 逐帧 `_compute_metrics`（同左） |
+| acceptor R | `_build_acceptor_padding` 环形填充（A, R1, R2...）→ 每对多 R 候选 | 同左 |
+
+**卤键两策略候选都是笛卡尔积全组合（无 KDTree）**：候选本身跨盒正确（不依赖
+距离预筛），**无需候选发现替换**——只需三处指标 PBC 化（distance、don_angle、
+acc_angle）+ per_frame 预筛距离。
+
+### 6C.3 距离与 don_angle 替换（同前类型模式）
+
+```python
+# 距离
+distance = calc_bonds(x, a, box=box)          # 替代 norm(x-a)
+
+# don_angle：C-X···A（顶点 X）
+don_angle = np.degrees(calc_angles(c, x, a, box=box))   # 替代 _vec_angle(c-x, a-x)
+```
+
+### 6C.4 ⚠️ acc_angle 替换（本类型独特：多 R 候选 argmin 展开）
+
+现实现（两策略同构）：acceptor 有 `max_r` 个候选 R 邻居（padding，第 0 列是 A
+自身需跳过），对每个 R 算 X···A-R 角，取最接近 120° 的作为 acc_angle。
+
+```python
+# 现（two_pass compute_pair_metrics）：
+r_only = r[:, 1:, :]                      # (n_pairs, max_r, 3) 跳过 A 自身
+ar = r_only - a[:, None, :]               # A→R 向量
+ax = x - a                                # A→X 向量
+cos = np.sum(ax[:, None, :] * ar, axis=2) / (norm_ax * norm_ar)
+all_acc_angles = np.degrees(np.arccos(np.clip(cos, -1, 1)))   # (n_pairs, max_r)
+best_r = np.argmin(np.abs(all_acc_angles - HALOGEN_ACC_ANGLE), axis=1)
+acc_angle = all_acc_angles[np.arange(len(best_r)), best_r]
+
+# 改：展开 padding → calc_angles 批量 MIC 角 → reshape → argmin 还原
+x_rep = np.repeat(x, max_r, axis=0)                   # 每 pair 的 X 复制 max_r 次
+a_rep = np.repeat(a, max_r, axis=0)
+r_flat = r_only.reshape(-1, 3)                          # (n_pairs*max_r, 3)
+all_acc = np.degrees(calc_angles(x_rep, a_rep, r_flat, box=box))  # 顶点 A
+all_acc_angles = all_acc.reshape(n_pairs, max_r)        # 还原 (n_pairs, max_r)
+best_r = np.argmin(np.abs(all_acc_angles - HALOGEN_ACC_ANGLE), axis=1)
+acc_angle = all_acc_angles[np.arange(len(best_r)), best_r]
+```
+
+**关键细节（对抗性审查实测确认）**：
+- **顶点核对**：X···A-R 角顶点是 **A**（c2）→ `calc_angles(x, a, r)` ✓（与手写
+  `ar = r - a`（A→R）、`ax = x - a`（A→X）夹角一致；实测 maxdiff 1e-5）
+- **展开-还原等价**：`np.repeat` + `r_only.reshape(-1,3)` + `calc_angles`
+  （MIC 向量化）→ reshape 回 `(n_pairs, max_r)` → **argmin 结果与逐 R 手算
+  完全一致**（实测 best_r 一致、最终 acc_angle 一致）
+- **padding 第 0 列**：展开前同样 `r_only = r[:, 1:, :]`（跳过 A 自身），逻辑保留
+- **argmin 择优语义**：保留（择优不变，仅角度来源 PBC 化）
+- **跨盒 acc 角**：`calc_angles(x,a,r,box)` MIC 正确（实测 180° vs 欧氏错误 0°）
+
+### 6C.5 two_pass 替换
+
+- `run_pass2` 自写循环（同前模式）：逐帧 `box=get_box(ts)` 传入
+  `compute_pair_metrics(..., box)`，结果构建与基类一致
+- `compute_pair_metrics(group_tuples, all_positions, box=None)`：三处按 §6C.3/6C.4 替换
+
+### 6C.6 per_frame 替换
+
+- **第一帧预筛**（现 `norm < 12.0`）：
+  ```python
+  dist = calc_bonds(x_pos, a_pos, box=get_box(trajectory[0]))
+  mask = dist < PREFILTER_CUTOFF
+  ```
+- **逐帧 `_compute_metrics(positions, box)`**：按 §6C.3/6C.4 三处替换，
+  调用处逐帧 `box=get_box(ts)` 传入
+
+### 6C.7 测试策略
+
+1. **PBC 单测（test_pbc.py 追加）**：
+   - 跨盒卤键：X 与 A 跨盒（MIC ≤4.0）→ 判定存在；欧氏 >4.0 旧漏检
+   - 跨盒 acc_angle：A 在盒边、R 跨盒 → `calc_angles(x,a,r,box)` MIC 正确 + argmin 择优
+   - 展开-还原正确性：`calc_angles` 展开结果 vs 逐 R 手算，argmin 一致
+2. **既有测试**：`test_halogen_bond_per_frame.py` / `test_halogen_bond_two_pass.py`
+3. **真实数据**：KRAS-RBD 无卤素（结果 0 对，断言不变）；跨盒需合成含卤素小体系验证
+4. **合成 MIC 用例**：构造含卤素跨盒体系验证 distance/don_angle/acc_angle
+
 ## 7. box 传递方案（对抗性审查修正：基类零改动）
 
 > **2026-10-14 对抗性审查修正（P0）**：原方案"基类 `compute_pair_metrics` 加
@@ -579,8 +674,10 @@ per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(t
 > **实现状态（2026-10-14）**：
 > - ✅ 疏水 two_pass + per_frame 已实现（commit 12832b8）
 > - ✅ 金属配位 two_pass + per_frame 已实现（commit 12832b8）
-> - ✅ 氢键 two_pass + per_frame 方案定稿（§6A，本次实现）
-> - ⏳ 水桥 / 卤键 / 盐桥 / π-堆积 / π-阳离子：待后续分支/章节
+> - ✅ 氢键 two_pass + per_frame 已实现（commit d336c73，方案 §6A）
+> - ✅ 水桥 two_pass + per_frame 已实现（commit 4dd6c70，方案 §6B）
+> - ✅ 卤键 two_pass + per_frame 方案定稿（§6C，本次实现）
+> - ⏳ 盐桥 / π-堆积 / π-阳离子：待后续分支/章节
 
 ## 9. 测试策略
 

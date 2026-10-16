@@ -117,6 +117,62 @@ class TestPbcDistance:
         assert mic == pytest.approx(180.0, abs=1e-4)
         assert euclid == pytest.approx(0.0, abs=1e-4)  # 无盒手写给出错误 0°
 
+    def test_halogen_cross_box_distance(self):
+        """卤键跨盒：X 与 A 跨盒（MIC ≤4.0）→ 应判存在；欧氏 >4.0 → 旧逻辑漏检。"""
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        x = np.array([[0.5, 5.0, 5.0]])   # 卤素供体（跨盒侧）
+        a = np.array([[9.5, 5.0, 5.0]])   # 受体（盒另一侧）
+        mic = calc_bonds(x, a, box=box)
+        euclid = np.linalg.norm(x - a, axis=1)
+        assert mic[0] == pytest.approx(1.0, abs=1e-6)   # MIC = 10-9 = 1.0 Å
+        assert euclid[0] == pytest.approx(9.0, abs=1e-6)
+        assert mic[0] <= 4.0  # HALOGEN_DIST_MAX（闭区间）
+
+    def test_halogen_cross_box_don_angle(self):
+        """卤键跨盒 C-X···A 角：顶点 X 经 MIC 正确。"""
+        from MDAnalysis.lib.distances import calc_angles
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        c = np.array([[0.8, 5.0, 5.0]])   # C
+        x = np.array([[0.0, 5.0, 5.0]])   # X（顶点）
+        a = np.array([[9.9, 5.0, 5.0]])   # A（跨盒，x→a 欧氏 9.9 > 半盒 5）
+        mic = np.degrees(calc_angles(c, x, a, box=box))[0]
+        euclid = np.degrees(calc_angles(c, x, a, box=None))[0]
+        # x→c=(0.8,0,0)；x→a MIC 后 = (-0.1,0,0)（a-10）→ 夹角 180°
+        assert mic == pytest.approx(180.0, abs=1e-4)
+        assert euclid == pytest.approx(0.0, abs=1e-4)  # 无盒欧氏给出错误 0°
+
+    def test_halogen_acc_angle_expand_matches_hand(self):
+        """卤键 acc_angle 展开-还原（calc_angles 批量 MIC）与逐 R 手算一致。"""
+        from MDAnalysis.lib.distances import calc_angles
+        rng = np.random.default_rng(3)
+        box = np.array([100.0, 100.0, 100.0, 90, 90, 90])
+        n_pairs, max_atoms = 4, 5
+        x = rng.random((n_pairs, 3)) * 50
+        a = rng.random((n_pairs, 3)) * 50
+        r = rng.random((n_pairs, max_atoms, 3)) * 50
+        r_only = r[:, 1:, :]              # 跳过第 0 列（A 自身）
+        mr = r_only.shape[1]
+
+        # 手写（原实现逐 R）
+        ax = x - a
+        ar = r_only - a[:, None, :]
+        cos = np.sum(ax[:, None, :] * ar, axis=2) / (
+            np.linalg.norm(ax, axis=1, keepdims=True) * np.linalg.norm(ar, axis=2))
+        hand_all = np.degrees(np.arccos(np.clip(cos, -1, 1)))
+        hand_best = np.argmin(np.abs(hand_all - 120.0), axis=1)
+        hand_acc = hand_all[np.arange(n_pairs), hand_best]
+
+        # 展开-还原（新实现）
+        x_rep = np.repeat(x, mr, axis=0)
+        a_rep = np.repeat(a, mr, axis=0)
+        all_acc = np.degrees(calc_angles(x_rep, a_rep, r_only.reshape(-1, 3), box=box))
+        new_all = all_acc.reshape(n_pairs, mr)
+        new_best = np.argmin(np.abs(new_all - 120.0), axis=1)
+        new_acc = new_all[np.arange(n_pairs), new_best]
+
+        assert np.array_equal(hand_best, new_best)      # argmin 选择一致
+        assert np.allclose(hand_acc, new_acc, atol=1e-4)  # 最终 acc_angle 一致
+
 
 # ============================================================
 # self_capped_distance 去重与返回结构（对抗性审查锁定）
