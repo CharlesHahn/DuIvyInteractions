@@ -854,6 +854,25 @@ PISTACK_DIST_MAX=5.5, ANG_DEV=30, OFFSET_MAX=2.0, PLANARITY=5.0, MIN_DIST=0.5
 > 基类调用处传 `box=` 会对未修改子类抛 **TypeError**（实测确认）。Python 动态分派
 > 要求基类调用参数被子类签名兼容，改基类调用 = 改全部子类。
 
+> **2026-10-14 DRY 重构演进（终版）**：方案 A 实现后（8 个 two_pass 各复制一份
+> `run_pass2` 循环体），经对抗性审查发现 **DRY 违反**（约 300 行重复）——随后
+> 重构为**基类钩子方案**（当前实现）：
+> - 基类 `run_pass2` 统一模板，新增 3 个 protected 钩子：
+>   - `_build_indices_from_sparse(sparse)`：Pass2 索引重建（默认空实现）
+>   - `_init_metrics(n_groups, n_frames)`：metrics 预分配（默认 float NaN；
+>     π-stacking 覆盖处理 `pistacking_type` 的 'U1' char dtype）
+>   - `_get_box(ts)`：逐帧盒尺寸（默认 None=欧氏；PBC 化子类覆盖返回 `get_box(ts)`）
+> - 基类循环内统一 `compute_pair_metrics(group_tuples, ts.positions, box=self._get_box(ts))`
+> - 8 个 two_pass 子类删除复制的 run_pass2，仅覆盖钩子（2-4 行）；
+>   saltbridge 以 `_build_indices_from_sparse` 桥接其 `_build_padding_from_sparse`
+> - **收益**：消除 ~300 行重复；box 传递逻辑收敛到基类；行为零变化
+>   （实测重构前后 16 检测器真实数据 pair/existence 完全一致）
+> - **架构契约**：基类现在总是传 `box=` 给 `compute_pair_metrics`——未来新增
+>   two_pass 子类必须接受 `box=None` 参数（当前 8 个均满足）
+
+**修正方案演进**：P0 审查确认"直接改基类调用签名"错误 → 方案 A（子类自写
+run_pass2 复制模板）实现 → DRY 重构为基类钩子方案（当前终版）。
+
 **修正方案：基类 `core/interfaces.py` 零改动；由 PBC 化的子类内部缓存当前帧 box。**
 
 ### 7.1 two_pass 子类模式（疏水/金属）
@@ -917,11 +936,13 @@ def run_pass2(self, sparse, trajectory):
 per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(ts)` 传入
 `calc_bonds(..., box=box)`——**无需任何基类改动**。
 
-### 7.3 受影响面（修正后）
+### 7.3 受影响面（DRY 重构后）
 
-- `core/interfaces.py`：**零改动** ✓
-- 其他 6 个 two_pass（氢键/水桥/卤键/盐桥/π-堆积/π-阳离子）：**零改动** ✓
-- 其他 per_frame（氢键/水桥等）：**零改动** ✓
+- `core/interfaces.py`：**新增 3 个 protected 钩子**（`_build_indices_from_sparse` /
+  `_init_metrics` / `_get_box`），`run_pass2` 统一模板；公共接口（detect 等）零变化
+- 8 个 two_pass：删除复制的 run_pass2，仅覆盖钩子（`_get_box`；saltbridge 桥接；
+  π-stacking 另覆盖 `_init_metrics`）
+- 其他 per_frame / per_tuple：**零改动** ✓
 
 ## 8. 实现落点
 
@@ -929,7 +950,8 @@ per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(t
 新增 DuIvyInteractions/core/pbc.py（或 utils/）：
   _get_box(ts) — 统一 box 获取与防护
 改动 DuIvyInteractions/core/interfaces.py：
-  compute_pair_metrics 加可选 box=None；run_pass2 传 box
+  基类 run_pass2 统一模板 + 新增钩子 _build_indices_from_sparse/_init_metrics/_get_box
+  （8 个 two_pass 子类删除复制的 run_pass2，仅覆盖钩子；compute_pair_metrics 加 box=None）
 改动 DuIvyInteractions/interaction_detectors/：
   hydrophobic_detector_two_pass.py    — _kdtree_discover(box) + compute_pair_metrics(box)
   hydrophobic_detector_per_frame.py   — 预筛 self_capped_distance + 逐帧 calc_bonds

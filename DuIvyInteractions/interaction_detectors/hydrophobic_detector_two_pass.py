@@ -86,45 +86,9 @@ class HydrophobicDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== Pass2：从 InteractionSparse 重建 ====================
 
-    def run_pass2(self, sparse: InteractionSparse,
-                  trajectory) -> List[Interaction]:
-        """执行 Pass2：补全全帧数据（逐帧 PBC 距离）。
-
-        自写循环（基类 run_pass2 不暴露帧/box）：逐帧取 get_box(ts) 传入
-        compute_pair_metrics，使 PBC 距离逐帧正确（NPT 系综盒逐帧不同）。
-        结果构建与基类 run_pass2 一致（保留全部 pair、_post_process + _build_interaction）。
-        """
-        if not sparse.data:
-            return []
-
-        self._build_indices_from_sparse(sparse)
-        group_tuples = [entry["groups"] for entry in sparse.data.values()]
-        n_groups = len(group_tuples)
-        n_frames = trajectory.n_frames
-
-        # 预分配稠密数组
-        existence = np.zeros((n_groups, n_frames), dtype=bool)
-        metrics = {name: np.full((n_groups, n_frames), np.nan)
-                   for name in self.metric_names}
-
-        times = np.empty(n_frames)
-        for f, ts in enumerate(trajectory):
-            times[f] = ts.time
-            frame_metrics = self.compute_pair_metrics(
-                group_tuples, ts.positions, box=get_box(ts))
-            existence[:, f] = self.apply_threshold(frame_metrics)
-            for name in self.metric_names:
-                metrics[name][:, f] = frame_metrics[name]
-
-        # 构建 results 列表（与基类一致：不过滤从未存在的 pair）
-        results = [
-            (entry["groups"], existence[i],
-             {k: v[i] for k, v in metrics.items()})
-            for i, entry in enumerate(sparse.data.values())
-        ]
-
-        results = self._post_process(results)
-        return self._build_interaction(results, times=times)
+    def _get_box(self, ts):
+        """PBC：返回当前帧盒尺寸（None=无盒退化欧氏）。"""
+        return get_box(ts)
 
     # ==================== compute_pair_metrics ====================
 
