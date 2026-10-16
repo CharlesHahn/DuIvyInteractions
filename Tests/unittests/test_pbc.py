@@ -318,6 +318,72 @@ class TestPbcDistance:
         assert off_old > 2.0   # 欧氏 t 错误（电荷中心在 x=9.9 欧氏距 9.7 > 2.0）
         assert off_mic < 2.0   # MIC t 正确 → 判定翻转（修复）
 
+    def test_pi_stacking_cross_box_dual_ring_wrap(self):
+        """π-堆积跨盒双环：两环各自回绕 → 环心/距离/角度与真实物理一致。"""
+        from MDAnalysis.lib.distances import minimize_vectors, calc_bonds
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        R = 1.4
+        angles = np.arange(6) * np.pi / 3
+        ring1_true = np.array([[0.2 + R*np.cos(a), 5 + R*np.sin(a), 1.0]
+                               for a in angles])  # 环1 在 xy 平面 z=1，环心 x=0.2 跨盒
+        ring2_true = np.array([[0.2 + R*np.cos(a), 5 + R*np.sin(a), 4.5]
+                               for a in angles])  # 环2 平行堆积，距 3.5Å
+        def wrap(c):
+            c2 = c.copy()
+            c2[:, 0][c2[:, 0] < 0] += 10
+            return c2
+        def wrap_coords(c, box):
+            ref = c[0:1]
+            rel = c - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(-1, 3)
+            return ref + rel_mic
+        r1w = wrap_coords(wrap(ring1_true), box)
+        r2w = wrap_coords(wrap(ring2_true), box)
+        # 环心
+        c1 = r1w.mean(axis=0); c2 = r2w.mean(axis=0)
+        assert abs(c1[0] - 0.2) < 1e-3 and abs(c1[2] - 1.0) < 1e-3   # 环1 心正确
+        assert abs(c2[0] - 0.2) < 1e-3 and abs(c2[2] - 4.5) < 1e-3   # 环2 心正确
+        dist = calc_bonds(c1[None], c2[None], box=box)[0]
+        assert dist == pytest.approx(3.5, abs=1e-3)   # 环心距 3.5Å（真实）
+        # 法向量（两环平行 → z 方向，P 型）
+        def normal(r):
+            v1 = r - np.roll(r, 1, axis=0)
+            v2 = r - np.roll(r, -1, axis=0)
+            n = np.cross(v1, v2).sum(axis=0)
+            return n / np.linalg.norm(n)
+        n1 = normal(r1w); n2 = normal(r2w)
+        cos_ang = np.clip(np.dot(n1, n2), -1, 1)
+        angle = np.degrees(np.arccos(cos_ang))
+        assert angle < 1.0   # P 型（法向量平行）
+
+    def test_pi_stacking_cross_box_offset_bidirectional_mic(self):
+        """π-堆积跨盒 offset 双向 MIC：欧氏双向 offset 错（>2.0），MIC 对（<2.0）。"""
+        from MDAnalysis.lib.distances import minimize_vectors
+        box = np.array([10.0, 10.0, 10.0, 90, 90, 90])
+        # 两平行环（法向量 z），环1 心 x=0.2、环2 心 x=9.5 → MIC 环心距 0.7Å（平面内）
+        # offset = 环心距（在平面内）= 0.7（真实）；欧氏 9.3 > 2.0
+        n_hat = np.array([0.0, 0.0, 1.0])
+        c1 = np.array([0.2, 5.0, 1.0])
+        c2 = np.array([9.5, 5.0, 1.0])
+
+        def proj(n, p, tgt, box):
+            d1 = np.linalg.norm(tgt - (p + n))
+            d2 = np.linalg.norm(tgt - (p - n))
+            on = n * (1.0 if d1 < d2 else -1.0)
+            t = tgt - p
+            if box is not None:
+                t = minimize_vectors(t.reshape(-1, 3), box).reshape(3)
+            pd = np.dot(t, on)
+            pp = p + (t - pd * on)
+            return np.linalg.norm(pp - p)
+
+        # 双向（对称场景两方向等价）
+        off_old = min(proj(n_hat, c2, c1, None), proj(n_hat, c1, c2, None))
+        off_mic = min(proj(n_hat, c2, c1, box), proj(n_hat, c1, c2, box))
+        assert off_mic == pytest.approx(0.7, abs=1e-3)   # MIC 正确（真实 0.7）
+        assert off_old > 2.0   # 欧氏错误（9.3 > 2.0 → 误判漏检）
+        assert off_mic < 2.0   # MIC 正确 → 判定修复
+
 
 # ============================================================
 # self_capped_distance 去重与返回结构（对抗性审查锁定）

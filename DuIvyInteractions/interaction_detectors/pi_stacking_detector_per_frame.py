@@ -3,6 +3,9 @@
 
 判据：环心距离 ≤ 5.5 Å，法向量夹角满足 P 型或 T 型，投影偏移 ≤ 2.0 Å。
 参考：PLIP, McGaughey 1998。
+
+PBC：双环各自回绕（minimize_vectors 展平-回绕-还原）→ 环心/法向量；
+距离 calc_bonds(box)；offset 双向投影 t 向量做 MIC，见 doc/pbc_design.md §6F。
 """
 
 import numpy as np
@@ -10,6 +13,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorPerFrame
 from ..core.datas import Group, Interaction
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -111,17 +115,32 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
         if len(pair_r1) == 0:
             return []
 
-        # 5. 第一帧：距离预过滤
+        # 5. 第一帧：距离预过滤（PBC 感知）
+        from MDAnalysis.lib.distances import calc_bonds
         first_pos = trajectory[0].positions
-        centers = self._ring_centers(first_pos)
-        dist = np.linalg.norm(centers[pair_r1] - centers[pair_r2], axis=1)
+        first_box = get_box(trajectory[0])
+        centers = self._ring_centers(first_pos, first_box)
+        dist = calc_bonds(centers[pair_r1], centers[pair_r2], box=first_box)
         mask = (dist > PISTACK_MIN_DIST) & (dist < PREFILTER_CUTOFF)
 
-        # 平面性预过滤（可选）
+        # 平面性预过滤（可选；回绕后 atom_normals）
         if self.check_planarity:
+            from MDAnalysis.lib.distances import minimize_vectors
             coords = first_pos[self._ring_indices]
             prev_coords = first_pos[self._ring_prev]
             next_coords = first_pos[self._ring_next]
+            if first_box is not None:
+                n_rings, ma = coords.shape[:2]
+                ref = coords[:, 0:1, :]
+                rel = coords - ref
+                rel_mic = minimize_vectors(rel.reshape(-1, 3), first_box).reshape(n_rings, ma, 3)
+                coords = ref + rel_mic
+                rel_p = prev_coords - ref
+                rel_n = next_coords - ref
+                prev_coords = ref + minimize_vectors(
+                    rel_p.reshape(-1, 3), first_box).reshape(n_rings, ma, 3)
+                next_coords = ref + minimize_vectors(
+                    rel_n.reshape(-1, 3), first_box).reshape(n_rings, ma, 3)
             atom_normals = np.cross(coords - prev_coords, coords - next_coords)
             planarity = self._ring_planarity(atom_normals)
             mask = mask & (planarity[pair_r1] <= PISTACK_PLANARITY) & \
@@ -150,11 +169,11 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
             planarity1 = np.zeros((n_pairs, n_frames))
             planarity2 = np.zeros((n_pairs, n_frames))
 
-        # 7. 逐帧计算
+        # 7. 逐帧计算（PBC 感知）
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
-            metrics = self._compute_metrics(positions)
+            metrics = self._compute_metrics(positions, get_box(ts))
             distance[:, f] = metrics["distance"]
             angle[:, f] = metrics["angle"]
             offset[:, f] = metrics["offset"]
@@ -233,28 +252,48 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
 
     # ==================== 向量化计算 ====================
 
-    def _ring_centers(self, positions):
-        """计算全部环的几何中心。
+    def _ring_centers(self, positions, box=None):
+        """计算全部环的几何中心（PBC 感知：环原子回绕后平均）。
 
         Returns:
             centers: (n_rings, 3)
         """
+        from MDAnalysis.lib.distances import minimize_vectors
         coords = positions[self._ring_indices]  # (n_rings, max_atoms, 3)
+        if box is not None:
+            n_rings, ma = coords.shape[:2]
+            ref = coords[:, 0:1, :]
+            rel = coords - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+            coords = ref + rel_mic
         masked = coords * self._ring_valid[:, :, None]
         centers = np.sum(masked, axis=1) / np.sum(self._ring_valid, axis=1)[:, None]
         return centers
 
-    def _ring_normals(self, positions):
-        """计算全部环的法向量。
+    def _ring_normals(self, positions, box=None):
+        """计算全部环的法向量（PBC 感知：环原子回绕后相对向量 cross）。
 
         使用显式邻居索引（非 np.roll），对任意环大小正确。
 
         Returns:
             normals: (n_rings, 3) 单位向量
         """
+        from MDAnalysis.lib.distances import minimize_vectors
         coords = positions[self._ring_indices]   # (n_rings, max_atoms, 3)
         prev_coords = positions[self._ring_prev]  # (n_rings, max_atoms, 3)
         next_coords = positions[self._ring_next]  # (n_rings, max_atoms, 3)
+        if box is not None:
+            n_rings, ma = coords.shape[:2]
+            ref = coords[:, 0:1, :]
+            rel = coords - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+            coords = ref + rel_mic
+            rel_p = prev_coords - ref
+            rel_n = next_coords - ref
+            prev_coords = ref + minimize_vectors(
+                rel_p.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+            next_coords = ref + minimize_vectors(
+                rel_n.reshape(-1, 3), box).reshape(n_rings, ma, 3)
         atom_normals = np.cross(coords - prev_coords, coords - next_coords)
         masked = atom_normals * self._ring_valid[:, :, None]
         normal = np.sum(masked, axis=1) / np.sum(self._ring_valid, axis=1)[:, None]
@@ -290,21 +329,22 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
 
         return max_angle
 
-    def _compute_metrics(self, positions):
-        """向量化计算全部候选环对的指标。"""
+    def _compute_metrics(self, positions, box=None):
+        """向量化计算全部候选环对的指标（MIC）。"""
+        from MDAnalysis.lib.distances import calc_bonds
         r1 = self._pair_r1
         r2 = self._pair_r2
 
-        # 环心
-        centers = self._ring_centers(positions)  # (n_rings, 3)
+        # 环心（回绕后）
+        centers = self._ring_centers(positions, box)  # (n_rings, 3)
         c1 = centers[r1]  # (n_pairs, 3)
         c2 = centers[r2]
 
-        # 环心距
-        distance = np.linalg.norm(c1 - c2, axis=1)
+        # 环心距（MIC）
+        distance = calc_bonds(c1, c2, box=box)
 
-        # 法向量
-        normals = self._ring_normals(positions)  # (n_rings, 3)
+        # 法向量（回绕后）
+        normals = self._ring_normals(positions, box)  # (n_rings, 3)
         n1 = normals[r1]
         n2 = normals[r2]
 
@@ -314,9 +354,9 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
         raw_angle = np.degrees(np.arccos(cos_angle))
         angle = np.minimum(raw_angle, 180.0 - raw_angle)
 
-        # 投影偏移（双向取较小值）
-        offset1 = self._projection_distance(n2, c2, c1)
-        offset2 = self._projection_distance(n1, c1, c2)
+        # 投影偏移（双向取较小值；t 向量做 MIC）
+        offset1 = self._projection_distance(n2, c2, c1, box=box)
+        offset2 = self._projection_distance(n1, c1, c2, box=box)
         offset = np.minimum(offset1, offset2)
 
         # 分类
@@ -329,11 +369,24 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
             "pistacking_type": pistacking_type,
         }
 
-        # 平面性
+        # 平面性（回绕后 atom_normals）
         if self.check_planarity:
             coords = positions[self._ring_indices]
             prev_coords = positions[self._ring_prev]
             next_coords = positions[self._ring_next]
+            if box is not None:
+                from MDAnalysis.lib.distances import minimize_vectors
+                n_rings, ma = coords.shape[:2]
+                ref = coords[:, 0:1, :]
+                rel = coords - ref
+                rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+                coords = ref + rel_mic
+                rel_p = prev_coords - ref
+                rel_n = next_coords - ref
+                prev_coords = ref + minimize_vectors(
+                    rel_p.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+                next_coords = ref + minimize_vectors(
+                    rel_n.reshape(-1, 3), box).reshape(n_rings, ma, 3)
             atom_normals = np.cross(coords - prev_coords, coords - next_coords)
             planarity_all = self._ring_planarity(atom_normals)
             result["planarity_ring1"] = planarity_all[r1]
@@ -344,23 +397,27 @@ class PiStackingDetectorPerFrame(InteractionDetectorPerFrame):
     # ==================== 辅助方法 ====================
 
     @staticmethod
-    def _projection_distance(normal, plane_point, target_point):
+    def _projection_distance(normal, plane_point, target_point, box=None):
         """将 target_point 投影到 (normal, plane_point) 平面，返回投影点到 plane_point 的距离。
 
         Args:
             normal: (n, 3) 平面法向量
             plane_point: (n, 3) 平面上一点
             target_point: (n, 3) 待投影的点
+            box: 盒尺寸（MIC）；None = 欧氏
         Returns:
             dist: (n,)
         """
+        from MDAnalysis.lib.distances import minimize_vectors
         d1 = np.linalg.norm(target_point - (plane_point + normal), axis=1)
         d2 = np.linalg.norm(target_point - (plane_point - normal), axis=1)
         sign = np.where(d1 < d2, 1.0, -1.0)[:, None]
         oriented_normal = normal * sign
         t = target_point - plane_point
+        if box is not None:
+            t = minimize_vectors(t.reshape(-1, 3), box).reshape(-1, 3)
         proj_dist = np.sum(t * oriented_normal, axis=1)
-        proj_point = target_point - proj_dist[:, None] * oriented_normal
+        proj_point = plane_point + (t - proj_dist[:, None] * oriented_normal)
         return np.linalg.norm(proj_point - plane_point, axis=1)
 
     @staticmethod

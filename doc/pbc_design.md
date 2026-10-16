@@ -777,6 +777,75 @@ def _projection_distance(normal, plane_point, target_point, box=None):
 3. **真实数据对比**：KRAS-RBD 新旧逐 pair 逐帧 existence 对比应一致
    （环/电荷中心距离 <6Å ≪ 半盒，MIC 不触发）
 
+## 6F. π-堆积相互作用 PBC 方案（2026-10-14 追加）
+
+### 6F.1 判据（两种策略一致，apply_threshold 零改动）
+
+```
+0.5 < distance ≤ 5.5 Å          （环心距，下界开/上界闭）
+pistacking_type ∈ {P, T}         （法向量夹角分类：P 型 angle≤30°，T 型 angle≥60°）
+offset < 2.0 Å                   （双向投影偏移取较小值）
+可选：planarity ≤ 5.0°（check_planarity=False 默认关）
+PISTACK_DIST_MAX=5.5, ANG_DEV=30, OFFSET_MAX=2.0, PLANARITY=5.0, MIN_DIST=0.5
+```
+
+### 6F.2 数据流（关键：无 KDTree，双环结构）
+
+| 环节 | two_pass | per_frame |
+|---|---|---|
+| 候选发现 | `initialize_candidates` C(n,2) 组合（**无 KDTree**） | 自写 detect：C(n,2) + 第一帧 `dist ∈ (0.5, 16.5)` 预筛 |
+| 环心 | `Σ(r_masked)/Σvalid`（环形 padding 原子平均） | `_ring_centers` 同 |
+| 环法向量 | `Σ cross(r_i-r_prev, r_i-r_next)/Σvalid` 再归一化 | `_ring_normals` 同 |
+| 指标 | distance + angle（min(raw,180-raw)）+ offset（双向投影取较小）+ classify | 同左 |
+| **run_pass2** | **已覆盖基类**（处理 pistacking_type char dtype 'U1'） | 自写 detect |
+
+**π-堆积两策略都是 C(n,2) 全候选（无 KDTree）**：候选本身跨盒正确，**无需候选
+发现替换**——只需双环三步链 PBC 化。
+
+### 6F.3 双环三步链 PBC 化（对抗性审查实测确认）
+
+**与 π-阳离子 §6E 完全同构，但作用于双环**：
+1. **双环各自回绕**（每环以第一原子为参考 MIC，prev/next 同参考回绕）→ 环心 + 法向量
+2. **距离**：`calc_bonds(c1, c2, box)`（双环心）
+3. **offset 双向 MIC**：`offset1 = _projection_distance(n2, c2, c1, box)`、
+   `offset2 = _projection_distance(n1, c1, c2, box)`、`offset = min(offset1, offset2)`
+   ——**t 向量必须 MIC**（同 §6E 修正：跨盒时欧氏 t 偏移错）
+4. **angle/classify 逻辑零改动**（输入已 PBC 化）
+5. **planarity（可选）**：atom_normals 回绕后计算，`_ring_planarity` 逻辑不变
+
+**对抗性审查实测确认**：
+- 双环独立回绕正确：跨盒两环（环心 x=0.2 跨盒），回绕后环心/距离 3.5Å/角度 0°
+  （P 型）与真实物理一致 ✓
+- **双向 offset MIC**：跨盒平行堆积（环1 心 x=0.2、环2 心 x=9.5，MIC 距 0.7Å）——
+  欧氏双向 offset 9.30（错、>2.0 误判漏检）vs MIC 0.70（对、<2.0 正确判存在）✓
+- distance ≤5.5 闭区间：恰 5.5 calc_bonds 含边界 → 保留（新旧一致）✓
+- 跨盒环法向量回绕：夹角 0°（T 型构型验证）✓
+- **planarity 路径**（check_planarity=True）：新旧完全一致（two_pass 3 对、per_frame
+  0 对）——既有两策略预筛差异，非 PBC 引入 ✓
+
+### 6F.4 two_pass 替换
+
+- `compute_pair_metrics(group_tuples, all_positions, box=None)`：双环三步链
+  （§6F.3）；`_projection_distance` 加 box
+- **run_pass2 已覆盖基类**（处理 pistacking_type char dtype）——只在现有逐帧循环内加
+  `box=get_box(ts)`，**不重写循环**（U1 预分配结构不变）
+
+### 6F.5 per_frame 替换
+
+- **第一帧预筛**（现 `dist ∈ (0.5, 16.5)`）→ `calc_bonds(centers[pair_r1], centers[pair_r2], box)`；
+  可选 planarity 预筛也回绕 atom_normals
+- **逐帧 `_compute_metrics(positions, box)`**：`_ring_centers`/`_ring_normals`/
+  `_projection_distance` 加 box（同 π-阳离子 per_frame 模式）
+
+### 6F.6 测试策略
+
+1. **PBC 单测（test_pbc.py 追加）**：
+   - 跨盒双环回绕：两环跨盒 → 回绕后环心/距离/角度与真实一致
+   - 跨盒 offset 双向 MIC：欧氏双向 offset 错（>2.0）、MIC 对（<2.0）——判定翻转
+2. **既有测试**：`test_pi_stacking_per_frame.py` / `test_pi_stacking_two_pass.py`
+3. **真实数据对比**：KRAS-RBD 新旧逐 pair 逐帧 existence 对比应一致
+   （环心距 ≤5.5Å ≪ 半盒，MIC 不触发）
+
 ## 7. box 传递方案（对抗性审查修正：基类零改动）
 
 > **2026-10-14 对抗性审查修正（P0）**：原方案"基类 `compute_pair_metrics` 加
@@ -881,8 +950,9 @@ per_frame 疏水/金属自写 `detect()`，逐帧循环里直接 `box=_get_box(t
 > - ✅ 水桥 two_pass + per_frame 已实现（commit 4dd6c70，方案 §6B）
 > - ✅ 卤键 two_pass + per_frame 已实现（commit 8979827，方案 §6C）
 > - ✅ 盐桥 two_pass + per_frame 已实现（commit 212babc，方案 §6D）
-> - ✅ π-阳离子 two_pass + per_frame 方案定稿（§6E，本次实现）
-> - ⏳ π-堆积：待后续分支/章节
+> - ✅ π-阳离子 two_pass + per_frame 已实现（commit 7943299，方案 §6E）
+> - ✅ π-堆积 two_pass + per_frame 已实现（本次，方案 §6F）
+> - **PBC 8 类全部完成**（疏水/金属/氢键/水桥/卤键/盐桥/π-阳离子/π-堆积 × two_pass+per_frame）
 
 ## 9. 测试策略
 

@@ -3,6 +3,9 @@
 
 判据：环心距离 ≤ 5.5 Å，法向量夹角满足 P 型或 T 型，投影偏移 ≤ 2.0 Å。
 参考：PLIP, McGaughey 1998。
+
+PBC：双环各自回绕（minimize_vectors 展平-回绕-还原）→ 环心/法向量；
+距离 calc_bonds(box)；offset 双向投影 t 向量做 MIC，见 doc/pbc_design.md §6F。
 """
 
 import numpy as np
@@ -10,6 +13,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -89,30 +93,49 @@ class PiStackingDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== compute_pair_metrics ====================
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算距离、角度、投影偏移、分类（使用缓存索引）。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算距离、角度、投影偏移、分类（使用缓存索引，PBC 感知）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
         if not hasattr(self, '_cached_ring_idx'):
             raise RuntimeError(
                 "compute_pair_metrics requires cached indices. "
                 "Call initialize_candidates or _build_indices_from_sparse first.")
 
+        from MDAnalysis.lib.distances import minimize_vectors, calc_bonds
+
         r1 = self._cached_pair_r1
         r2 = self._cached_pair_r2
 
-        # 环心
+        # 环原子坐标（回绕：每环以第一原子为参考 MIC，保环连续）
         coords = all_positions[self._cached_ring_idx]
+        prev_coords = all_positions[self._cached_ring_prev]
+        next_coords = all_positions[self._cached_ring_next]
+        if box is not None:
+            n_rings, ma = coords.shape[:2]
+            ref = coords[:, 0:1, :]
+            rel = coords - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+            coords = ref + rel_mic
+            rel_p = prev_coords - ref
+            rel_n = next_coords - ref
+            prev_coords = ref + minimize_vectors(
+                rel_p.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+            next_coords = ref + minimize_vectors(
+                rel_n.reshape(-1, 3), box).reshape(n_rings, ma, 3)
+
+        # 环心（回绕后原子平均）
         masked = coords * self._cached_ring_valid[:, :, None]
         centers = np.sum(masked, axis=1) / \
                   np.sum(self._cached_ring_valid, axis=1)[:, None]
         c1 = centers[r1]
         c2 = centers[r2]
 
-        # 环心距
-        distance = np.linalg.norm(c1 - c2, axis=1)
+        # 环心距（MIC）
+        distance = calc_bonds(c1, c2, box=box)
 
-        # 法向量
-        prev_coords = all_positions[self._cached_ring_prev]
-        next_coords = all_positions[self._cached_ring_next]
+        # 法向量（回绕后相对向量 cross，归一化）
         atom_normals = np.cross(coords - prev_coords, coords - next_coords)
         n_masked = atom_normals * self._cached_ring_valid[:, :, None]
         normal = np.sum(n_masked, axis=1) / \
@@ -129,9 +152,9 @@ class PiStackingDetectorTwoPass(InteractionDetectorTwoPass):
         raw_angle = np.degrees(np.arccos(cos_angle))
         angle = np.minimum(raw_angle, 180.0 - raw_angle)
 
-        # 投影偏移（双向取较小值）
-        offset1 = self._projection_distance(n2, c2, c1)
-        offset2 = self._projection_distance(n1, c1, c2)
+        # 投影偏移（双向取较小值；t 向量做 MIC）
+        offset1 = self._projection_distance(n2, c2, c1, box=box)
+        offset2 = self._projection_distance(n1, c1, c2, box=box)
         offset = np.minimum(offset1, offset2)
 
         # 分类
@@ -144,7 +167,7 @@ class PiStackingDetectorTwoPass(InteractionDetectorTwoPass):
             "pistacking_type": pistacking_type,
         }
 
-        # 平面性
+        # 平面性（回绕后的 atom_normals）
         if self.check_planarity:
             planarity = self._ring_planarity(atom_normals)
             result["planarity_ring1"] = planarity[r1]
@@ -186,11 +209,12 @@ class PiStackingDetectorTwoPass(InteractionDetectorTwoPass):
             else:
                 metrics[name] = np.full((n_groups, n_frames), np.nan)
 
-        # 逐帧计算
+        # 逐帧计算（PBC 感知）
         times = np.empty(n_frames)
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
-            frame_metrics = self.compute_pair_metrics(group_tuples, ts.positions)
+            frame_metrics = self.compute_pair_metrics(
+                group_tuples, ts.positions, box=get_box(ts))
             existence[:, f] = self.apply_threshold(frame_metrics)
             for name in self.metric_names:
                 metrics[name][:, f] = frame_metrics[name]
@@ -259,15 +283,18 @@ class PiStackingDetectorTwoPass(InteractionDetectorTwoPass):
         return indices, prev_idx, next_idx, valid, n_atoms
 
     @staticmethod
-    def _projection_distance(normal, plane_point, target_point):
-        """投影距离。"""
+    def _projection_distance(normal, plane_point, target_point, box=None):
+        """投影距离（PBC 感知：t 向量做 MIC）。"""
+        from MDAnalysis.lib.distances import minimize_vectors
         d1 = np.linalg.norm(target_point - (plane_point + normal), axis=1)
         d2 = np.linalg.norm(target_point - (plane_point - normal), axis=1)
         sign = np.where(d1 < d2, 1.0, -1.0)[:, None]
         oriented_normal = normal * sign
         t = target_point - plane_point
+        if box is not None:
+            t = minimize_vectors(t.reshape(-1, 3), box).reshape(-1, 3)
         proj_dist = np.sum(t * oriented_normal, axis=1)
-        proj_point = target_point - proj_dist[:, None] * oriented_normal
+        proj_point = plane_point + (t - proj_dist[:, None] * oriented_normal)
         return np.linalg.norm(proj_point - plane_point, axis=1)
 
     @staticmethod
