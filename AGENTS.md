@@ -109,6 +109,7 @@ Pipeline(ff="amber").run("md.tpr", "md.xtc", "out/",
 - ✅ 阶段三：结果存储与导出（HDF5 序列化 + xvg/xpm/CSV 导出器 + XPM 手动构建修复）
 - ✅ 阶段四：命令行（dii run / dii export，多 Interaction 遍历 + 空数据/损坏 h5/0 帧防护 + 索引校验）
 - ✅ 阶段五：**用户基团选择与过滤**（`--select` / `--pairing`，CLI + Pipeline，见下）
+- ✅ 阶段六：**周期边界（PBC）处理**（2026-10-14，feature/pbc-handling）：全部 8 类相互作用 × `two_pass`/`per_frame` 按最小镜像（MIC）处理——距离 `calc_bonds(box)`、角度 `calc_angles(box)`、聚合坐标（电荷中心/环心）与投影偏移先 MIC 回绕；基类 `run_pass2` 统一模板 + 3 个钩子（`_build_indices_from_sparse`/`_init_metrics`/`_get_box`）消除 8 个 two_pass 的复制；`per_tuple` 未启用 PBC。设计见 `doc/pbc_design.md`
 - ✅ 真实测试案例：**3 力场**（Amber KRAS-RBD / GROMOS 53A6 / CHARMM36 SMO-BST，8 类相互作用全覆盖）
 
 **H 键受体误判修复（2026-09-30，A1）**：剔除带 H 的非受体 N 类型（普通酰胺/铵/带 H 吡咯/胍基），
@@ -127,7 +128,7 @@ pipeline 与 `_find_metal_binding`/water_bridge 检测器按力场正确排除�
 排除，可参与蛋白-水氢键。设计见 `doc/group_selection_design.md`。
 
 **未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果人工审查、
-长轨迹 PerFrame 内存优化、PBC 处理、疏水-芳香去重等。
+长轨迹 PerFrame 内存优化、疏水-芳香去重等。
 
 ## 测试约定（2026-09-30）
 

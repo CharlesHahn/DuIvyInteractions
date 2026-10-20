@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "duivyinteractions"
-version = "0.0.3"
+version = "0.0.4"
 description = "Molecular interaction detection tool based on MD topology force-field parameters"
 readme = "README.md"
 license = {text = "GPL-3.0"}

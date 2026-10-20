@@ -5,6 +5,8 @@ Each interaction type is evaluated by its corresponding detector during the **ge
 > All distances are in Å (Ångström) and all angles in degrees (°). The threshold constants are defined at the top of the detector files (`DuIvyInteractions/interaction_detectors/*_detector_{per_frame,two_pass}.py`).
 >
 > **Strategy-consistency note**: `per_frame` and `two_pass` use identical thresholds, with **one exception — the water bridge**: per_frame additionally applies a 2.5 Å lower bound on the distances, while two_pass has only the 4.1 Å upper bound (see "Water Bridge" below). The `per_tuple` strategy is no longer maintained (skipped in the test conventions); its water-bridge thresholds match per_frame.
+>
+> **Periodic-boundary (PBC) note**: the geometric quantities below are computed with the **minimum-image convention (MIC)** in detection (`two_pass`/`per_frame` strategies, PBC enabled): distances via `calc_bonds(box)`, angles via `calc_angles(box)` (three-atom angle apex as defined per type), and aggregate coordinates (charge centers, ring centers) and projection offsets are computed after MIC-wrapping the atoms. The decision thresholds themselves are unaffected by PBC — PBC only changes the **numerical source** of distances/angles (cross-boundary pairs take the nearest image), not the criteria. Systems without a box (`ts.dimensions` missing or all-zero) automatically fall back to Euclidean computation. See `doc/pbc_design.md`.
 
 ## Geometric Quantities
 

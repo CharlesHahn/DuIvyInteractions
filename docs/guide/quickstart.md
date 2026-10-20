@@ -188,7 +188,7 @@ dii run -t Tests/test_MD_case_amber/md.tpr -f Tests/test_MD_case_amber/md1ns.xtc
 
 ## 7. 已知限制与后续阅读
 
-- 完整已知限制清单（PBC 未处理、水桥 TwoPass 缺 Ow-A 距离下界、疏水-芳香未去重、PerFrame 长轨迹内存占用等）见{doc}`/reference/limitations`。
+- 完整已知限制清单（水桥 TwoPass 缺 Ow-A 距离下界、疏水-芳香未去重、PerFrame 长轨迹内存占用等）见{doc}`/reference/limitations`。
 - 8 类相互作用的检测判据与结果解读，见[结果解读](result)。
 - `dii` 全部命令与参数，见[命令参考](command)。
 - 为什么直接读 tpr 原子类型（核心原理），见{doc}`/reference/concepts`。

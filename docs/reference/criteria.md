@@ -5,6 +5,8 @@
 > 所有距离单位 Å（Ångström），角度单位度（°）。阈值常量定义在检测器文件顶部（`DuIvyInteractions/interaction_detectors/*_detector_{per_frame,two_pass}.py`）。
 >
 > **策略一致性说明**：`per_frame` 与 `two_pass` 的阈值一致，**唯一例外是水桥**——per_frame 额外施加 2.5 Å 的距离下界，two_pass 只有 4.1 Å 上界（见下文"水桥"节）。`per_tuple` 策略已不被维护（测试约定跳过），其水桥阈值与 per_frame 相同。
+>
+> **周期边界（PBC）说明**：下列几何量在检测时按**最小镜像（MIC）**约定计算（`two_pass`/`per_frame` 策略，PBC 已启用）：距离用 `calc_bonds(box)`、角度用 `calc_angles(box)`（三原子角顶点见各类型定义），聚合坐标（电荷中心、环心）与投影偏移先对原子做 MIC 回绕再计算。判据阈值本身不受 PBC 影响——PBC 只改变距离/角度的**数值来源**（跨盒对取最近镜像），不改变判据。无盒体系（`ts.dimensions` 缺失或全零）自动退化为欧氏计算。详见 `doc/pbc_design.md`。
 
 ## 几何量定义
 

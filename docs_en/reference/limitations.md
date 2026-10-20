@@ -6,7 +6,7 @@ This document describes the tool's version information, supported scope, and kno
 
 | Item | Value |
 |:---|:---|
-| Software version | v0.0.3 |
+| Software version | v0.0.4 |
 | HDF5 result format version | 1.0 |
 | Supported Python | >= 3.9 |
 | Package name (PyPI) | `duivyinteractions` |
@@ -32,7 +32,7 @@ This document describes the tool's version information, supported scope, and kno
 
 ### Detection Criteria Related
 
-- **PBC not handled**: interactions under periodic boundary conditions (especially water bridges and hydrogen bonds) are not processed periodically; long trajectories or cross-boundary interactions may be inaccurate
+- **PBC handled**: interactions under periodic boundary conditions are processed with the minimum-image convention (MIC), covering all eight interaction types × the `two_pass`/`per_frame` strategies — hydrophobic / metal (distance), hydrogen bond (distance + angle), water bridge (distance + angle), halogen bond (distance + angle, including R-padding expand-reduce for acc_angle), salt bridge (charge-center wrapping + distance), and π-cation / π-stacking (ring-atom wrapping → ring center / normal / projection offset). The `per_tuple` strategy (possibly to be dropped) is not PBC-enabled. See `doc/pbc_design.md`.
 - **Metal coordination geometry not matched**: only a distance criterion is used, with no matching of coordination geometries such as linear/trigonal/tetrahedral/octahedral; purely water-coordinated sites are excluded (`metal_binding` groups exclude `WATER_RESIDUES`)
 - **Water bridge water deduplication not implemented**: when one water molecule participates in multiple hydrogen bonds, the two best H-O-H angles are not retained
 - **Water bridge TwoPass strategy lacks a distance lower bound**: the TwoPass strategy does not apply an Ow-A distance lower bound (2.5 Å), which may cause small differences from the PerTuple/PerFrame strategies
