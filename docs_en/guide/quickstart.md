@@ -171,7 +171,7 @@ Water-bridge candidate triples can reach 249,000; `per_tuple` iterating the traj
 
 ## 6. Known Limitations and Further Reading
 
-- The full list of known limitations (PBC not handled, missing Ow-A lower bound in the two-pass water bridge, hydrophobic-π de-duplication not implemented, PerFrame memory usage on long trajectories, etc.) is in {doc}`/reference/limitations`.
+- The full list of known limitations (missing Ow-A lower bound in the two-pass water bridge, hydrophobic-π de-duplication not implemented, PerFrame memory usage on long trajectories, etc.) is in {doc}`/reference/limitations`.
 - Detection criteria and result interpretation for the 8 interaction types, see [Interpreting Results](result).
 - All `dii` commands and arguments, see [Command Reference](command).
 - Core principles (why tpr atom types are read directly), see {doc}`/reference/concepts`.

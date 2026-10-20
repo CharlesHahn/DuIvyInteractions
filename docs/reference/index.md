@@ -4,7 +4,7 @@
 
 ## 当前状态概览
 
-DuIvyInteractions v0.0.3 的参考实现状态如下（与代码——`DuIvyInteractions/`——逐项对应）：
+DuIvyInteractions v0.0.4 的参考实现状态如下（与代码——`DuIvyInteractions/`——逐项对应）：
 
 - **两段式架构**：① 基团鉴定——只做一次、与帧无关，从 tpr 原子类型 + 键合图 + 显式 H + 电荷确定性地识别基团；② 几何判定——逐帧按距离/角度/平面临近判据判定 8 类相互作用。详见[核心概念](concepts)、[基团识别规则](group_rules)与[相互作用判据](criteria)。
 - **4 力场识别器**：Amber 家族（蛋白 + GAFF/GAFF2）、GROMOS 53A6/54A7、CHARMM36/C36m（含 CGenFF）、OPLS-AA/L，经 `IDENTIFIER_CLASSES` 注册表统一管理；水残基排除用各识别器自带的 `WATER_RESIDUES` 类属性（跨力场正确排除 CHARMM TIP3、OPLS HO4/HO5 等）。详见[力场类型映射](force_field)与[Python API](api)。
@@ -12,7 +12,8 @@ DuIvyInteractions v0.0.3 的参考实现状态如下（与代码——`DuIvyInte
 - **存储与导出**：HDF5（格式版本 1.0）无损序列化 + 8 个导出器输出 xvg/xpm/csv；命令行 `dii run` / `dii export`。详见[数据格式](data_format)与[命令参考](../guide/command.md)。
 - **用户基团选择与过滤**：`dii run` 支持 `--select`（MDAnalysis 选择语法，可重复/多值，每个值定义独立原子集合）与 `--pairing`（`any`/`between`，默认 `any`）限定参与池：基团须完整属于某一个 select 才保留，`between` 仅保留跨 select 候选对，显式选水可豁免水排除；几何选择按第一帧静态求值。详见[Python API](api)、[术语表](glossary)与[已知限制](limitations)。
 - **真实测试数据**：Amber KRAS-RBD D927、GROMOS 53A6（蛋白 + 6 配体）、CHARMM36 SMO-BST 三套真实 MD 数据（`Tests/test_MD_case_*`），8 类相互作用全覆盖。
-- **范围与限制**：PBC、金属配位几何构型、水桥去重、疏水-芳香去重、可视化等均未实现，详见[已知限制](limitations)。
+- **周期边界（PBC）处理**：全部 8 类相互作用 × `two_pass`/`per_frame` 策略已按最小镜像（MIC）约定处理周期边界（距离、角度、电荷中心/环心聚合坐标与投影偏移），`per_tuple` 策略未启用 PBC。详见[已知限制](limitations)与设计文档 `doc/pbc_design.md`。
+- **范围与限制**：金属配位几何构型、水桥去重、疏水-芳香去重、可视化等未实现，详见[已知限制](limitations)。
 
 ```{toctree}
 :maxdepth: 1

@@ -1,6 +1,6 @@
 # 安装与环境配置
 
-本文档说明如何安装 DuIvyInteractions 并验证环境。包发布版本为 v0.0.3（`pyproject.toml`），结果文件采用 HDF5 格式版本 1.0。
+本文档说明如何安装 DuIvyInteractions 并验证环境。包发布版本为 v0.0.4（`pyproject.toml`），结果文件采用 HDF5 格式版本 1.0。
 
 ## 系统要求
 
@@ -38,7 +38,7 @@ tpr 二进制解析依赖 MDAnalysis 对对应 GROMACS 版本（tpx 版本号）
 pip install duivyinteractions
 ```
 
-包名为 `duivyinteractions`（PyPI 已发布 v0.0.1）。安装时自动安装全部依赖，并在 PATH 注册 `dii` 命令（入口：`pyproject.toml` 的 `[project.scripts]`，指向 `DuIvyInteractions.DII:main`）。
+包名为 `duivyinteractions`（当前包版本 v0.0.4）。从 PyPI 安装需包已发布（发布状态以 PyPI 为准）；源码安装见下文"方式二"。安装时自动安装全部依赖，并在 PATH 注册 `dii` 命令（入口：`pyproject.toml` 的 `[project.scripts]`，指向 `DuIvyInteractions.DII:main`）。
 
 ### 方式二：从源码安装（开发）
 

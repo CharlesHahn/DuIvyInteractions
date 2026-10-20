@@ -1,5 +1,20 @@
 # 变更日志
 
+## v0.0.4（2026-10-14）
+
+### 2026-10-14
+
+- **周期边界（PBC）处理（全部 8 类 × two_pass/per_frame）**：按最小镜像（MIC）约定处理周期边界条件下的相互作用——
+  - **距离类**：疏水、金属配位——候选发现改 `capped_distance/self_capped_distance(method='pkdtree', box)`，逐帧距离 `calc_bonds(box)`
+  - **距离+角度类**：氢键、水桥——角度 `calc_angles(box)`（氢键 D-H···A 顶点 H；水桥 theta 顶点供体 H、omega 顶点水 O）
+  - **距离+角度（R-padding 择优）**：卤键——acc_angle 经 acceptor R-padding 展开-还原 + `calc_angles(box)` + argmin 择优
+  - **聚合坐标类**：盐桥（电荷中心）、π-阳离子、π-堆积——原子先以基团第一原子为参考做 MIC 回绕（`minimize_vectors` 展平-回绕-还原）再聚合/算法向量，投影偏移的 t 向量也做 MIC
+  - 架构：基类 `run_pass2` 统一模板 + 3 个 protected 钩子（`_build_indices_from_sparse`/`_init_metrics`/`_get_box`），8 个 two_pass 子类仅覆盖钩子（消除约 300 行重复）；`per_tuple` 策略（可能被舍弃）未启用 PBC
+  - 设计文档：`doc/pbc_design.md`（含两轮对抗性审查修正：基类 box 传参 TypeError、投影偏移 t 向量 MIC 等）
+- **PBC 单测**：`Tests/unittests/test_pbc.py`（30 项）——跨盒距离/角度/聚合回绕、下界、无盒退化、退化构型、三斜盒、未包裹坐标、边界两阶段一致性
+- **真实数据验证**：KRAS-RBD（Amber）8 类型 × 2 策略新旧逐 pair 逐帧 existence 对比全部一致（PBC 化未改变非跨盒判定）；对抗性审查确认判定标准（阈值/apply_threshold/metric_names）零改动
+- **识别器 H 选择非确定性登记**（对抗性审查发现，`doc/TODO.md` item 18）：含等价氢残基（ARG 胍基 HH21/HH22 等）供体基团的 H 选择受 Python 哈希顺序影响跨运行不完全确定，与 PBC 无关，另案修复
+
 ## v0.0.3（2026-10-09）
 
 ### 2026-10-09
