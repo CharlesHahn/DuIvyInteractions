@@ -3,6 +3,9 @@
 
 判据：X-A ≤ 4.0 Å，C-X···A 在 165°±30°，X···A-R 在 120°±30°。
 参考：PLIP, Auffinger et al.
+
+PBC：距离 calc_bonds(box)、角度 calc_angles(box)（acc_angle 经 R-padding 展开-
+还原 + argmin 择优），见 doc/pbc_design.md §6C。
 """
 
 import numpy as np
@@ -10,6 +13,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -81,33 +85,38 @@ class HalogenBondDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== compute_pair_metrics ====================
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算距离和角度（使用缓存索引）。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算距离和角度（使用缓存索引）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
         if not hasattr(self, '_cached_c_idx'):
             raise RuntimeError(
                 "compute_pair_metrics requires cached indices. "
                 "Call initialize_candidates or _build_indices_from_sparse first.")
+
+        from MDAnalysis.lib.distances import calc_bonds, calc_angles
 
         c = all_positions[self._cached_c_idx]
         x = all_positions[self._cached_x_idx]
         a = all_positions[self._cached_a_idx]
         r = all_positions[self._cached_r_padding]  # (n_pairs, max_r, 3)
 
-        # X-A 距离
-        distance = np.linalg.norm(x - a, axis=1)
+        # X-A 距离（MIC）
+        distance = calc_bonds(x, a, box=box)
 
-        # C-X···A 角度
-        don_angle = self._vec_angle(c - x, a - x)
+        # C-X···A 角度（顶点 x；calc_angles 返回弧度）
+        don_angle = np.degrees(calc_angles(c, x, a, box=box))
 
-        # X···A-R 角度（跳过 padding 第 0 列，那是 A 本身）
-        ax = x - a
-        r_only = r[:, 1:, :]
-        ar = r_only - a[:, None, :]
-        cos = np.sum(ax[:, None, :] * ar, axis=2)
-        norm_ax = np.linalg.norm(ax, axis=1, keepdims=True)
-        norm_ar = np.linalg.norm(ar, axis=2)
-        cos = np.clip(cos / (norm_ax * norm_ar), -1.0, 1.0)
-        all_acc_angles = np.degrees(np.arccos(cos))
+        # X···A-R 角度（跳过 padding 第 0 列，那是 A 本身）：展开 → 批量 MIC 角 → argmin
+        r_only = r[:, 1:, :]                       # (n_pairs, max_r, 3)
+        n_pairs = len(x)
+        max_r = r_only.shape[1]
+        x_rep = np.repeat(x, max_r, axis=0)        # (n_pairs*max_r, 3)
+        a_rep = np.repeat(a, max_r, axis=0)
+        r_flat = r_only.reshape(-1, 3)
+        all_acc = np.degrees(calc_angles(x_rep, a_rep, r_flat, box=box))  # 顶点 a
+        all_acc_angles = all_acc.reshape(n_pairs, max_r)
         best_r = np.argmin(np.abs(all_acc_angles - HALOGEN_ACC_ANGLE), axis=1)
         acc_angle = all_acc_angles[np.arange(len(best_r)), best_r]
 
@@ -124,14 +133,9 @@ class HalogenBondDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== Pass2 ====================
 
-    def run_pass2(self, sparse: InteractionSparse,
-                  trajectory) -> List[Interaction]:
-        """执行 Pass2：从 InteractionSparse 重建缓存索引。"""
-        if not sparse.data:
-            return []
-
-        self._build_indices_from_sparse(sparse)
-        return super().run_pass2(sparse, trajectory)
+    def _get_box(self, ts):
+        """PBC：返回当前帧盒尺寸（None=无盒退化欧氏）。"""
+        return get_box(ts)
 
     # ==================== 内部辅助方法 ====================
 
@@ -164,12 +168,3 @@ class HalogenBondDetectorTwoPass(InteractionDetectorTwoPass):
                     indices[i, j] = r_indices[(j - 1) % n_r]
 
         return indices
-
-    @staticmethod
-    def _vec_angle(v1, v2):
-        """计算两组向量的夹角（度）。"""
-        cos_angle = np.sum(v1 * v2, axis=1) / (
-            np.linalg.norm(v1, axis=1) * np.linalg.norm(v2, axis=1)
-        )
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        return np.degrees(np.arccos(cos_angle))

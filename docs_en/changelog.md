@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.0.4 (2026-10-14)
+
+### 2026-10-14
+
+- **Periodic-boundary-condition (PBC) handling — all 8 interaction types × `two_pass`/`per_frame`**: interactions under periodic boundary conditions are processed with the minimum-image convention (MIC) —
+  - **Distance-only**: hydrophobic, metal coordination — candidate discovery via `capped_distance/self_capped_distance(method='pkdtree', box)`, per-frame distance via `calc_bonds(box)`
+  - **Distance+angle**: hydrogen bond, water bridge — angles via `calc_angles(box)` (H-bond D-H···A apex H; water-bridge theta apex donor H, omega apex water O)
+  - **Distance+angle (R-padding selection)**: halogen bond — acc_angle via acceptor R-padding expand-reduce + `calc_angles(box)` + argmin selection
+  - **Aggregate coordinates**: salt bridge (charge center), π-cation, π-stacking — atoms are first MIC-wrapped around the group's first atom (`minimize_vectors` flatten-wrap-restore) before aggregation / normal computation, and the projection-offset t vector is also MIC-processed
+  - Architecture: the base `run_pass2` is a unified template with 3 protected hooks (`_build_indices_from_sparse`/`_init_metrics`/`_get_box`); the 8 two-pass subclasses only override the hooks (~300 lines of duplication removed); the `per_tuple` strategy (possibly to be dropped) is not PBC-enabled
+  - Design document: `doc/pbc_design.md` (including two adversarial-review corrections: the base-class box-argument TypeError, the projection-offset t-vector MIC, etc.)
+- **PBC unit tests**: `Tests/unittests/test_pbc.py` (30 tests) — cross-box distances/angles/aggregate wrapping, lower bounds, box-free fallback, degenerate configurations, triclinic cells, unwrapped coordinates, two-stage boundary consistency
+- **Real-data verification**: on KRAS–RBD (Amber), all 8 types × 2 strategies show pairwise/frame-wise identical new-vs-old existence (PBC enabled without changing non-cross-boundary judgments); adversarial review confirmed that the decision criteria (thresholds / apply_threshold / metric_names) are unchanged
+- **Identifier H-selection non-determinism registered** (`doc/TODO.md` item 18, found by adversarial review): donor groups of residues with equivalent hydrogens (e.g. ARG guanidinium HH21/HH22) may pick different H across runs because Python hash ordering is not fully deterministic — unrelated to PBC, to be fixed separately
+
 ## v0.0.3 (2026-10-09)
 
 ### 2026-10-09

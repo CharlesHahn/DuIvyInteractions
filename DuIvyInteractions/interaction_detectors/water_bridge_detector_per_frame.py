@@ -3,14 +3,18 @@
 
 判据：水分子位于供体和受体之间，距离和角度满足 PLIP 定义。
 参考：PLIP, Jiang et al. 2005。
+
+PBC：候选预筛 capped_distance(box)、逐帧距离 calc_bonds(box)、角度 calc_angles(box)，
+见 doc/pbc_design.md §6B。
 """
 
 import numpy as np
 from typing import List, Tuple, Dict
-from scipy.spatial import KDTree
+from collections import defaultdict
 
 from ..core.interfaces import InteractionDetectorPerFrame
 from ..core.datas import Group, Interaction
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -97,25 +101,43 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         self._water_ow_idx = np.array([g.atoms[0].atom_global_idx for g in waters])
         self._acceptor_a_idx = np.array([g.atoms[0].atom_global_idx for g in acceptors])
 
-        # 3. 第一帧 KDTree 预筛选
+        # 3. 第一帧 KDTree 预筛选（PBC 感知；全对 + 按 w 分组组合三元组）
+        from MDAnalysis.lib.distances import capped_distance, calc_bonds
         first_pos = trajectory[0].positions
+        first_box = get_box(trajectory[0])
         d_pos = first_pos[self._donor_d_idx]
         w_pos = first_pos[self._water_ow_idx]
         a_pos = first_pos[self._acceptor_a_idx]
 
-        donor_tree = KDTree(d_pos)
-        acceptor_tree = KDTree(a_pos)
+        # 全体 w↔d、w↔a 候选对（pairs[:,0]=w，两组对齐后按 w 分组）
+        dw_pairs = capped_distance(
+            w_pos, d_pos, PREFILTER_CUTOFF,
+            box=first_box, method='pkdtree', return_distances=False)
+        wa_pairs = capped_distance(
+            w_pos, a_pos, PREFILTER_CUTOFF,
+            box=first_box, method='pkdtree', return_distances=False)
+
+        if len(dw_pairs) == 0 or len(wa_pairs) == 0:
+            return []
+
+        dw_by_w = defaultdict(list)
+        for idx in range(len(dw_pairs)):
+            dw_by_w[dw_pairs[idx, 0]].append(dw_pairs[idx, 1])
+        wa_by_w = defaultdict(list)
+        for idx in range(len(wa_pairs)):
+            wa_by_w[wa_pairs[idx, 0]].append(wa_pairs[idx, 1])
+
+        common_w = set(dw_by_w) & set(wa_by_w)
+        if not common_w:
+            return []
 
         triple_d, triple_w, triple_a = [], [], []
-        for wi in range(len(waters)):
-            wp = w_pos[wi]
-            nearby_d = donor_tree.query_ball_point(wp, PREFILTER_CUTOFF)
-            nearby_a = acceptor_tree.query_ball_point(wp, PREFILTER_CUTOFF)
-            if not nearby_d or not nearby_a:
-                continue
-            for di in nearby_d:
-                for ai in nearby_a:
-                    if np.linalg.norm(d_pos[di] - a_pos[ai]) < WATER_BRIDGE_MINDIST:
+        for wi in common_w:
+            for di in dw_by_w[wi]:
+                for ai in wa_by_w[wi]:
+                    # D-A 最短距排除（MIC）
+                    if calc_bonds(d_pos[di:di+1], a_pos[ai:ai+1],
+                                  box=first_box)[0] < WATER_BRIDGE_MINDIST:
                         continue
                     triple_d.append(di)
                     triple_w.append(wi)
@@ -156,11 +178,11 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         omega = np.zeros((n_triples, n_frames))
         times = np.empty(n_frames)
 
-        # 6. 逐帧计算
+        # 6. 逐帧计算（PBC 感知）
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
-            metrics = self._compute_metrics(positions)
+            metrics = self._compute_metrics(positions, get_box(ts))
             dist_dw[:, f] = metrics["dist_dw"]
             dist_wa[:, f] = metrics["dist_wa"]
             theta[:, f] = metrics["theta"]
@@ -190,8 +212,13 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
 
     # ==================== 向量化计算 ====================
 
-    def _compute_metrics(self, positions):
-        """向量化计算全部候选三元组的指标。"""
+    def _compute_metrics(self, positions, box=None):
+        """向量化计算全部候选三元组的指标（MIC）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
+        from MDAnalysis.lib.distances import calc_bonds, calc_angles
+
         td = self._triple_d
         tw = self._triple_w
         ta = self._triple_a
@@ -202,19 +229,15 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         ow = positions[self._water_ow_idx[tw]]
         a = positions[self._acceptor_a_idx[ta]]
 
-        # 距离
-        dist_dw = np.linalg.norm(d - ow, axis=1)
-        dist_wa = np.linalg.norm(ow - a, axis=1)
+        # 距离（MIC）
+        dist_dw = calc_bonds(d, ow, box=box)
+        dist_wa = calc_bonds(ow, a, box=box)
 
-        # theta 角：水O-供体H-供体D
-        vec_hd = d - h     # H→D
-        vec_ho = ow - h    # H→Ow
-        theta = self._vec_angle(vec_hd, vec_ho)
+        # theta 角：水O-供体H-供体D（顶点 h；calc_angles 返回弧度）
+        theta = np.degrees(calc_angles(ow, h, d, box=box))
 
-        # omega 角：受体-水O-供体H
-        vec_oa = a - ow    # Ow→A
-        vec_oh = h - ow    # Ow→H
-        omega = self._vec_angle(vec_oa, vec_oh)
+        # omega 角：受体-水O-供体H（顶点 ow）
+        omega = np.degrees(calc_angles(a, ow, h, box=box))
 
         return {
             "dist_dw": dist_dw,
@@ -222,12 +245,3 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
             "theta": theta,
             "omega": omega,
         }
-
-    @staticmethod
-    def _vec_angle(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
-        """计算两组向量的夹角（度）。"""
-        cos_angle = np.sum(v1 * v2, axis=1) / (
-            np.linalg.norm(v1, axis=1) * np.linalg.norm(v2, axis=1)
-        )
-        cos_angle = np.clip(cos_angle, -1.0, 1.0)
-        return np.degrees(np.arccos(cos_angle))

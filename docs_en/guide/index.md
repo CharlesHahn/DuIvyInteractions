@@ -6,7 +6,7 @@ This section is for **end users** (computational chemistry and structural biolog
 
 DuIvyInteractions is a tool for determining intermolecular interactions based on MD topology force-field parameters. Its core idea is to **read force-field atom types directly from the GROMACS tpr topology to identify chemical groups**, rather than rebuilding chemical structures (bond orders, aromaticity, protonation) from coordinates as PLIP/ProLIF do, so the chemical information already present in the MD topology is never discarded; the results are **deterministic** and **consistent with the force field used**.
 
-Key features of the current version (package version v0.0.3, `pyproject.toml`):
+Key features of the current version (package version v0.0.4, `pyproject.toml`):
 
 - **Two-stage architecture**: ① group identification — performed once, frame-independent, deterministically identifying groups (donor / acceptor / aromatic ring / charged / hydrophobic / halogen / metal / water) from the tpr atom types + bonding graph + explicit hydrogens + charges; ② geometric determination — frame-by-frame distance/angle/planarity criteria, followed by temporal statistics.
 - **4 force-field identifiers** (the `IDENTIFIER_CLASSES` registry in `DuIvyInteractions/group_identifiers/__init__.py`): Amber family (amber03/94/96/99/99sb/99sb-ildn/GS/14sb proteins + GAFF/GAFF2 ligands), GROMOS 53A6/54A7, CHARMM36/C36m (including CGenFF), and OPLS-AA/L. The choices of `dii run --ff` (`amber`/`gromos`/`charmm`/`opls`) correspond one-to-one.
@@ -20,7 +20,8 @@ Reliability notes (code state as of 2026-10-09):
 
 - **H-bond acceptor determination (fix A1)**: across force fields, non-acceptor N types bearing H (ordinary amides, ammonium, H-bearing pyrrole, guanidinium) are excluded, while Pro N, His H-free pyridine N, neutral amines, and nucleic-acid amino N are retained; per-item evidence is in `doc/acceptor_identification_evidence.md`.
 - **Cross-force-field water exclusion**: water-residue names are governed uniformly by the `GroupIdentifier.WATER_RESIDUES` class attribute (Amber `{SOL,HOH,WAT}`, GROMOS `{SOL}`, CHARMM `{TIP3,HOH,SOL,WAT}`, OPLS `{HOH,HO4,HO5,SOL,WAT}`), so water-bridge and metal-coordination detection exclude water correctly.
-- Known limitations (PBC not handled, GROMOS ligands not supported, etc.) are listed in {doc}`/reference/limitations`.
+- **Periodic-boundary (PBC) handling**: all eight interaction types × the `two_pass`/`per_frame` strategies are processed under the minimum-image convention (MIC) — distances/angles directly via MIC, aggregate coordinates such as charge centers / ring centers are wrapped before aggregation, and cross-boundary neighbors (e.g. cross-box water-bridge / hydrogen-bond pairs) are detected correctly; design in `doc/pbc_design.md`.
+- Known limitations (GROMOS ligands not supported, water-bridge deduplication, hydrophobic-aromatic deduplication, etc.) are listed in {doc}`/reference/limitations`.
 
 ## Reading Path
 

@@ -3,14 +3,16 @@
 
 判据：两个疏水碳原子之间距离在 0.5~4.0 Å。
 参考：PLIP。
+
+PBC：候选预筛与逐帧距离均传 box（最小镜像约定），见 doc/pbc_design.md。
 """
 
 import numpy as np
 from typing import List, Tuple, Dict
-from scipy.spatial import KDTree
 
 from ..core.interfaces import InteractionDetectorPerFrame
 from ..core.datas import Group, Interaction
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -72,11 +74,13 @@ class HydrophobicDetectorPerFrame(InteractionDetectorPerFrame):
         # 2. 构建索引数组（单原子 group）
         self._hydro_idx = np.array([g.atoms[0].atom_global_idx for g in hydro])
 
-        # 3. 第一帧 KDTree 预筛选
+        # 3. 第一帧 KDTree 预筛选（PBC 感知；return_distances=False 只返回 pairs）
+        from MDAnalysis.lib.distances import self_capped_distance
         first_pos = trajectory[0].positions
         h_pos = first_pos[self._hydro_idx]
-        tree = KDTree(h_pos)
-        pairs = tree.query_pairs(r=PREFILTER_CUTOFF, output_type='ndarray')
+        pairs = self_capped_distance(
+            h_pos, PREFILTER_CUTOFF,
+            box=get_box(trajectory[0]), method='pkdtree', return_distances=False)
 
         if len(pairs) == 0:
             return []
@@ -107,13 +111,14 @@ class HydrophobicDetectorPerFrame(InteractionDetectorPerFrame):
         distance = np.zeros((n_pairs, n_frames))
         times = np.empty(n_frames)
 
-        # 6. 逐帧计算
+        # 6. 逐帧计算（PBC 感知）
+        from MDAnalysis.lib.distances import calc_bonds
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
             pos_a = positions[self._hydro_idx[self._pair_a]]
             pos_b = positions[self._hydro_idx[self._pair_b]]
-            dist = np.linalg.norm(pos_a - pos_b, axis=1)
+            dist = calc_bonds(pos_a, pos_b, box=get_box(ts))
             distance[:, f] = dist
             existence[:, f] = (dist > HYDROPH_MIN_DIST) & (dist < HYDROPH_DIST_MAX)
 

@@ -51,6 +51,7 @@ The analysis is divided into two stages:
 
 - **Group identification** depends only on topology, not on coordinates, so the results are frame-independent and reproducible
 - **Geometric evaluation** computes geometric metrics (distance, angle, etc.) frame by frame for each pair, and determines whether an interaction exists according to the criteria (see [Interaction Criteria](criteria.md))
+- **Periodic boundaries**: in periodic-boundary systems (e.g. MD simulation PBC boxes), geometric evaluation computes distances/angles with the **minimum-image convention (MIC)** (`two_pass`/`per_frame` strategies); aggregate coordinates (charge centers, ring centers) and projection offsets are computed after MIC-wrapping the atoms — cross-boundary neighbor pairs take the nearest image, avoiding misclassifying atoms on opposite box faces as far apart. See [Interaction Criteria](criteria.md) and `doc/pbc_design.md`
 
 Group identification is the difficult stage: it must map tpr atom types to chemical groups correctly. The tool maintains per-force-field feature tables and the necessary structural criteria, and identifies groups once, to be reused for all frames.
 

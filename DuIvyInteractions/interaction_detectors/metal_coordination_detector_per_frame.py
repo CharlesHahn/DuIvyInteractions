@@ -3,6 +3,8 @@
 
 判据：金属离子到配位原子距离 < 3.0 Å。
 参考：PLIP, Harding 2001。
+
+PBC：距离计算传 box（最小镜像约定），见 doc/pbc_design.md。
 """
 
 import numpy as np
@@ -10,6 +12,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorPerFrame
 from ..core.datas import Group, Interaction
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -92,11 +95,12 @@ class MetalCoordinationDetectorPerFrame(InteractionDetectorPerFrame):
         if len(pair_metal) == 0:
             return []
 
-        # 5. 第一帧：距离预过滤
+        # 5. 第一帧：距离预过滤（PBC 感知）
+        from MDAnalysis.lib.distances import calc_bonds
         first_pos = trajectory[0].positions
         m_pos = first_pos[self._metal_idx[pair_metal]]
         b_pos = first_pos[self._binding_idx[pair_binding]]
-        dist = np.linalg.norm(m_pos - b_pos, axis=1)
+        dist = calc_bonds(m_pos, b_pos, box=get_box(trajectory[0]))
         mask = dist < PREFILTER_CUTOFF
 
         pair_metal = pair_metal[mask]
@@ -116,13 +120,13 @@ class MetalCoordinationDetectorPerFrame(InteractionDetectorPerFrame):
         distance = np.zeros((n_pairs, n_frames))
         times = np.empty(n_frames)
 
-        # 7. 逐帧计算
+        # 7. 逐帧计算（PBC 感知）
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
             m = positions[self._metal_idx[self._pair_metal]]
             b = positions[self._binding_idx[self._pair_binding]]
-            dist = np.linalg.norm(m - b, axis=1)
+            dist = calc_bonds(m, b, box=get_box(ts))
             distance[:, f] = dist
             existence[:, f] = dist < METAL_DIST_MAX
 

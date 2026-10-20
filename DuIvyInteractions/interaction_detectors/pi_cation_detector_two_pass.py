@@ -3,6 +3,9 @@
 
 判据：电荷中心到环心距离 < 6.0 Å，投影偏移 < 2.0 Å。
 参考：PLIP, Gallivan and Dougherty 1999。
+
+PBC：环原子回绕（minimize_vectors 展平-回绕-还原）→ 环心/法向量/电荷中心；
+距离 calc_bonds(box)；投影偏移 t 向量做 MIC，见 doc/pbc_design.md §6E。
 """
 
 import numpy as np
@@ -10,6 +13,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -81,41 +85,69 @@ class PiCationDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== compute_pair_metrics ====================
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算距离和投影偏移（使用缓存索引）。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算距离和投影偏移（使用缓存索引，PBC 感知）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
         if not hasattr(self, '_cached_ring_idx'):
             raise RuntimeError(
                 "compute_pair_metrics requires cached indices. "
                 "Call initialize_candidates or _build_indices_from_sparse first.")
 
-        # 环心
-        r_coords = all_positions[self._cached_ring_idx]
-        r_masked = r_coords * self._cached_ring_valid[:, :, None]
-        r_center = np.sum(r_masked, axis=1) / \
-                   np.sum(self._cached_ring_valid, axis=1)[:, None]
+        from MDAnalysis.lib.distances import minimize_vectors, calc_bonds
 
-        # 环法向量
+        # 环坐标（逐对已按 pair 展开）
+        r_coords = all_positions[self._cached_ring_idx]
         r_prev = all_positions[self._cached_ring_prev]
         r_next = all_positions[self._cached_ring_next]
+        valid = self._cached_ring_valid
+
+        if box is not None:
+            n_pairs, ma = r_coords.shape[:2]
+            # ① 回绕环原子（以每环第一个原子为参考）
+            ref = r_coords[:, 0:1, :]
+            rel = r_coords - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n_pairs, ma, 3)
+            r_coords_w = ref + rel_mic
+            # prev/next 是同一环的原子（环形邻居），用同一参考回绕
+            rel_p = r_prev - ref
+            rel_n = r_next - ref
+            r_prev_w = ref + minimize_vectors(rel_p.reshape(-1, 3), box).reshape(n_pairs, ma, 3)
+            r_next_w = ref + minimize_vectors(rel_n.reshape(-1, 3), box).reshape(n_pairs, ma, 3)
+            r_coords, r_prev, r_next = r_coords_w, r_prev_w, r_next_w
+
+        # ② 环心（回绕后原子平均）
+        r_masked = r_coords * valid[:, :, None]
+        r_center = np.sum(r_masked, axis=1) / np.sum(valid, axis=1)[:, None]
+
+        # ③ 环法向量（回绕后的相对向量 cross）
         atom_normals = np.cross(r_coords - r_prev, r_coords - r_next)
-        n_masked = atom_normals * self._cached_ring_valid[:, :, None]
-        normal = np.sum(n_masked, axis=1) / \
-                 np.sum(self._cached_ring_valid, axis=1)[:, None]
+        n_masked = atom_normals * valid[:, :, None]
+        normal = np.sum(n_masked, axis=1) / np.sum(valid, axis=1)[:, None]
         norm = np.linalg.norm(normal, axis=1, keepdims=True)
         normal = normal / norm
 
-        # 电荷中心
+        # ④ 电荷中心（回绕）
         c_coords = all_positions[self._cached_cation_idx]
+        if box is not None:
+            n_pairs, ma_c = c_coords.shape[:2]
+            ref_c = c_coords[:, 0:1, :]
+            rel_c = c_coords - ref_c
+            rel_c_mic = minimize_vectors(
+                rel_c.reshape(-1, 3), box).reshape(n_pairs, ma_c, 3)
+            c_coords = ref_c + rel_c_mic
         c_weighted = c_coords * self._cached_cation_q[:, :, None] * \
                      self._cached_cation_valid[:, :, None]
         q_sum = np.sum(self._cached_cation_q * self._cached_cation_valid, axis=1)
         c_center = np.sum(c_weighted, axis=1) / q_sum[:, None]
 
-        # 距离
-        distance = np.linalg.norm(r_center - c_center, axis=1)
+        # ⑤ 距离
+        from MDAnalysis.lib.distances import calc_bonds
+        distance = calc_bonds(r_center, c_center, box=box)
 
-        # 投影偏移
-        offset = self._projection_distance(normal, r_center, c_center)
+        # ⑥ 投影偏移（t 向量做 MIC）
+        offset = self._projection_distance(normal, r_center, c_center, box=box)
 
         return {"distance": distance, "offset": offset}
 
@@ -127,14 +159,9 @@ class PiCationDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== Pass2 ====================
 
-    def run_pass2(self, sparse: InteractionSparse,
-                  trajectory) -> List[Interaction]:
-        """执行 Pass2：从 InteractionSparse 重建缓存索引。"""
-        if not sparse.data:
-            return []
-
-        self._build_indices_from_sparse(sparse)
-        return super().run_pass2(sparse, trajectory)
+    def _get_box(self, ts):
+        """PBC：返回当前帧盒尺寸（None=无盒退化欧氏）。"""
+        return get_box(ts)
 
     # ==================== 内部辅助方法 ====================
 
@@ -196,13 +223,21 @@ class PiCationDetectorTwoPass(InteractionDetectorTwoPass):
         return indices, charges, valid
 
     @staticmethod
-    def _projection_distance(normal, plane_point, target_point):
-        """投影距离。"""
+    def _projection_distance(normal, plane_point, target_point, box=None):
+        """投影距离（PBC 感知：t 向量做 MIC）。
+
+        box: 盒尺寸（MIC）；None = 欧氏（无 PBC）。
+        """
+        from MDAnalysis.lib.distances import minimize_vectors
         d1 = np.linalg.norm(target_point - (plane_point + normal), axis=1)
         d2 = np.linalg.norm(target_point - (plane_point - normal), axis=1)
         sign = np.where(d1 < d2, 1.0, -1.0)[:, None]
         oriented_normal = normal * sign
+        # 审查注记：sign 基于原始 t、proj_dist 用 MIC 后的 t，偶发不一致无害——
+        # 最终量是垂直分量幅值 |t_⊥|，对符号不敏感；请勿"修复"为统一 t。
         t = target_point - plane_point
+        if box is not None:
+            t = minimize_vectors(t.reshape(-1, 3), box).reshape(-1, 3)
         proj_dist = np.sum(t * oriented_normal, axis=1)
-        proj_point = target_point - proj_dist[:, None] * oriented_normal
+        proj_point = plane_point + (t - proj_dist[:, None] * oriented_normal)
         return np.linalg.norm(proj_point - plane_point, axis=1)

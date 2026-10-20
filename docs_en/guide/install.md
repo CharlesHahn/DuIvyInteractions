@@ -1,6 +1,6 @@
 # Installation and Environment Setup
 
-This document explains how to install DuIvyInteractions and verify the environment. The released package version is v0.0.3 (`pyproject.toml`), and result files use HDF5 format version 1.0.
+This document explains how to install DuIvyInteractions and verify the environment. The released package version is v0.0.4 (`pyproject.toml`), and result files use HDF5 format version 1.0.
 
 ## System Requirements
 
@@ -38,7 +38,7 @@ Binary tpr parsing depends on MDAnalysis support for the corresponding GROMACS v
 pip install duivyinteractions
 ```
 
-The package name is `duivyinteractions` (v0.0.3 published on PyPI). All dependencies are installed automatically, and the `dii` command is registered on PATH (entry: `[project.scripts]` in `pyproject.toml`, pointing to `DuIvyInteractions.DII:main`).
+The package name is `duivyinteractions` (current package version v0.0.4). Installing from PyPI requires the package to have been published (publication status is governed by PyPI); for source installation see "Method 2" below. All dependencies are installed automatically, and the `dii` command is registered on PATH (entry: `[project.scripts]` in `pyproject.toml`, pointing to `DuIvyInteractions.DII:main`).
 
 ### Method 2: Install from Source (Development)
 

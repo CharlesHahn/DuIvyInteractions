@@ -4,8 +4,10 @@
 判据：金属离子到配位原子距离 < 3.0 Å。
 参考：PLIP, Harding 2001。
 
-Pass1：KDTree 交叉查询发现近邻对
-Pass2：从 InteractionSparse 重建索引 + 向量化计算
+Pass1：KDTree 交叉查询发现近邻对（PBC 感知）
+Pass2：从 InteractionSparse 重建索引 + 向量化计算（PBC 感知）
+
+PBC：距离计算传 box（最小镜像约定），见 doc/pbc_design.md。
 """
 
 import numpy as np
@@ -13,6 +15,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值
@@ -55,7 +58,7 @@ class MetalCoordinationDetectorTwoPass(InteractionDetectorTwoPass):
 
         for f, ts in enumerate(trajectory):
             active_metals, active_bindings, distances = \
-                self._kdtree_discover(ts.positions)
+                self._kdtree_discover(ts.positions, get_box(ts))
 
             for m_idx, b_idx, dist in zip(
                     active_metals, active_bindings, distances):
@@ -81,26 +84,25 @@ class MetalCoordinationDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== Pass2：从 InteractionSparse 重建 ====================
 
-    def run_pass2(self, sparse: InteractionSparse,
-                  trajectory) -> List[Interaction]:
-        """执行 Pass2：从 InteractionSparse 重建索引。"""
-        if not sparse.data:
-            return []
-
-        self._build_indices_from_sparse(sparse)
-        return super().run_pass2(sparse, trajectory)
+    def _get_box(self, ts):
+        """PBC：返回当前帧盒尺寸（None=无盒退化欧氏）。"""
+        return get_box(ts)
 
     # ==================== compute_pair_metrics ====================
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算距离（使用 _build_indices_from_sparse 缓存的索引）。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算距离（使用 _build_indices_from_sparse 缓存的索引）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
         if not hasattr(self, '_pass2_metal_idx'):
             raise RuntimeError(
                 "compute_pair_metrics requires cached indices. "
                 "Call _build_indices_from_sparse first via run_pass2.")
+        from MDAnalysis.lib.distances import calc_bonds
         m_pos = all_positions[self._pass2_metal_idx]
         b_pos = all_positions[self._pass2_binding_idx]
-        return {"distance": np.linalg.norm(m_pos - b_pos, axis=1)}
+        return {"distance": calc_bonds(m_pos, b_pos, box=box)}
 
     def apply_threshold(self, metrics):
         """距离 < METAL_DIST_MAX。"""
@@ -108,23 +110,24 @@ class MetalCoordinationDetectorTwoPass(InteractionDetectorTwoPass):
 
     # ==================== 内部辅助方法 ====================
 
-    def _kdtree_discover(self, all_positions):
-        """KDTree 交叉查询发现金属-配位近邻对。"""
-        from scipy.spatial import cKDTree
+    def _kdtree_discover(self, all_positions, box=None):
+        """PBC 感知的交叉查询发现金属-配位近邻对。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
+        from MDAnalysis.lib.distances import capped_distance
 
         m_coords = all_positions[self._metal_indices]
         b_coords = all_positions[self._binding_indices]
 
-        tree_m = cKDTree(m_coords)
-        tree_b = cKDTree(b_coords)
+        pairs, distances = capped_distance(
+            m_coords, b_coords, METAL_DIST_MAX,
+            box=box, method='pkdtree', return_distances=True)
 
-        sparse_dist = tree_m.sparse_distance_matrix(tree_b, METAL_DIST_MAX)
-
-        if sparse_dist.nnz == 0:
+        # 空对：capped_distance 返回 pairs.shape=(0,2)（实测）
+        if len(pairs) == 0:
             return np.array([]), np.array([]), np.array([])
-
-        coo = sparse_dist.tocoo()
-        return coo.row, coo.col, coo.data
+        return pairs[:, 0], pairs[:, 1], distances
 
     def _build_indices_from_sparse(self, sparse: InteractionSparse):
         """从 InteractionSparse 重建原子索引数组（Pass2 用）。"""

@@ -3,6 +3,9 @@
 
 判据：两个相反电荷中心距离 ≤ SALTBRIDGE_DIST_MAX。
 参考：PLIP, Barlow and Thornton 1983（+1.5 Å 扩展）。
+
+PBC：电荷中心聚合先以基团参考原子做 MIC 回绕（minimize_vectors 展平-回绕-
+还原），中心距离 calc_bonds(box)，见 doc/pbc_design.md §6D。
 """
 
 import numpy as np
@@ -10,6 +13,7 @@ from typing import List, Tuple, Dict
 
 from ..core.interfaces import InteractionDetectorTwoPass
 from ..core.datas import Group, Interaction, InteractionSparse
+from ..core.pbc import get_box
 
 
 # PLIP 阈值：5.5 Å
@@ -74,30 +78,30 @@ class SaltBridgeDetectorTwoPass(InteractionDetectorTwoPass):
                         for i in range(len(pos_flat))]
         return group_tuples
 
-    def compute_pair_metrics(self, group_tuples, all_positions):
-        """向量化计算电荷中心距离。"""
+    def compute_pair_metrics(self, group_tuples, all_positions, box=None):
+        """向量化计算电荷中心距离（MIC）。
+
+        box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
+        """
+        from MDAnalysis.lib.distances import calc_bonds
         pos_c = self._charge_centers(
-            all_positions, self._pos_idx, self._pos_q, self._pos_valid)
+            all_positions, self._pos_idx, self._pos_q, self._pos_valid, box=box)
         neg_c = self._charge_centers(
-            all_positions, self._neg_idx, self._neg_q, self._neg_valid)
-        return {"distance": np.linalg.norm(
-            pos_c[self._pos_flat] - neg_c[self._neg_flat], axis=1)}
+            all_positions, self._neg_idx, self._neg_q, self._neg_valid, box=box)
+        return {"distance": calc_bonds(
+            pos_c[self._pos_flat], neg_c[self._neg_flat], box=box)}
 
     def apply_threshold(self, metrics):
         """距离 ≤ SALTBRIDGE_DIST_MAX。"""
         return metrics["distance"] <= SALTBRIDGE_DIST_MAX
 
-    def run_pass2(self, sparse: InteractionSparse,
-                  trajectory) -> List[Interaction]:
-        """执行 Pass2：重新构建 padding，然后向量化计算。"""
-        if not sparse.data:
-            return []
+    def _get_box(self, ts):
+        """PBC：返回当前帧盒尺寸（None=无盒退化欧氏）。"""
+        return get_box(ts)
 
-        # 从 InteractionSparse 重新构建 padding
+    def _build_indices_from_sparse(self, sparse: InteractionSparse):
+        """基类钩子桥接：saltbridge 用 _build_padding_from_sparse 重建 padding。"""
         self._build_padding_from_sparse(sparse)
-
-        # 调用父类的 run_pass2
-        return super().run_pass2(sparse, trajectory)
 
     # ==================== 内部辅助方法 ====================
 
@@ -131,9 +135,21 @@ class SaltBridgeDetectorTwoPass(InteractionDetectorTwoPass):
         return indices, charges, valid
 
     @staticmethod
-    def _charge_centers(positions, group_idx, group_q, group_valid):
-        """padding 向量化计算全部 group 的电荷中心。"""
-        coords = positions[group_idx]
+    def _charge_centers(positions, group_idx, group_q, group_valid, box=None):
+        """padding 向量化计算全部 group 的电荷中心（PBC 感知）。
+
+        box: 盒尺寸（MIC）；None = 欧氏（无 PBC）。
+        有 box 时先以每基团第一个原子为参考做最小镜像回绕（保基团连续），
+        再加权平均——防御性保证残基跨盒时中心正确。
+        """
+        coords = positions[group_idx]                    # (n, max_atoms, 3)
+        if box is not None:
+            from MDAnalysis.lib.distances import minimize_vectors
+            n, ma = coords.shape[:2]
+            ref = coords[:, 0:1, :]
+            rel = coords - ref
+            rel_mic = minimize_vectors(rel.reshape(-1, 3), box).reshape(n, ma, 3)
+            coords = ref + rel_mic
         weighted = coords * group_q[:, :, None] * group_valid[:, :, None]
         q_sum = np.sum(group_q * group_valid, axis=1)
         centers = np.sum(weighted, axis=1) / q_sum[:, None]

@@ -531,8 +531,8 @@ class InteractionDetectorTwoPass(ABC):
                   trajectory) -> List[Interaction]:
         """执行 Pass2：补全全帧数据。
 
-        默认实现：调用 compute_pair_metrics + apply_threshold。
-        子类可覆盖实现自定义逻辑。
+        默认实现：调用 _build_indices_from_sparse（索引重建钩子）+ compute_pair_metrics
+        + apply_threshold。子类可覆盖 _build_indices_from_sparse / _get_box 实现自定义。
 
         Args:
             sparse: run_pass1 返回的稀疏结果
@@ -544,20 +544,23 @@ class InteractionDetectorTwoPass(ABC):
         if not sparse.data:
             return []
 
+        # 索引重建钩子（子类可覆盖；默认空实现）
+        self._build_indices_from_sparse(sparse)
+
         group_tuples = [entry["groups"] for entry in sparse.data.values()]
         n_groups = len(group_tuples)
         n_frames = trajectory.n_frames
 
         # 预分配稠密数组
         existence = np.zeros((n_groups, n_frames), dtype=bool)
-        metrics = {name: np.full((n_groups, n_frames), np.nan)
-                   for name in self.metric_names}
+        metrics = self._init_metrics(n_groups, n_frames)
 
         # 逐帧计算全部 discovered groups 的 metric
         times = np.empty(n_frames)
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
-            frame_metrics = self.compute_pair_metrics(group_tuples, ts.positions)
+            frame_metrics = self.compute_pair_metrics(
+                group_tuples, ts.positions, box=self._get_box(ts))
             existence[:, f] = self.apply_threshold(frame_metrics)
             for name in self.metric_names:
                 metrics[name][:, f] = frame_metrics[name]
@@ -571,6 +574,19 @@ class InteractionDetectorTwoPass(ABC):
 
         results = self._post_process(results)
         return self._build_interaction(results, times=times)
+
+    def _build_indices_from_sparse(self, sparse: InteractionSparse):
+        """Pass2 索引重建钩子（子类可覆盖；默认空实现）。"""
+        pass
+
+    def _init_metrics(self, n_groups: int, n_frames: int) -> Dict[str, np.ndarray]:
+        """Pass2 metrics 预分配钩子（默认全 float NaN；子类可覆盖自定义 dtype）。"""
+        return {name: np.full((n_groups, n_frames), np.nan)
+                for name in self.metric_names}
+
+    def _get_box(self, ts):
+        """逐帧盒尺寸钩子（默认 None=欧氏；PBC 化子类覆盖返回 get_box(ts)）。"""
+        return None
 
     # ==================== 公共接口 ====================
 

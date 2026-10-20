@@ -6,7 +6,7 @@
 
 DuIvyInteractions 是一个基于 MD 拓扑力场参数的分子间相互作用判定工具。其核心思路是**直接从 GROMACS tpr 拓扑读取力场原子类型来识别化学基团**，而非像 PLIP/ProLIF 那样从坐标重建化学结构（键序、芳香性、加氢），因此不会丢失 MD 拓扑中已有的化学信息，结果**确定**且与所用**力场自洽**。
 
-当前版本（包版本 v0.0.3，`pyproject.toml`）功能要点：
+当前版本（包版本 v0.0.4，`pyproject.toml`）功能要点：
 
 - **两段式架构**：① 基团鉴定——只做一次、与帧无关，从 tpr 的原子类型 + 键合图 + 显式 H + 电荷确定性地识别基团（供体/受体/芳香环/带电/疏水/卤素/金属/水）；② 几何判定——逐帧按距离/角度/平面临近判据判定相互作用，再做时间统计。
 - **4 个力场识别器**（`DuIvyInteractions/group_identifiers/__init__.py` 的 `IDENTIFIER_CLASSES` 注册表）：Amber 家族（amber03/94/96/99/99sb/99sb-ildn/GS/14sb 蛋白 + GAFF/GAFF2 配体）、GROMOS 53A6/54A7、CHARMM36/C36m（含 CGenFF）、OPLS-AA/L。`dii run --ff` 的取值（`amber`/`gromos`/`charmm`/`opls`）与之一一对应。
@@ -20,7 +20,8 @@ DuIvyInteractions 是一个基于 MD 拓扑力场参数的分子间相互作用�
 
 - **H 键受体判定（A1 修复）**：跨力场剔除带 H 的非受体 N 类型（普通酰胺/铵/带 H 吡咯/胍基），保留 Pro N / His 无 H 吡啶 / 中性胺 / 核酸氨基；逐项证据见 `doc/acceptor_identification_evidence.md`。
 - **跨力场水排除**：水残基名由 `GroupIdentifier.WATER_RESIDUES` 类属性统一管理（Amber `{SOL,HOH,WAT}`、GROMOS `{SOL}`、CHARMM `{TIP3,HOH,SOL,WAT}`、OPLS `{HOH,HO4,HO5,SOL,WAT}`），水桥/金属配位检测据此正确排除水。
-- 已知限制（PBC 未处理、GROMOS 配体不支持等）见{doc}`/reference/limitations`。
+- **周期边界（PBC）处理**：全部 8 类相互作用 × `two_pass`/`per_frame` 策略已按最小镜像（MIC）约定处理周期边界——距离/角度直接 MIC，电荷中心/环心等聚合坐标先回绕再聚合，跨盒近邻（如水桥、氢键跨盒对）正确检测；设计见 `doc/pbc_design.md`。
+- 已知限制（GROMOS 配体不支持、水桥去重、疏水-芳香去重等）见{doc}`/reference/limitations`。
 
 ## 阅读路径
 
