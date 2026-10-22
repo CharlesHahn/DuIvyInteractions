@@ -63,6 +63,19 @@ GROMOS_HYDROPHOBIC_TYPES = frozenset({
 GROMOS_HYDROPHOBIC_EXCLUDED = frozenset({"O", "N", "S"})
 
 
+def _has_carbonyl_c_neighbor(neighbors: List[AtomData],
+                             atom_map: Dict[int, AtomData],
+                             bonds: Dict[int, Set[int]]) -> bool:
+    """判断邻居中是否有羰基碳（碳原子且邻接氧原子）。"""
+    for nb in neighbors:
+        if nb.atom_element != "C":
+            continue
+        if any(atom_map[i].atom_element == "O"
+               for i in bonds.get(nb.atom_global_idx, ()) if i in atom_map):
+            return True
+    return False
+
+
 class GromosFFGroupIdentifier(AmberFFGroupIdentifier):
     """GROMOS 力场基团识别器。"""
 
@@ -88,6 +101,8 @@ class GromosFFGroupIdentifier(AmberFFGroupIdentifier):
         - 带 H（普通酰胺/侧链酰胺/带 H 吡咯/胍基）→ 非受体
           （Eildal 2013 JACS；教科书：吡咯 N 孤对参与芳香）
         - 无 H（Pro N / His 吡啶型 N）→ 受体（Deepak 2016, Biophys J；教科书）
+        - `NT` 且邻居无羰基 C（中性胺）→ 受体（教科书：胺 N 孤对自由；
+          酰胺化学定义为 N 与羰基 C 相连，其孤对离域至羰基）
         """
         exclude_atoms = exclude_atoms or set()
         groups: List[Group] = []
@@ -108,7 +123,11 @@ class GromosFFGroupIdentifier(AmberFFGroupIdentifier):
             if atom.atom_element == "N":
                 neighbors = [res_atom_map[n] for n in res_bonds.get(atom.atom_global_idx, ())
                              if n in res_atom_map]
-                if len(neighbors) >= 4 or any(n.atom_element == "H" for n in neighbors):
+                is_neutral_amine = (atom.atom_type == "NT"
+                                    and not _has_carbonyl_c_neighbor(
+                                        neighbors, res_atom_map, res_bonds))
+                if not is_neutral_amine and (
+                        len(neighbors) >= 4 or any(n.atom_element == "H" for n in neighbors)):
                     continue
             if atom.atom_global_idx in exclude_atoms:
                 continue

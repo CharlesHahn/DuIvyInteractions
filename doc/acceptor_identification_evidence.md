@@ -51,6 +51,8 @@ CGenFF 配体 N（2026-09-30 按官方 MASS 注释逐项判定）：
 ### GROMOS（类型粒度粗，结构判据）
 `GROMOS_ACCEPTOR_TYPES` 无法纯类型区分；`_find_acceptors` 对 N 加结构判据：**键数≥4（铵）或带 H（酰胺/吡咯/胍）→ 排除；无 H（Pro/His 吡啶）→ 保留**。
 
+**中性胺补充判据（2026-10 核查修正）**：GROMOS `NT` 类型同时覆盖中性胺（LYS NZ，无羰基 C 邻居）与侧链酰胺（ASN ND2 / GLN NE2，有羰基 C 邻居）。带 H 一律排除会漏检中性胺受体（胺 N 孤对自由；酰胺孤对离域至羰基）。故对 `NT` 且邻居无羰基 C（C 邻接 O）者保留为受体——化学依据为酰胺的定义（N 与羰基 C 相连），与 Amber/CHARMM/OPLS 中性胺处理一致（`n3`/`NG2S3`/`opls_900` 均保留）。
+
 ---
 
 ## 3. 已知边界与待查项（登记）
@@ -62,11 +64,31 @@ CGenFF 配体 N（2026-09-30 按官方 MASS 注释逐项判定）：
 | CGenFF `NG*` 逐项 | **已查证，部分剔/留** | 按 top_all36_cgenff.rtf MASS 段官方注释逐项判定（见 §2 CHARMM 部分）：留 NG2D1/R50/R60/R62/S3/N3N1，剔 NG2O1/P1/R51/R52/R61/RC0/S0/S1/S2/S4 |
 | **NG2S0（N,N-二取代酰胺）与配体 Pro 类** | **登记例外** | CGenFF 把 Pro N 归 NG2S0（CO=NRR'）；Deepak 2016 示 Pro 受体（环约束弱化共振）——但一般叔酰胺（共振）非受体，同一类型不可分。剔 NG2S0 丢失配体 Pro 类弱受体，登记为已知例外 |
 | GROMOS 核酸氨基 N | **已知不一致** | GROMOS 简化判据"带 H 即排除"会连带排除核酸氨基（Luisi 判为受体，amber 用 `N2` 保留）；GROMOS 版设计文档已声明配体/核酸场景受限，属已知边界 |
+| GROMOS 中性胺（`NT`） | **已修正（2026-10）** | 原先"带 H 即排除"连带排除中性胺（LYS NZ 无羰基 C 邻居，胺 N 孤对自由）；改为"`NT` 且邻居无羰基 C → 受体"。ASN/GLN 酰胺（有羰基 C 邻居）仍排除。化学依据：酰胺定义 = N 与羰基 C 相连，孤对离域至羰基；胺 N 孤对自由（教科书 + Eildal 2013） |
 | 胍基 N 非受体 | **化学推理级** | 无"胍基作受体"文献，判定靠胍基共振化学事实；方向与全部胍基文献（供体角色）一致 |
 
 ---
 
-## 4. 关联文档
+## 4. S 类（CYS 硫醇/硫醇根 SG）受体判定（2026-10 核查登记）
+
+**结论：CYS SG 判为 H_acceptor 正确**，无需修正类型表。
+
+| 质子化态 | 力场实例（本地 rtp 实测） | 孤对 | 受体强度 | 判定 |
+|---|---|---|---|---|
+| 硫醇 -SH（SG 带 1 个 H） | Amber CYS（SG 类型 `SH`，q≈-0.31）；GROMOS `CYSH`（SG 类型 S，q=-0.37，HG +0.22）；CHARMM `S`（带 HG） | 2 对（sp3 弯曲几何） | 弱（S 电负性 2.58，H 键 ~1-4 kcal/mol，弱于 O/N） | **受体** ✓ —— S 带 H 仍有 2 对孤对可用；不同于酰胺 N（孤对被共振占用），故"带 H 即排除"判据只适用于 N |
+| 硫醇根 Cys⁻（SG 无 H） | Amber `CYM`（SG）；GROMOS `CYS`（SG 类型 S，q=-0.40）；CHARMM `SM`；CHARMM `CYM`（SG） | 2 对（负电荷增强孤对密度） | 强 | **受体** ✓ —— 更明确；同时属负电基团（双角色，同 ASP/GLU 的 O） |
+
+文献锚点：
+- **Mazmanian 2016, J Phys Chem B 120:10288** —— "cysteine, which can serve as a hydrogen-bond donor and/or acceptor… affect the balance between the neutral thiol (SH) or thiolate (S⁻)"；9138 个非冗余 X 射线结构验证
+- **Gregoret 1991, Proteins 9:99-107** —— 85 个高分辨率结构调查 S 参与 H 键的普遍性与几何："The electronic structure of sulfur is compatible with hydrogen bond formation"
+- **Zhou 2009, Proteins 76:151-63** —— Cys/Met 硫 H 键几何特征（晶体统计）
+- **Adhav 2023, QRB Discovery 4:e5** —— "Divalent sulfur (S) forms a chalcogen bond via its σ-holes and a hydrogen bond (H-bond) via its lone pairs"；金属螯合 Cys 经孤对成 H 键
+
+实现现状（四力场一致，无需改动）：Amber `ACCEPTOR_TYPES` 含 `S`/`SH`、GROMOS 含 `S`（`_find_acceptors` 对 S 无"带 H"排除——正确）、CHARMM 含 `S`/`SM`/`SS`、OPLS 含硫；均按"类型 ∈ 表 + q<0"判定。注：GROMOS `GROMOS_NEGATIVE_RESIDUES` 不收录 CYS（硫醇根净电荷 -0.5 强度不足、PLIP 通行不含）——只影响盐桥阴离子判定，不影响受体判定。
+
+---
+
+## 5. 关联文档
 
 - `doc/force_field_compatibility_survey.md` —— 多力场类型体系调研（本次修改的力场证据来源）
 - `doc/intermap_paper_analysis.md` —— ProLIF 肽键 N 误判批评（酰胺非受体的工具层佐证）

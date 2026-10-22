@@ -175,6 +175,18 @@ _SOL = [
 ]
 _SOL_BONDS = [("OW", "HW1"), ("OW", "HW2")]
 
+_ASN = [
+    ("N", "N", "N", -0.310), ("H", "H", "H", 0.310),
+    ("CA", "CH1", "C", 0.000), ("CB", "CH2", "C", 0.000),
+    ("CG", "C", "C", 0.450), ("OD1", "O", "O", -0.450),
+    ("ND2", "NT", "N", -0.720), ("HD21", "H", "H", 0.360), ("HD22", "H", "H", 0.360),
+    ("C", "C", "C", 0.450), ("O", "O", "O", -0.450),
+]
+_ASN_BONDS = [
+    ("N", "H"), ("N", "CA"), ("CA", "CB"), ("CA", "C"), ("CB", "CG"),
+    ("CG", "OD1"), ("CG", "ND2"), ("ND2", "HD21"), ("ND2", "HD22"), ("C", "O"),
+]
+
 _TEMPLATES = {
     "PHE": (_PHE, _PHE_BONDS),
     "TRP": (_TRP, _TRP_BONDS),
@@ -186,6 +198,7 @@ _TEMPLATES = {
     "ARG": (_ARG, _ARG_BONDS),
     "ASP": (_ASP, _ASP_BONDS),
     "GLU": (_GLU, _GLU_BONDS),
+    "ASN": (_ASN, _ASN_BONDS),
     "SOL": (_SOL, _SOL_BONDS),
 }
 
@@ -244,7 +257,8 @@ def identifier():
 def groups(identifier):
     """识别合成体系（含多种代表残基）的全部基团。"""
     sd = _make_system(
-        ["PHE", "TRP", "PRO", "HISH", "HISA", "LYSH", "LYS", "ARG", "ASP", "GLU", "SOL"]
+        ["PHE", "TRP", "PRO", "HISH", "HISA", "LYSH", "LYS", "ARG", "ASP", "GLU",
+         "ASN", "SOL"]
     )
     return identifier.identify(sd)
 
@@ -385,6 +399,23 @@ class TestDonorAcceptor:
                      [g for g in _groups_of("PHE", groups)
                       if g.group_type == "H_acceptor"]}
         assert "N" not in acc_names, "主链肽键 N 不应是受体"
+
+    def test_neutral_amine_nz_is_acceptor(self, groups):
+        """中性 LYS（NT 类型，NZ 无羰基 C 邻居）的 NZ 应为受体。
+
+        胺 N 孤对自由；酰胺 N（有羰基 C 邻居）孤对离域至羰基 → 非受体。
+        """
+        acc_names = {a.atoms[0].atom_name for a in
+                     [g for g in _groups_of("LYS", groups)
+                      if g.group_type == "H_acceptor"]}
+        assert "NZ" in acc_names, "中性胺 NZ 应为受体"
+
+    def test_amide_nd2_not_acceptor(self, groups):
+        """ASN 侧链酰胺 ND2（NT 类型，有羰基 C 邻居）不应是受体。"""
+        acc_names = {a.atoms[0].atom_name for a in
+                     [g for g in _groups_of("ASN", groups)
+                      if g.group_type == "H_acceptor"]}
+        assert "ND2" not in acc_names, "酰胺 ND2 不应是受体"
 
     def test_water_group(self, groups):
         waters = [g for g in _groups_of("SOL", groups)
