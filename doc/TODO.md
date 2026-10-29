@@ -204,7 +204,7 @@ detector.detect(groups, trajectory,
 **待决定**：是否需要在 TwoPass 的 `apply_threshold` 中添加此下界。
 
 
-### 16. 周期性问题 ✅（feature/pbc-handling 实现，待合并）
+### 16. 周期性问题 ✅（已实现并合并：v0.0.4）
 
 **原问题**：相互作用（尤其水桥/氢键）可能受周期边界影响；原建议替换到 MDAnalysis 的周期接口。
 
@@ -215,12 +215,15 @@ detector.detect(groups, trajectory,
 未包裹坐标亦正确（实测 + 单测锁定，见 `Tests/unittests/test_pbc.py`）。对应 7 个
 feat 提交 + 1 个 DRY 重构提交 + 29 个 PBC 单测。
 
+**合并状态（2026-10-29，✅ 已合并）**：feature/pbc-handling → dev（`870872e`）→
+master（`a9dca03`，tag `v0.0.4`）；dev 与 master 已同步至 `2a6c824`。合入时全量回归通过
+（276 tests），三斜盒/未包裹坐标已有单测锁定。
+
 **仍遗留**：
 - `per_tuple` 策略保持非 PBC（将被舍弃，跨盒对有差异，limitations 注明）
 - 水桥 two_pass D–A 距离下界（2.5 Å）：既有 TODO #15，另案处理
-- 真实体系回归与三斜盒规模验证：留待分支合入门禁
 
-### 17. 正电残基的铵/胍氮被误判为 H 键受体 ⚠️（新力场通用，已确认 OPLS/CHARMM/GROMOS 存在）
+### 17. 正电残基的铵/胍氮被误判为 H 键受体 ✅（已修复 2026-09-30）
 
 **现状**：受体判定逻辑（`_find_acceptors`）为"类型 ∈ 受体表 且 q<0"。各力场受体表均含氮类（如 OPLS `opls_287`/CHARMM `NH3`/GROMOS `NL` 等铵氮类型）。带负电荷的铵氮（如 OPLS LYSH NZ q=-0.30、CHARMM 质子化 His 咪唑氮 q=-0.51）因此被识别为 H_acceptor。
 
@@ -243,7 +246,8 @@ feat 提交 + 1 个 DRY 重构提交 + 29 个 PBC 单测。
 > GROMOS 真实体系 acceptor 336→206（=减 130 主链 N）、H 键 pair 108→86、水桥 2541→1698。
 > 本条关闭。
 
-**优先级**：低（当前阳性影响有限，作为已知现状记录）
+**优先级**：已关闭（2026-09-30 修复；2026-10-29 状态更新——本次核查（`doc/group_identification_review.md`）实测
+Amber/CHARMM/GROMOS 真实体系无带 H 的 N 被判受体，进一步佐证修复有效）
 
 ### 18. 识别器 H 选择非确定性（含等价氢残基）❌（2026-10-14 对抗性审查发现）
 

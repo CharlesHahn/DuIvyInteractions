@@ -127,7 +127,8 @@ pipeline 与 `_find_metal_binding`/water_bridge 检测器按力场正确排除�
 显式选水（如 `--select "resname SOL"`）时水残基 H_donor/H_acceptor 豁免 WATER_RESIDUES
 排除，可参与蛋白-水氢键。设计见 `doc/group_selection_design.md`。
 
-**未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果人工审查、
+**未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果逐个人工核对
+（自动核查工具已建，4 力场完成核查，见 `doc/group_identification_review.md`）、
 长轨迹 PerFrame 内存优化、疏水-芳香去重等。
 
 ## 测试约定（2026-09-30）
