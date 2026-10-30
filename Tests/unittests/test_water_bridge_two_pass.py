@@ -94,19 +94,21 @@ class TestWaterBridgeTwoPassFormat:
 class TestWaterBridgeTwoPassThreshold:
 
     def test_active_dist_dw_range(self, water_bridges):
-        """活跃帧的 dist_dw 应 < 4.1 Å。"""
+        """活跃帧的 dist_dw 应在 2.5~4.1 Å（TODO #15 下界对齐策略一/二）。"""
         for interaction in water_bridges:
             for i in range(interaction.n_pairs):
                 active = interaction.metrics["dist_dw"][i][interaction.existence[i]]
                 if len(active) > 0:
+                    assert np.all(active > 2.5)
                     assert np.all(active < 4.1)
 
     def test_active_dist_wa_range(self, water_bridges):
-        """活跃帧的 dist_wa 应 < 4.1 Å。"""
+        """活跃帧的 dist_wa 应在 2.5~4.1 Å（TODO #15 下界对齐策略一/二）。"""
         for interaction in water_bridges:
             for i in range(interaction.n_pairs):
                 active = interaction.metrics["dist_wa"][i][interaction.existence[i]]
                 if len(active) > 0:
+                    assert np.all(active > 2.5)
                     assert np.all(active < 4.1)
 
     def test_active_theta_range(self, water_bridges):

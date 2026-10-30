@@ -21,6 +21,7 @@ from ..core.pbc import get_box
 
 
 # PLIP 阈值
+WATER_BRIDGE_MINDIST = 2.5   # Å，水 O 到极性原子最小距离
 WATER_BRIDGE_MAXDIST = 4.1   # Å，水 O 到极性原子最大距离
 WATER_BRIDGE_OMEGA_MIN = 71  # °，受体-水O-供体H 最小角度
 WATER_BRIDGE_OMEGA_MAX = 140 # °，受体-水O-供体H 最大角度
@@ -140,8 +141,10 @@ class WaterBridgeDetectorTwoPass(InteractionDetectorTwoPass):
                 "theta": theta, "omega": omega}
 
     def apply_threshold(self, metrics):
-        """距离 < 4.1Å & theta ≥ 100° & 71° ≤ omega ≤ 140°。"""
-        dist_ok = (metrics["dist_dw"] < WATER_BRIDGE_MAXDIST) & \
+        """距离 2.5–4.1Å & theta ≥ 100° & 71° ≤ omega ≤ 140°。"""
+        dist_ok = (metrics["dist_dw"] > WATER_BRIDGE_MINDIST) & \
+                  (metrics["dist_dw"] < WATER_BRIDGE_MAXDIST) & \
+                  (metrics["dist_wa"] > WATER_BRIDGE_MINDIST) & \
                   (metrics["dist_wa"] < WATER_BRIDGE_MAXDIST)
         theta_ok = metrics["theta"] >= WATER_BRIDGE_THETA_MIN
         omega_ok = (metrics["omega"] >= WATER_BRIDGE_OMEGA_MIN) & \

@@ -195,13 +195,20 @@ detector.detect(groups, trajectory,
 
 **优先级**：中（当前无紧迫需求，Pipeline 完成后实现）
 
-### 15. 水桥 TwoPass 未添加 WATER_BRIDGE_MINDIST 下界 ❌
+### 15. 水桥 TwoPass 未添加 WATER_BRIDGE_MINDIST 下界 ✅（已修复 2026-10-30）
 
-**现状**：策略三（TwoPass）的水桥检测器在 `apply_threshold` 中未添加 `dist > WATER_BRIDGE_MINDIST`（2.5Å）的下界检查，仅检查 `dist < 4.1Å` 上界。策略一（PerTuple）和策略二（PerFrame）均有此下界。
+**原现状**：策略三（TwoPass）的水桥检测器在 `apply_threshold` 中未添加
+`dist > WATER_BRIDGE_MINDIST`（2.5Å）的下界检查，仅检查 `dist < 4.1Å` 上界。
+策略一（PerTuple）和策略二（PerFrame）均有此下界。
 
-**影响**：TwoPass 会保留 Ow-A 距离 < 2.5Å 的三元组（如 2.48Å），而策略一/二会排除这些。D927 体系单帧测试中，TwoPass 多出 3 对（381 vs 378）。
+**原影响**：TwoPass 会保留 Ow-A 距离 < 2.5Å 的三元组（如 2.48Å），而策略一/二会排除。
 
-**待决定**：是否需要在 TwoPass 的 `apply_threshold` 中添加此下界。
+**修复（2026-10-30）**：TwoPass `apply_threshold` 补上下界（`dist_dw`/`dist_wa` 均 > 2.5Å），
+与策略一/二对齐；新增常量 `WATER_BRIDGE_MINDIST = 2.5`。
+
+**验证**：D927 全轨迹（101 帧）修复前存在帧中 `dist_dw < 2.5` 有 2 个、`dist_wa < 2.5` 有
+162 个对-帧组合，修复后**均为 0**；真实体系水桥数与策略二一致。新增回归断言
+（`test_active_dist_dw_range`/`test_active_dist_wa_range` 补下界）。
 
 
 ### 16. 周期性问题 ✅（已实现并合并：v0.0.4）
