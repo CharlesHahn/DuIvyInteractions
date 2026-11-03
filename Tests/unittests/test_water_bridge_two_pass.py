@@ -88,6 +88,53 @@ class TestWaterBridgeTwoPassFormat:
 
 
 # ============================================================
+# 结果数据测试
+# ============================================================
+
+class TestWaterBridgeTwoPassResults:
+
+    def test_has_results(self, water_bridges):
+        assert len(water_bridges) > 0
+
+    def test_n_pairs_candidates(self, water_bridges):
+        """候选三元组总数（TwoPass 保留全部候选，含从未存在者）。
+
+        注意与 per_frame 不同：per_frame n_pairs=1698 是"有存在帧的对"数；
+        TwoPass n_pairs=14598 是候选数（含 36 个从未存在的三元组）。
+        """
+        assert water_bridges[0].n_pairs == 14598
+
+    def test_active_pairs(self, water_bridges):
+        """有存在帧的对数（排除从未存在的候选）。"""
+        it = water_bridges[0]
+        active = np.any(it.existence.astype(bool), axis=1).sum()
+        assert active == 14562
+
+    def test_occupancy_range(self, water_bridges):
+        occ = water_bridges[0].occupancy()
+        assert np.all(occ >= 0) and np.all(occ <= 1)
+
+    def test_top_pair(self, water_bridges):
+        it = water_bridges[0]
+        occ = it.occupancy()
+        top = np.argmax(occ)
+        g1, g2, g3 = it.groups[top]
+        assert occ[top] > 0.9
+        assert g2.group_type == "water"
+
+    def test_top_pair_identity(self, water_bridges):
+        """top pair 与 per_frame 一致（LEU 供体 → 水 → PHE 受体），帧占有率 0.970。"""
+        it = water_bridges[0]
+        occ = it.occupancy()
+        top = np.argmax(occ)
+        g1, g2, g3 = it.groups[top]
+        assert round(float(occ[top]), 3) == 0.970
+        assert g1.residue_name == "LEU" and g1.group_type == "H_donor"
+        assert g2.residue_name == "SOL" and g2.group_type == "water"
+        assert g3.residue_name == "PHE" and g3.group_type == "H_acceptor"
+
+
+# ============================================================
 # 阈值测试
 # ============================================================
 
