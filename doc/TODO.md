@@ -91,23 +91,65 @@ detector.detect(groups, trajectory,
 
 **状态**：已实现。
 
-### 6. 官能团分类粗糙问题 ❌
+### 6. 官能团分类粗糙问题 ✅（2026-11-03 对抗性审查：设计如此，不修改）
 
-**问题**：PLIP 的 `is_functional_group` 对氮基团分类粗糙。"tertamine" 实际包含所有 sp3 氮（NR₃、NR₃H⁺、NH₃⁺ 等），不是化学意义上的"叔胺"。当前代码复现了 PLIP 的定义，导致蛋白 N 末端 NH₃⁺ 被误判为 tertamine。
+**原问题**：PLIP 的 `is_functional_group` 对氮基团分类粗糙。"tertamine" 实际包含所有
+sp3 氮（NR₃、NR₃H⁺、NH₃⁺ 等），不是化学意义上的"叔胺"。
 
-**待改进**：需要更精细的氮基团分类，区分叔胺、伯胺、仲胺等不同化学基团。
+**对抗性审查（2026-11-03）→ 关闭，不修改代码**：
+1. **标签粗糙但功能正确**：N 末端 NH₃⁺ 被标 `func_group='tertamine'`（化学是伯胺），但
+   判成 `charged_positive` 是**正确且必需**的（NH₃⁺ 本就带正电，参与盐桥/π-cation）。
+2. **修改方案有破坏性副作用**：拟议的"重原子（非 H）≥3"判据会丢失蛋白 N 末端
+   NH₃⁺ 的正电基团——实测 KRAS-RBD 42→40（ASN0 RBD、MET143 KRAS 两个 N 端丢失），
+   因为 N 末端残基不在 `POSITIVE_RESIDUES` 字典，唯一依赖 tertamine 路径判正电。
+   改判据 → 盐桥/π-cation 漏检。
+3. **标签无下游消费**：`func_group` 在检测器/pipeline/selection 层**零消费者**
+   （grep 实测）；pi_cation 的 tertamine 角度检查（#7）尚未实现。当前标签不影响结果。
+4. **忠实 PLIP**：PLIP 用 `tertamine` 粗粒度覆盖所有 sp3 正电胺，属其既定行为；
+   项目"忠实复现 PLIP 定义"是设计声明（AGENTS.md），非缺陷。
 
-**影响**：pi-cation 检测的叔胺角度检查会误触发。
+**结论**：#6 是"标签命名与化学命名不一致"，**非功能缺陷**；修改判据会破坏功能而被否决。
+若日后实现 #7（tertamine π-cation 角度检查）时需区分 N 末端，再单独设计（须保留
+N 末端正电资格）。
 
-### 7. PLIP 对 tertamine 的 pi-cation 特殊处理 ❌
+**优先级**：已关闭（2026-11-03，设计如此）
 
-**现象**：PLIP 在 `pication()` 中对 tertamine 做了额外角度检查，其他正电基团（quartamine、guanidine、sulfonium）没有此检查。
+### 7. PLIP 对 tertamine 的 pi-cation 特殊处理 ✅（决策：不实现，设计如此）
 
-**PLIP 的操作**：计算胺的三个邻居平面的法向量（`amine_normal`），与环法向量（`ring.normal`）取夹角。若夹角 ≤ 30°，排除该 pi-cation 对。
+**PLIP 的实际操作**（源码 `plip/structure/detection.py` → `pication()`，2026-11 核对）：
+计算胺的三个取代基平面法向量 `amine_normal = cross(c0→c1, c2→c0)`，与环法向量
+`ring.normal` 取夹角 `a = min(b, 180-b)`；**`a ≤ 30°` 时保留该 pi-cation 对，`a > 30°` 时排除**
+（源码写作 `if not a > 30.0: append(...)`）。
 
-**PLIP 注释**：`"Special case here if the ligand has a tertiary amine, check an additional angle. Otherwise, we might have a pi-cation interaction 'through' the ligand."`
+> ⚠️ 本条目原始描述（"若夹角 ≤ 30° 排除"）**方向写反**，已按源码更正。
 
-**待理解**：为什么只有 tertamine 需要这个检查？这个角度条件（≤ 30°）的物理含义是什么？为什么它能防止"穿过配体"的假阳性？
+**物理含义**：`amine_normal` ≈ N 的孤对轴方向。夹角小（≤30°）表示孤对轴指向环心
+→ 阳离子真正骑在 π 电子云上 → 真 π-cation；夹角大（>30°）表示环横在胺伞面一侧、
+被三个取代基隔开 → PLIP 要排除的"穿过配体（through the ligand）"假阳性。
+
+**作用范围**：仅当正电基团属于**配体**且 `fgroup == 'tertamine'` 时检查
+（源码 `type(p).__name__ == 'lcharge'`，调用点 `pication(rings_bs, ligand.get_pos_charged(), False)`）；
+**蛋白侧正电基团（含蛋白 N 末端 NH₃⁺）从不施加此检查**。
+
+**决策（不实现）依据**：
+1. **PLIP 该实现自身有两处缺陷**：① `amine_normal` 取 `OBAtomAtomIter` 前 3 个邻居而不检查
+   元素——质子化叔胺 R₃NH⁺（3C+1H）会取到 H，法向量不再是取代基伞面且依赖迭代顺序；
+   ② 特例分支后 `break` 跳出 `pos_charged` 循环——同一芳香环对其余配体正电基团（胍基/季铵等）
+   的评估被跳过，多正电基团配体可能漏报。照抄即继承缺陷。
+2. **蛋白侧本不受约束**：本项目核心场景（蛋白-蛋白界面等）在该判据下与 PLIP 无偏差。
+3. **现有数据零触发**：三套真实体系（Amber/GROMOS/CHARMM）无真叔胺，判据在任何已验证
+   结果上均不生效。
+4. **属性定位**：这是 PLIP 针对特定几何假阳性的启发式过滤，非 π-cation 的定义性化学判据；
+   不做不违背化学正确性，但**属已声明的已知偏差**（见 `docs/reference/limitations.md`）。
+
+**遗留已知偏差表述**：当阳离子配体含叔胺、且芳香环位于其取代基侧（而非孤对侧）时，本项目
+不施加额外角度过滤 → 相对 PLIP 可能**多报**该 π-cation（PLIP 眼中的"穿过配体"假阳性我们不剔除）。
+
+**实现位置**（若未来要做）：识别器在 `Group.metadata` 存真叔胺的 3 个重原子邻居全局索引 →
+pi_cation 检测器（3 策略）按索引取坐标算法向量并与环法向量比较；需先定义"配体/蛋白"判定规则
+（PLIP 用 receptor/ligand 角色，本项目仅有 molecule 名 + `--select`）。
+
+**优先级**：已关闭（2026-11-05 决策：不实现，设计如此）
 
 ### 8. 金属配位几何构型匹配 ❌
 
