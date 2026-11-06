@@ -13,7 +13,8 @@ The reference implementation state of DuIvyInteractions v0.0.4 is as follows (ea
 - **User group selection & filtering (--select/--pairing)**: `dii run` and `Pipeline.run()` restrict the participation pool with MDAnalysis selection expressions (`--select`, each an independent atom set) and optionally require cross-select candidate pairs (`--pairing between`); a group is retained only if one select fully covers all its atoms, water always belongs to the constant implicit water side, and ambiguous/empty states exit with a friendly `error: ...` message. See [Python API](api) and [Known Limitations](limitations).
 - **Real-data test cases**: three real MD datasets — Amber KRAS–RBD D927, GROMOS 53A6 (protein + 6 ligands), and CHARMM36 SMO–BST (`Tests/test_MD_case_*`), covering all 8 interaction types.
 - **Periodic-boundary (PBC) handling**: all eight interaction types × the `two_pass`/`per_frame` strategies are processed under the minimum-image convention (MIC) — distances, angles, charge-center / ring-center aggregate coordinates and projection offsets; the `per_tuple` strategy is not PBC-enabled. See [Known Limitations](limitations) and the design document `doc/pbc_design.md`.
-- **Scope and limitations**: metal coordination geometry, water-bridge deduplication, hydrophobic-aromatic deduplication, and visualization are not implemented; see [Known Limitations](limitations).
+- **Water-bridge criteria (explicit hydrogens)**: `per_frame`/`two_pass` judge one hydrogen bond on each side (H···A ≤ 2.5 Å, D-H···A ≥ 120°), retaining the "water in between" constraint (∠donor H–Ow–acceptor A ∈ [71°,140°]) and a three-layer quota (≤2 bridges per water). See [Criteria](criteria) and `doc/water_bridge_design.md`.
+- **Scope and limitations**: metal coordination geometry, hydrophobic-aromatic deduplication, and visualization are not implemented; see [Known Limitations](limitations).
 
 ```{toctree}
 :maxdepth: 1

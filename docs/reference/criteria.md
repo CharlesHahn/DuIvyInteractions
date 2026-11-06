@@ -4,7 +4,7 @@
 
 > 所有距离单位 Å（Ångström），角度单位度（°）。阈值常量定义在检测器文件顶部（`DuIvyInteractions/interaction_detectors/*_detector_{per_frame,two_pass}.py`）。
 >
-> **策略一致性说明**：`per_frame` 与 `two_pass` 的阈值一致，**唯一例外是水桥**——per_frame 额外施加 2.5 Å 的距离下界，two_pass 只有 4.1 Å 上界（见下文"水桥"节）。`per_tuple` 策略已不被维护（测试约定跳过），其水桥阈值与 per_frame 相同。
+> **策略一致性说明**：`per_frame` 与 `two_pass` 的阈值一致（含水桥——两策略采用同一套显式-H 判据，见下文"水桥"节）。`per_tuple` 策略已不被维护（测试约定跳过），其水桥仍用旧 PLIP 判据。
 >
 > **周期边界（PBC）说明**：下列几何量在检测时按**最小镜像（MIC）**约定计算（`two_pass`/`per_frame` 策略，PBC 已启用）：距离用 `calc_bonds(box)`、角度用 `calc_angles(box)`（三原子角顶点见各类型定义），聚合坐标（电荷中心、环心）与投影偏移先对原子做 MIC 回绕再计算。判据阈值本身不受 PBC 影响——PBC 只改变距离/角度的**数值来源**（跨盒对取最近镜像），不改变判据。无盒体系（`ts.dimensions` 缺失或全零）自动退化为欧氏计算。详见 `doc/pbc_design.md`。
 
@@ -21,8 +21,9 @@
 | `planarity` | 环内各原子局部法向量（相邻两键叉积）两两夹角的最大值 | π-堆积（可选） |
 | `don_angle` | 碳 C、卤素 X、受体 A 三点角（顶点 X），即 C-X···A 角 | 卤键 |
 | `acc_angle` | 受体 A 邻接原子中，X···A-R 角最接近 120° 者 | 卤键 |
-| `theta`（水桥） | 供体 D、氢 H、水氧 Ow 三点角（顶点 H），即 D-H···Ow | 水桥 |
-| `omega`（水桥） | 受体 A、水氧 Ow、氢 H 三点角（顶点 Ow），即 A-Ow···H | 水桥 |
+| `angle_dh_ow`（水桥） | 供体 D、氢 H、水氧 Ow 三点角（顶点 H），即 D-H···Ow | 水桥 |
+| `angle_ow_hw_a`（水桥） | 水氧 Ow、水的氢 Hw、受体 A 三点角（顶点 Hw），即 Ow-Hw···A | 水桥 |
+| `angle_h_ow_a`（水桥） | 供体 H、水氧 Ow、受体 A 三点角（顶点 Ow）——"水在中间"约束 | 水桥 |
 
 ## 氢键（hydrogen_bond）
 
@@ -93,22 +94,29 @@
 
 ## 水桥（water_bridge）
 
-**判据（two_pass，默认策略）**：水氧 Ow 到极性原子（供体 D / 受体 A）距离 < 4.1 Å，且 theta ≥ 100°、71° ≤ omega ≤ 140°。
+**判据（per_frame / two_pass）**：基于**水的显式氢**，水桥的两侧各判一个氢键（Baker & Hubbard 1984）：
+
+- 供体侧 `D–H···Ow`：`H···Ow ≤ 2.5 Å` 且 `D-H···Ow ≥ 120°`
+- 受体侧 `Ow–Hw···A`：`Hw···A ≤ 2.5 Å` 且 `Ow-Hw···A ≥ 120°`
+- 水在中间：`∠(供体H–Ow–受体A)` ∈ **[71°, 140°]**（保留 PLIP `omega` 语义，保证水确实桥接两端）
 
 | 常量 | 值 | 含义 |
 |:-----|:--|:-----|
-| `WATER_BRIDGE_MAXDIST` | 4.1 | Ow 到极性原子最大距离 |
-| `WATER_BRIDGE_THETA_MIN` | 100 | D-H···Ow 最小角度 |
-| `WATER_BRIDGE_OMEGA_MIN` | 71 | A-Ow···H 最小角度 |
-| `WATER_BRIDGE_OMEGA_MAX` | 140 | A-Ow···H 最大角度 |
+| `WATER_BRIDGE_HB_DIST_MAX` | 2.5 | H···A 最大距离（两侧） |
+| `WATER_BRIDGE_HB_ANGLE_MIN` | 120 | D-H···A 最小角度（两侧） |
+| `WATER_BRIDGE_MIN_DIST` | 0.5 | 防原子重叠下界 |
+| `WATER_BRIDGE_MAX_DONORS` | 2 | 每水每帧最多供体数（2 对孤对） |
+| `WATER_BRIDGE_MAX_BRIDGES` | 2 | 每水每帧最多桥数（2 个 H） |
+| `WATER_BRIDGE_OMEGA_MIN` / `MAX` | 71 / 140 | 供体H–Ow–受体A 角范围（水在中间） |
 
-**策略差异（如实说明）**：
+**三层配额（逐帧）**：① 每个水 H 最多对应 1 个受体（取角度最优）；② 每个水 O 最多对应 2 个供体（取 H···O 最近）；③ 每水最多 2 个桥。配额消除"同一水被组合爆炸重复计入"的物理不合理结果。
 
-- **per_frame**：`apply_threshold` 额外要求两个距离均有 **2.5 Å 下界**——`2.5 < dist_dw < 4.1` 且 `2.5 < dist_wa < 4.1`（`WATER_BRIDGE_MINDIST = 2.5`，排除重叠/过近原子对）；候选生成阶段还要求第一帧 D···A 距离 ≥ 2.5 Å。
-- **two_pass**：**缺 Ow-D 与 Ow-A 距离下界**，只要求 `dist_dw < 4.1` 且 `dist_wa < 4.1`。角度阈值（theta ≥ 100、71 ≤ omega ≤ 140）两策略一致。
-- **per_tuple**（已不被维护）：与 per_frame 相同（含 2.5 Å 下界）。
+**策略说明**：
 
-因此同一体系下，per_frame 与 two_pass 的水桥结果在"水分子与极性原子过近（< 2.5 Å）"的情形可能不同；默认策略 two_pass 不含此下界。
+- **per_frame / two_pass**：采用上述显式-H 判据与三层配额，二者帧级结果一致。
+- **per_tuple**（已不被维护）：保留 PLIP 旧判据（Ow 距离 2.5–4.1 Å + theta ≥ 100° + omega 71–140°），因该策略逐候选组遍历、架构上无法实现跨组配额。
+
+**文献依据与设计推导**见 `doc/water_bridge_design.md`。
 
 ## π-阳离子（pi_cation）
 
@@ -132,12 +140,12 @@
 | 疏水 | distance | Å |
 | 卤键 | distance, don_angle, acc_angle | Å, °, ° |
 | 金属配位 | distance | Å |
-| 水桥 | dist_dw, dist_wa, theta, omega | Å, Å, °, ° |
+| 水桥 | dist_h_ow, angle_dh_ow, dist_d_ow, dist_hw_a, angle_ow_hw_a, dist_ow_a, angle_h_ow_a | Å, °, Å, Å, °, Å, ° |
 | π-阳离子 | distance, offset | Å, Å |
 
 ## 判据来源
 
-判据与阈值沿用 PLIP（Protein-Ligand Interaction Profiler，Salentin et al. 2015）的相互作用定义体系：距离/角度截断值（如氢键 D-A 4.1 Å、盐桥 5.5 Å、卤键 165°±30°）均与 PLIP 一致，便于与既有 PLIP 结果对照。π-堆积 T/P 型分类标准与 PLIP 的 `pi-stacking` 分类一致（方法学参考 McGaughey et al. 1998）；水桥角度定义参考 Jiang et al. 2005；卤键几何参考 Auffinger et al.（检测器内注释标注）。具体阈值以检测器文件顶部常量为准。
+判据与阈值沿用 PLIP（Protein-Ligand Interaction Profiler，Salentin et al. 2015）的相互作用定义体系：距离/角度截断值（如氢键 D-A 4.1 Å、盐桥 5.5 Å、卤键 165°±30°）均与 PLIP 一致，便于与既有 PLIP 结果对照。π-堆积 T/P 型分类标准与 PLIP 的 `pi-stacking` 分类一致（方法学参考 McGaughey et al. 1998）；水桥：两侧氢键几何采用 Baker & Hubbard 1984 标准（H···A ≤ 2.5 Å、D-H···A ≥ 120°），"水在中间"的 omega 约束（71°–140°）沿用 PLIP/Jiang et al. 2005；卤键几何参考 Auffinger et al.（检测器内注释标注）。具体阈值以检测器文件顶部常量为准。
 
 ## 结果解读要点
 

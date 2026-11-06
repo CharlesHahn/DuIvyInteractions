@@ -244,7 +244,7 @@ Numeric metrics per type (they determine the `<type>_<metric>.xvg` filenames; da
 | `hydrophobic` | `distance` |
 | `halogen_bond` | `distance` (X···A distance), `don_angle` (C-X···A angle), `acc_angle` (X···A-R angle) |
 | `metal_coordination` | `distance` (metal-ligand distance) |
-| `water_bridge` | `dist_dw` (D-Ow), `dist_wa` (Ow-A), `theta` (O-H···Ow angle), `omega` (H-Ow···A angle) |
+| `water_bridge` | `dist_h_ow` (H···Ow), `angle_dh_ow` (D-H···Ow angle), `dist_d_ow` (D···Ow), `dist_hw_a` (Hw···A), `angle_ow_hw_a` (Ow-Hw···A angle), `dist_ow_a` (Ow···A), `angle_h_ow_a` (donor H–Ow···A angle) |
 | `pi_cation` | `distance` (ring-charge distance), `offset` |
 
 Filenames are based on the interaction type rather than the Interaction index in the h5 — the raw h5 filenames produced by `dii run` (`<type>.h5`) correspond one-to-one to the export filenames (`<type>_*`).

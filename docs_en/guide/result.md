@@ -103,7 +103,7 @@ The `<type>_<metric>.xvg` files and the metric columns of `summary.csv` are defi
 | `hydrophobic` | `distance`: atom-atom distance (Å) |
 | `halogen_bond` | `distance`: X···A distance (Å); `don_angle`: C-X···A angle (°); `acc_angle`: X···A-R angle (°) |
 | `metal_coordination` | `distance`: metal-ligand distance (Å) |
-| `water_bridge` | `dist_dw`: D-Ow distance (Å); `dist_wa`: Ow-A distance (Å); `theta`: O-H···Ow angle (°); `omega`: H-Ow···A angle (°) |
+| `water_bridge` | `dist_h_ow`: H···Ow distance (Å); `angle_dh_ow`: D-H···Ow angle (°); `dist_d_ow`: D···Ow distance (Å); `dist_hw_a`: Hw···A distance (Å); `angle_ow_hw_a`: Ow-Hw···A angle (°); `dist_ow_a`: Ow···A distance (Å); `angle_h_ow_a`: donor H–Ow···A angle (°, water-in-between constraint) |
 | `pi_cation` | `distance`: ring-charge distance (Å); `offset`: offset (Å) |
 
 ## Pair Label Format

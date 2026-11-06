@@ -1,5 +1,17 @@
 # 变更日志
 
+## 未发布
+
+### 2026-11-06
+
+- **水桥判据改为显式氢标准 + 三层配额**（`per_frame` / `two_pass`）：
+  - 两侧各判一个氢键（Baker & Hubbard 1984）：供体侧 `H···Ow ≤ 2.5 Å` 且 `D-H···Ow ≥ 120°`；受体侧 `Hw···A ≤ 2.5 Å` 且 `Ow-Hw···A ≥ 120°`
+  - 保留"水在中间"约束：`∠(供体H–Ow–受体A) ∈ [71°, 140°]`（PLIP `omega` 语义）
+  - 三层配额（逐帧）：每个水 H 最多 1 个受体、每个水 O 最多 2 个供体、每水最多 2 桥
+  - 指标改为 `dist_h_ow` / `angle_dh_ow` / `dist_d_ow` / `dist_hw_a` / `angle_ow_hw_a` / `dist_ow_a` / `angle_h_ow_a`（旧 `dist_dw`/`dist_wa`/`theta`/`omega` 停用）
+  - `per_tuple` 策略（已不被维护）保留旧 PLIP 判据
+  - 设计文档：`doc/water_bridge_design.md`
+
 ## v0.0.4（2026-10-14）
 
 ### 2026-10-14

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### 2026-11-06
+
+- **Water-bridge criteria switched to explicit-hydrogen standard + three-layer quota** (`per_frame` / `two_pass`):
+  - each side is judged as a hydrogen bond (Baker & Hubbard 1984): donor side `H···Ow ≤ 2.5 Å` and `D-H···Ow ≥ 120°`; acceptor side `Hw···A ≤ 2.5 Å` and `Ow-Hw···A ≥ 120°`
+  - the "water in between" constraint is retained: `∠(donor H–Ow–acceptor A) ∈ [71°, 140°]` (PLIP `omega` semantics)
+  - three-layer quota (per frame): each water hydrogen maps to at most 1 acceptor, each water oxygen to at most 2 donors, and each water yields at most 2 bridges
+  - metrics are now `dist_h_ow` / `angle_dh_ow` / `dist_d_ow` / `dist_hw_a` / `angle_ow_hw_a` / `dist_ow_a` / `angle_h_ow_a` (the old `dist_dw`/`dist_wa`/`theta`/`omega` are retired)
+  - the `per_tuple` strategy (no longer maintained) keeps the legacy PLIP criteria
+  - design document: `doc/water_bridge_design.md`
+
 ## v0.0.4 (2026-10-14)
 
 ### 2026-10-14

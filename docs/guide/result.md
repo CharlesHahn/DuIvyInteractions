@@ -103,7 +103,7 @@ xpm 是 GROMACS 标准矩阵热力图格式，可直观查看"哪些基团对在
 | `hydrophobic` | `distance`：原子间距（Å） |
 | `halogen_bond` | `distance`：X···A 距离（Å）；`don_angle`：C-X···A 角（°）；`acc_angle`：X···A-R 角（°） |
 | `metal_coordination` | `distance`：金属-配位原子距离（Å） |
-| `water_bridge` | `dist_dw`：D-Ow 距离（Å）；`dist_wa`：Ow-A 距离（Å）；`theta`：O-H···Ow 角（°）；`omega`：H-Ow···A 角（°） |
+| `water_bridge` | `dist_h_ow`：H···Ow 距离（Å）；`angle_dh_ow`：D-H···Ow 角（°）；`dist_d_ow`：D···Ow 距离（Å）；`dist_hw_a`：Hw···A 距离（Å）；`angle_ow_hw_a`：Ow-Hw···A 角（°）；`dist_ow_a`：Ow···A 距离（Å）；`angle_h_ow_a`：供体H–Ow···A 角（°，水在中间约束） |
 | `pi_cation` | `distance`：环心-正电中心距离（Å）；`offset`：偏移（Å） |
 
 ## 基团对标签格式

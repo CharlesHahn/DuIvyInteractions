@@ -244,7 +244,7 @@ Top 5 occupancies:
 | `hydrophobic` | `distance` |
 | `halogen_bond` | `distance`（X···A 距离）、`don_angle`（C-X···A 角）、`acc_angle`（X···A-R 角） |
 | `metal_coordination` | `distance`（金属-配位原子距离） |
-| `water_bridge` | `dist_dw`（D-Ow）、`dist_wa`（Ow-A）、`theta`（O-H···Ow 角）、`omega`（H-Ow···A 角） |
+| `water_bridge` | `dist_h_ow`（H···Ow）、`angle_dh_ow`（D-H···Ow 角）、`dist_d_ow`（D···Ow）、`dist_hw_a`（Hw···A）、`angle_ow_hw_a`（Ow-Hw···A 角）、`dist_ow_a`（Ow···A）、`angle_h_ow_a`（供体H–Ow···A 角） |
 | `pi_cation` | `distance`（环-电荷距离）、`offset`（偏移） |
 
 文件名不以 Interaction 在 h5 中的序号命名，而以类型名命名——`dii run` 输出的原始 h5 文件名（`<类型>.h5`）与导出文件名（`<类型>_xxx`）一一对应。

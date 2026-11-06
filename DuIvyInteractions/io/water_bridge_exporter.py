@@ -17,10 +17,13 @@ class WaterBridgeExporter(InteractionExporter):
     @property
     def metric_labels(self) -> Dict[str, str]:
         return {
-            "dist_dw": "D-Ow Distance (Å)",
-            "dist_wa": "Ow-A Distance (Å)",
-            "theta": "O-H···Ow Angle (°)",
-            "omega": "H-Ow···A Angle (°)",
+            "dist_h_ow": "H···Ow Distance (Å)",
+            "angle_dh_ow": "D-H···Ow Angle (°)",
+            "dist_d_ow": "D···Ow Distance (Å)",
+            "dist_hw_a": "Hw···A Distance (Å)",
+            "angle_ow_hw_a": "Ow-Hw···A Angle (°)",
+            "dist_ow_a": "Ow···A Distance (Å)",
+            "angle_h_ow_a": "H(donor)-Ow···A Angle (°)",
         }
 
     def get_pair_label(self, interaction: Interaction, pair_idx: int) -> str:

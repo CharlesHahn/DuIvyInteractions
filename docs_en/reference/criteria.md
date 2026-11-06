@@ -4,7 +4,7 @@ Each interaction type is evaluated by its corresponding detector during the **ge
 
 > All distances are in Å (Ångström) and all angles in degrees (°). The threshold constants are defined at the top of the detector files (`DuIvyInteractions/interaction_detectors/*_detector_{per_frame,two_pass}.py`).
 >
-> **Strategy-consistency note**: `per_frame` and `two_pass` use identical thresholds, with **one exception — the water bridge**: per_frame additionally applies a 2.5 Å lower bound on the distances, while two_pass has only the 4.1 Å upper bound (see "Water Bridge" below). The `per_tuple` strategy is no longer maintained (skipped in the test conventions); its water-bridge thresholds match per_frame.
+> **Strategy-consistency note**: `per_frame` and `two_pass` use identical thresholds (including the water bridge — both strategies use the same explicit-H criteria; see "Water Bridge" below). The `per_tuple` strategy is no longer maintained (skipped in the test conventions) and still uses the legacy PLIP criteria for water bridges.
 >
 > **Periodic-boundary (PBC) note**: the geometric quantities below are computed with the **minimum-image convention (MIC)** in detection (`two_pass`/`per_frame` strategies, PBC enabled): distances via `calc_bonds(box)`, angles via `calc_angles(box)` (three-atom angle apex as defined per type), and aggregate coordinates (charge centers, ring centers) and projection offsets are computed after MIC-wrapping the atoms. The decision thresholds themselves are unaffected by PBC — PBC only changes the **numerical source** of distances/angles (cross-boundary pairs take the nearest image), not the criteria. Systems without a box (`ts.dimensions` missing or all-zero) automatically fall back to Euclidean computation. See `doc/pbc_design.md`.
 
@@ -21,8 +21,9 @@ The criteria involve the following geometric quantities (all computed per frame 
 | `planarity` | Maximum pairwise angle between local normal vectors of atoms in the ring (cross products of two adjacent bonds) | π stacking (optional) |
 | `don_angle` | Three-point angle of carbon C, halogen X, acceptor A (vertex at X), i.e., the C-X···A angle | Halogen bond |
 | `acc_angle` | Among the atoms adjacent to acceptor A, the X···A-R angle closest to 120° | Halogen bond |
-| `theta` (water bridge) | Three-point angle of donor D, hydrogen H, water oxygen Ow (vertex at H), i.e., D-H···Ow | Water bridge |
-| `omega` (water bridge) | Three-point angle of acceptor A, water oxygen Ow, hydrogen H (vertex at Ow), i.e., A-Ow···H | Water bridge |
+| `angle_dh_ow` (water bridge) | Three-point angle of donor D, hydrogen H, water oxygen Ow (vertex at H), i.e., D-H···Ow | Water bridge |
+| `angle_ow_hw_a` (water bridge) | Three-point angle of water oxygen Ow, water hydrogen Hw, acceptor A (vertex at Hw), i.e., Ow-Hw···A | Water bridge |
+| `angle_h_ow_a` (water bridge) | Three-point angle of donor H, water oxygen Ow, acceptor A (vertex at Ow) — the "water in between" constraint | Water bridge |
 
 ## Hydrogen Bond (hydrogen_bond)
 
@@ -93,22 +94,29 @@ In the output XPM: 0 = none (white `#FFFFFF`), 1 = T-type (pink `#F67088`), 2 = 
 
 ## Water Bridge (water_bridge)
 
-**Criterion (two_pass, the default strategy)**: the distance from water oxygen Ow to polar atoms (donor D / acceptor A) is < 4.1 Å, with theta ≥ 100° and 71° ≤ omega ≤ 140°.
+**Criterion (per_frame / two_pass)**: based on the **explicit hydrogens of water**, each side of the bridge is a hydrogen bond (Baker & Hubbard 1984):
+
+- donor side `D–H···Ow`: `H···Ow ≤ 2.5 Å` and `D-H···Ow ≥ 120°`
+- acceptor side `Ow–Hw···A`: `Hw···A ≤ 2.5 Å` and `Ow-Hw···A ≥ 120°`
+- water in between: `∠(donor H–Ow–acceptor A)` ∈ **[71°, 140°]** (retains PLIP `omega` semantics, ensuring the water really bridges both ends)
 
 | Constant | Value | Meaning |
 |:-----|:--|:-----|
-| `WATER_BRIDGE_MAXDIST` | 4.1 | Maximum Ow-to-polar-atom distance |
-| `WATER_BRIDGE_THETA_MIN` | 100 | Minimum D-H···Ow angle |
-| `WATER_BRIDGE_OMEGA_MIN` | 71 | Minimum A-Ow···H angle |
-| `WATER_BRIDGE_OMEGA_MAX` | 140 | Maximum A-Ow···H angle |
+| `WATER_BRIDGE_HB_DIST_MAX` | 2.5 | Maximum H···A distance (both sides) |
+| `WATER_BRIDGE_HB_ANGLE_MIN` | 120 | Minimum D-H···A angle (both sides) |
+| `WATER_BRIDGE_MIN_DIST` | 0.5 | Lower bound against atom overlap |
+| `WATER_BRIDGE_MAX_DONORS` | 2 | Max donors per water per frame (2 lone pairs) |
+| `WATER_BRIDGE_MAX_BRIDGES` | 2 | Max bridges per water per frame (2 hydrogens) |
+| `WATER_BRIDGE_OMEGA_MIN` / `MAX` | 71 / 140 | Donor H–Ow–acceptor A angle range (water in between) |
 
-**Strategy difference (stated as-is)**:
+**Three-layer quota (per frame)**: ① each water hydrogen maps to at most 1 acceptor (best angle); ② each water oxygen maps to at most 2 donors (nearest H···O); ③ each water yields at most 2 bridges. The quota removes the physically impossible combinatorial over-counting of a single water.
 
-- **per_frame**: `apply_threshold` additionally requires a **2.5 Å lower bound** on both distances — `2.5 < dist_dw < 4.1` and `2.5 < dist_wa < 4.1` (`WATER_BRIDGE_MINDIST = 2.5`, excluding overlapping/overly close atom pairs); candidate generation also requires the first-frame D···A distance ≥ 2.5 Å.
-- **two_pass**: **lacks the Ow-D and Ow-A distance lower bound**, requiring only `dist_dw < 4.1` and `dist_wa < 4.1`. The angle thresholds (theta ≥ 100, 71 ≤ omega ≤ 140) are identical in both strategies.
-- **per_tuple** (no longer maintained): same as per_frame (including the 2.5 Å lower bound).
+**Strategy notes**:
 
-Therefore, for the same system, per_frame and two_pass water-bridge results may differ in situations where a water molecule comes closer than 2.5 Å to a polar atom; the default two_pass strategy does not apply this lower bound.
+- **per_frame / two_pass**: use the explicit-H criteria and three-layer quota above; both give identical per-frame results.
+- **per_tuple** (no longer maintained): keeps the legacy PLIP criteria (Ow distance 2.5–4.1 Å + theta ≥ 100° + omega 71–140°), because its per-tuple architecture cannot implement cross-tuple quotas.
+
+**Literature basis and design derivation**: see `doc/water_bridge_design.md`.
 
 ## π-Cation Interaction (pi_cation)
 
@@ -132,12 +140,12 @@ Metrics output by the detectors (stored in the h5 `metrics`, exported to xvg):
 | hydrophobic | distance | Å |
 | halogen bond | distance, don_angle, acc_angle | Å, °, ° |
 | metal coordination | distance | Å |
-| water bridge | dist_dw, dist_wa, theta, omega | Å, Å, °, ° |
+| water bridge | dist_h_ow, angle_dh_ow, dist_d_ow, dist_hw_a, angle_ow_hw_a, dist_ow_a, angle_h_ow_a | Å, °, Å, Å, °, Å, ° |
 | π-cation interaction | distance, offset | Å, Å |
 
 ## Criterion Sources
 
-The criteria and thresholds follow the interaction definition system of PLIP (Protein-Ligand Interaction Profiler; Salentin et al. 2015): the distance/angle cutoffs (e.g., hydrogen bond D-A 4.1 Å, salt bridge 5.5 Å, halogen bond 165°±30°) are all consistent with PLIP, making it easy to compare with existing PLIP results. The π stacking T/P-type classification standard is consistent with PLIP's `pi-stacking` classification (methodological reference: McGaughey et al. 1998); the water-bridge angle definitions follow Jiang et al. 2005; the halogen-bond geometry follows Auffinger et al. (as annotated in the detector comments). The concrete thresholds are governed by the constants at the top of the detector files.
+The criteria and thresholds follow the interaction definition system of PLIP (Protein-Ligand Interaction Profiler; Salentin et al. 2015): the distance/angle cutoffs (e.g., hydrogen bond D-A 4.1 Å, salt bridge 5.5 Å, halogen bond 165°±30°) are all consistent with PLIP, making it easy to compare with existing PLIP results. The π stacking T/P-type classification standard is consistent with PLIP's `pi-stacking` classification (methodological reference: McGaughey et al. 1998); the water bridge: both sides use the Baker & Hubbard 1984 hydrogen-bond standard (H···A ≤ 2.5 Å, D-H···A ≥ 120°), while the "water in between" omega constraint (71°–140°) follows PLIP / Jiang et al. 2005; the halogen-bond geometry follows Auffinger et al. (as annotated in the detector comments). The concrete thresholds are governed by the constants at the top of the detector files.
 
 ## Interpreting Results: Key Points
 
