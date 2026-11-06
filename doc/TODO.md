@@ -38,6 +38,9 @@
 
 **参考**：`doc/hydrophobic_definition.md` §4
 
+**设计（2026-11-06，待实现）**：改为"标记而非删除"方案（原子级逐帧标记 + `--mark-redundant`
+开关 + 自动补跑 π-π），详见 `doc/redundancy_marking_design.md`
+
 
 ### 3. 基团识别结果需要人为审查！ ✅（2026-11-03 标记完成）
 
@@ -232,25 +235,23 @@ CHARMM 全原子体系（SMO-BST）：per_frame 1329→109、two_pass 1678→414
 
 **优先级**：已关闭（2026-11-03）
 
-### 13. PerFrame 检测器长轨迹内存优化 ❌
+### 13. PerFrame 检测器长轨迹内存优化 ✅（2026-11-06 决策：设计如此，不优化）
 
-**问题**：PerFrame 检测器预分配 (n_pairs, n_frames) 的 distance/angle 矩阵。D927 体系氢键候选对 42,603 个，101 帧时矩阵约 71 MB，可接受。但外推到 1μs 轨迹（500,000 帧），矩阵将达到 342 GB，不可接受。
+**原记录**：PerFrame 预分配 `(n_pairs, n_frames)` 的 distance/angle 矩阵，1μs 轨迹
+（500,000 帧）下氢键可达数百 GB；曾提议"只存 existence、存活对再重算"。
 
-**根因**：当前实现对全部候选对存储每一帧的 distance/angle，即使大部分 pair 最终被阈值淘汰（42,603 候选 → 119 有效）。
+**决策（不优化）依据**：
+1. **预分配是 PerFrame 策略的定义**——`(n_pairs, n_frames)` 稠密矩阵正是"逐帧对所有候选
+   向量化计算"的前提；内存随 `候选数 × 帧数` 增长是该策略的固有表现，不是缺陷。
+2. **长轨迹场景已由 TwoPass 承接**：TwoPass 覆盖全部 8 类相互作用、稀疏存储（只存活跃的
+   对-帧，不随 `候选数 × 帧数` 增长），且是**默认策略**（`--strategy` 默认 `two_pass`）。
+3. **该权衡已声明**：`docs/reference/limitations.md`「长轨迹内存占用」条目。
+4. **优化投入产出不成立**：即使只存 existence，500,000 帧氢键仍需约 21 GB，仍不可用于 μs
+   级轨迹 → 优化后仍未优于 TwoPass，且需多读一遍轨迹。
 
-**优化方案**：只存 existence 矩阵（bool，1 byte），不存 distance/angle。最终过滤后，对存活的 ~100 个 pair 重新遍迹计算 distance/angle。
+**结论**：PerFrame 保持设计原样；长轨迹请使用 `two_pass` 策略。
 
-| | 当前方案 | 优化方案 |
-|:--|:---------|:---------|
-| 氢键 101 帧 | 71 MB | 4.1 MB (existence only) |
-| 氢键 500,000 帧 | 342 GB | 20.3 GB (existence only) |
-| 最终结果 | 同 | 同（重算存活 pair） |
-
-**进一步优化**：existence 矩阵也可改为稀疏存储或增量累积，将 20.3 GB 降到更低。
-
-**实现位置**：`interaction_detectors/*_per_frame.py` 的 `detect()` 方法。
-
-**优先级**：低（当前 101 帧测试场景无压力，1μs 轨迹时再做）。
+**优先级**：已关闭（2026-11-06，设计如此）
 
 ### 14. Interaction 结果序列化（保存/加载） ✅（已被 HDF5 替代实现）
 
