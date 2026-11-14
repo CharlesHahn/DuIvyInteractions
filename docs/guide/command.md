@@ -76,6 +76,8 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
   不写 flags 并报错退出（不会静默成功）。
 - 标记只加列，**不删 xvg/xpm 数据**；需要“干净”结果请按 CSV 列自行过滤。
 - 不带 `--mark-redundant` 重跑会重新生成 `hydrophobic.h5`，已有 flags 会被清除。
+- 标记只在 `dii run` 阶段产生；已有 h5 不能事后补标记，需重新运行。
+- `--select` 截断芳香环时，该环不进入 π-π（与显式 π-π 结果一致），相关疏水对不会被标记。
 
 ### 用户基团选择与过滤（--select / --pairing）
 

@@ -160,6 +160,9 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
 
 否则会标记出"用户限定范围之外"的冗余对，或与用户实际看到的 π-π 结果不一致。
 
+`--select` 只保留**完整属于某个 select** 的基团；被截断的芳香环不进入 π-π，
+因此其相关疏水对不会被标记（与显式请求 π-π 时的结果一致）。
+
 ### 5.4 pipeline 流程
 
 ```
@@ -171,7 +174,7 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber \
        若 hydro/pi 本次均成功：
            读取 hydrophobic.h5 与 pi_stacking.h5 → 计算逐帧标记
            → 写同目录临时文件 → os.replace 原子替换 hydrophobic.h5
-       否则：不修改 hydrophobic.h5，报 error（非零退出）
+       否则：不再写回 flags；hydrophobic.h5 保留本次检测结果（无 flags），报 error（非零退出）
 5. 控制台提示：
        "[INFO] marked N hydrophobic pairs (M pair-frames) overlapping pi-stacking (kept, not removed)"
 ```

@@ -72,6 +72,8 @@ Behavior:
 - Errors if `hydrophobic` is not requested or `--strategy per_tuple` is used; if either hydro/pi detection fails, no flags are written and the command exits non-zero (no silent success).
 - Marking only adds a column; **xvg/xpm data are not filtered**. For a "clean" result, filter using the CSV column.
 - Re-running without `--mark-redundant` regenerates `hydrophobic.h5` and clears existing flags.
+- Marking is produced only during `dii run`; existing h5 files cannot be marked post hoc — rerun the command.
+- If `--select` cuts an aromatic ring, that ring does not enter π-π (consistent with an explicit π-π run), so its hydrophobic pairs are not marked.
 
 ### User Group Selection & Filtering (--select / --pairing)
 

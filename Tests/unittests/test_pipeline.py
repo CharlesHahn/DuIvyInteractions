@@ -324,6 +324,17 @@ class TestRunMarking:
         assert "auto-running pi_stacking" in captured
         assert "marked 67 hydrophobic pairs (749 pair-frames)" in captured
 
+    def test_mark_per_frame_uses_per_frame_baseline(self):
+        out = TMP_DIR / "mark_per_frame"
+        Pipeline("amber", "per_frame").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"], mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert int(flags.sum()) == 143
+        assert int(flags.any(axis=1).sum()) == 9
+
 
 class TestMarkingInputGuards:
     """标记输入的多 Interaction 歧义防护。"""
