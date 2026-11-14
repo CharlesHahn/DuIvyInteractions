@@ -155,13 +155,47 @@ pi_cation 检测器（3 策略）按索引取坐标算法向量并与环法向�
 
 **优先级**：已关闭（2026-11-05 决策：不实现，设计如此）
 
-### 8. 金属配位几何构型匹配 ❌
+### 8. 金属配位几何构型匹配 ❌（保留，未排期）
 
-**推迟原因**：第一版只做距离判据，几何构型匹配复杂度高。
+**现状**：`metal_coordination` 只判金属-配位原子距离 < 3.0 Å，输出为
+`(metal, binding_atom)` pair 级，仅 `distance` 指标，没有配位球角度/几何构型。
 
-**PLIP 的操作**：按金属分组后，计算所有配位原子的角度，与已知几何构型（linear/trigonal/tetrahedral/octahedral 等）比较，选择 RMS 最小的构型，移除不符合该构型的多余配位原子。
+**PLIP 的操作**：按金属分组后，计算所有配位原子的角度，与已知几何构型
+（linear/trigonal/tetrahedral/octahedral 等）比较，选择 RMS 最小的构型，
+移除不符合该构型的多余配位原子。
 
-**实现位置**：`interaction_detectors/metal_coordination_detector_*.py`
+**暂不实现的原因**：
+1. **数据模型不匹配**：当前一行是 `(metal, binding_atom)` pair；几何构型是
+   “metal × frame”级信息，角度属于同一金属周围两个配体向量的关系，不属于单个
+   pair。若要把角度作为结果输出，需要改 metrics/exporter，甚至 metal-centric
+   数据模型，而不是只加一个角度字段。
+2. **per_tuple 策略不兼容**：`per_tuple` 一次只看到一个 `(metal, binding)` 对，
+   看不到同一金属的其他配体，无法计算配位球几何；只支持 two_pass/per_frame
+   会进一步拉大策略差异。
+3. **配位球不完整**：#9 已让 `metal_binding` 排除水；Na/K/Ca 等金属的真实配位球
+   常以水为主，非水配体可能只剩 1–2 个，几何拟合欠定。若把水算进几何，需要改
+   `required_group_types`、`_filter_groups` 与纯水排除规则，牵动 pipeline，不是
+   检测器局部改动。
+4. **金属差异大**：项目 `METAL_IONS` 有 42 种元素，但没有氧化态/配位偏好；
+   Na/K/Ca 配位灵活，Mg/Zn/过渡金属偏好不同。统一几何模板容易把真实弱配位当作
+   “多余”删除，产生 false negative。
+5. **PBC 角度**：几何需要以金属为顶点的两两角度并做 MIC；two_pass/per_frame 都要
+   单独处理，需补跨盒测试。
+6. **验证数据不足**：现有金属真实基线只有 D927 的 Mg/Na；CHARMM 体系无金属，
+   缺少 tetrahedral/square-planar/octahedral 等几何的真实对照，需先建合成测试。
+7. **收益/风险不划算**：当前金属配位只是少数体系；严格几何过滤可能比 distance-only
+   更差（尤其 Na/K/Ca），且项目 KISS 原则不支持“可能有用”的复杂功能。
+
+**若未来实现**：优先走最小方案——只改 two_pass/per_frame，检测器内按
+`metal.group_id × frame` 聚合，角度只作为内部筛选 mask，pair 级 `existence`
+过滤，不改变 h5 字段；per_tuple 明确不支持。若要把角度作为结果输出，先单独设计
+metal-centric 表示。实现前需新增 `doc/metal_geometry_design.md` 锁定
+“是否输出角度 / 是否含水 / pair 级还是 metal-centric”三个决策。
+
+**实现位置**：`interaction_detectors/metal_coordination_detector_{two_pass,per_frame}.py`
+（`per_tuple` 不适用）。
+
+**优先级**：保留，未排期；当前接受 distance-only 的已知偏差。
 
 ### 9. 金属配位排除纯水配位 ✅
 
