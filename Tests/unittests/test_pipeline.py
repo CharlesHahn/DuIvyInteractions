@@ -323,3 +323,37 @@ class TestRunMarking:
         captured = capsys.readouterr().out
         assert "auto-running pi_stacking" in captured
         assert "marked 67 hydrophobic pairs (749 pair-frames)" in captured
+
+
+class TestMarkingInputGuards:
+    """标记输入的多 Interaction 歧义防护。"""
+
+    def _group(self, group_id, group_type, atom_idx):
+        atom = AtomData(
+            atom_global_idx=atom_idx, atom_idx_in_residue=0,
+            atom_name="C", atom_type="ca", atom_element="C",
+            atom_charge=0.0, atom_mass=12.0,
+        )
+        return Group(group_id=group_id, group_type=group_type,
+                     molecule="m", residue_name="PHE", residue_id=1,
+                     atoms=[atom])
+
+    def test_multiple_pi_interactions_raise(self):
+        out = TMP_DIR / "multi_pi"
+        out.mkdir(parents=True, exist_ok=True)
+        ring1 = self._group(1, "aromatic_ring", 10)
+        ring2 = self._group(2, "aromatic_ring", 20)
+        hydro1 = self._group(3, "hydrophobic", 10)
+        hydro2 = self._group(4, "hydrophobic", 20)
+        pi = Interaction(
+            interaction_type="pi_stacking", groups=[(ring1, ring2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        hydrophobic = Interaction(
+            interaction_type="hydrophobic", groups=[(hydro1, hydro2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        save_interactions([hydrophobic], str(out / "hydrophobic.h5"))
+        save_interactions([pi, pi], str(out / "pi_stacking.h5"))
+        with pytest.raises(ValueError, match="multiple pi_stacking"):
+            _mark_hydrophobic_redundancy(str(out))

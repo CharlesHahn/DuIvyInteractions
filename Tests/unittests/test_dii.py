@@ -251,3 +251,30 @@ class TestRunExportErrors:
                    for n in names)
         assert any(n.startswith("salt_bridge_") and n.endswith("_summary.csv")
                    for n in names)
+
+
+class TestRunExportFlags:
+    """dii export 对 flags 的 CSV 列与概览输出。"""
+
+    def test_flags_in_csv_and_overview(self, capsys):
+        g1 = _make_group(0, "hydrophobic", "LEU")
+        g2 = _make_group(1, "hydrophobic", "ILE")
+        it = Interaction(
+            interaction_type="hydrophobic",
+            groups=[(g1, g2)],
+            existence=np.array([[True, True, False]]),
+            metrics={"distance": np.array([[3.8, 3.9, 9.0]])},
+            times=np.array([0.0, 10.0, 20.0]),
+            flags={"redundant_pi_stacking":
+                   np.array([[True, False, False]])},
+        )
+        p = TMP_DIR / "flags.h5"
+        save_interactions([it], str(p))
+        out = TMP_DIR / "flags_out"
+        _run_export(argparse.Namespace(input=str(p), output=str(out)))
+
+        captured = capsys.readouterr().out
+        assert "Flags:    redundant_pi_stacking: 1/1 pairs (1 pair-frames)" in captured
+        csv_text = (out / "hydrophobic_summary.csv").read_text(encoding="utf-8")
+        assert "avg_redundant_pi_stacking" in csv_text.splitlines()[0]
+        assert csv_text.splitlines()[1].endswith("0.5000")

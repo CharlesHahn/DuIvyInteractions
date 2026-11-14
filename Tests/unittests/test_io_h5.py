@@ -541,6 +541,17 @@ class TestH5Flags:
                 flags={"bad": np.zeros((1, 1), dtype=bool)},
             )
 
+    def test_flags_dtype_validation(self, sample_interaction):
+        with pytest.raises(ValueError, match="flag bad dtype"):
+            Interaction(
+                interaction_type=sample_interaction.interaction_type,
+                groups=sample_interaction.groups,
+                existence=sample_interaction.existence,
+                metrics=sample_interaction.metrics,
+                times=sample_interaction.times,
+                flags={"bad": np.zeros(sample_interaction.existence.shape)},
+            )
+
     def test_atomic_save_writes_target(self, sample_interaction):
         path = TEMP_DIR / "test_atomic.h5"
         save_interactions_atomic([sample_interaction], str(path))
@@ -562,3 +573,48 @@ class TestH5Flags:
             save_interactions_atomic([sample_interaction], str(path))
         assert not list(TEMP_DIR.glob(f".{path.name}.*.tmp"))
         assert load_interactions(str(path))[0].n_pairs == 2
+
+
+class TestAtomicPathValidation:
+    """原子写路径校验与权限保留（与 save_interactions 一致）。"""
+
+    @pytest.fixture
+    def sample_it(self):
+        atom = AtomData(
+            atom_global_idx=0, atom_idx_in_residue=0,
+            atom_name="C", atom_type="ca", atom_element="C",
+            atom_charge=0.0, atom_mass=12.011,
+        )
+        group = Group(
+            group_id=1, group_type="aromatic_ring", molecule="D927",
+            residue_name="D927", residue_id=1, atoms=[atom], metadata={},
+        )
+        return Interaction(
+            interaction_type="pi_stacking",
+            groups=[(group, group)],
+            existence=np.array([[True]]),
+            metrics={"distance": np.array([[4.0]])},
+            times=np.array([0.0]),
+        )
+
+    def test_bytesio_rejected(self, sample_it):
+        import io
+        with pytest.raises(TypeError):
+            save_interactions_atomic([sample_it], io.BytesIO())
+
+    def test_none_rejected(self, sample_it):
+        with pytest.raises(TypeError):
+            save_interactions_atomic([sample_it], None)
+
+    def test_empty_string_rejected(self, sample_it):
+        with pytest.raises(ValueError):
+            save_interactions_atomic([sample_it], "")
+
+    def test_preserves_existing_mode(self, sample_it):
+        import os
+        import stat
+        path = TEMP_DIR / "test_atomic_mode.h5"
+        save_interactions([sample_it], str(path))
+        os.chmod(path, 0o640)
+        save_interactions_atomic([sample_it], str(path))
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o640

@@ -77,7 +77,8 @@ class Pipeline:
             interactions: List[str] = None,
             select: List[str] = None, pairing: str = "any",
             mark_redundant: bool = False) -> None:
-        """运行相互作用检测并保存 h5（--select/--pairing 限定参与池与配对）。"""
+        """运行相互作用检测并保存 h5（--select/--pairing 限定参与池与配对；
+        mark_redundant 标记疏水与 π-π 的重叠）。"""
         names = _prepare_run_names(interactions, mark_redundant, self.strategy)
         sd = GmxTprReader().read(tpr)
         identifier = self._make_identifier()
@@ -227,9 +228,11 @@ def _load_marking_inputs(hydro_path: str, pi_path: str
         pi_stacking = load_interactions(pi_path)
     except (OSError, ValueError) as e:
         raise ValueError(f"cannot read marking inputs: {e}") from e
-    pi_interaction = next(
-        (it for it in pi_stacking if it.interaction_type == "pi_stacking"), None)
-    return hydrophobic, pi_interaction
+    pi_matches = [
+        it for it in pi_stacking if it.interaction_type == "pi_stacking"]
+    if len(pi_matches) > 1:
+        raise ValueError("multiple pi_stacking interactions in pi_stacking.h5")
+    return hydrophobic, pi_matches[0] if pi_matches else None
 
 
 def _apply_overlap_flags(hydrophobic: List[Interaction],

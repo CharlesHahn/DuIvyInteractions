@@ -104,8 +104,16 @@ class Interaction:
                 f"times shape {times.shape} != n_frames {n_frames}"
             )
         self.times = times
+        self._validate_flags(n_pairs, n_frames)
+
+    def _validate_flags(self, n_pairs: int, n_frames: int) -> None:
+        """校验 flags 的 dtype 与 shape。"""
         for name, values in self.flags.items():
-            flags = np.asarray(values, dtype=bool)
+            flags = np.asarray(values)
+            if flags.dtype != np.bool_:
+                raise ValueError(
+                    f"flag {name} dtype {flags.dtype} != bool"
+                )
             if flags.shape != (n_pairs, n_frames):
                 raise ValueError(
                     f"flag {name} shape {flags.shape} != ({n_pairs}, {n_frames})"

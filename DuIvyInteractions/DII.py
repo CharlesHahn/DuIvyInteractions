@@ -130,8 +130,9 @@ def _print_overview(it, exporter) -> None:
     if it.n_frames > 0:
         print(f"Time range: {it.times[0]:.1f} ~ {it.times[-1]:.1f} ps")
     for name, flags in it.flags.items():
-        n_marked = int(flags.any(axis=1).sum())
-        n_frames = int(flags.sum())
+        active_flags = flags & it.existence
+        n_marked = int(active_flags.any(axis=1).sum())
+        n_frames = int(active_flags.sum())
         print(f"Flags:    {name}: {n_marked}/{it.n_pairs} pairs "
               f"({n_frames} pair-frames)")
     print(f"\nTop {OVERVIEW_TOP_N} occupancies:")

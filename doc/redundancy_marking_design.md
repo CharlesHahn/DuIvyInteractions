@@ -317,6 +317,8 @@ interaction_0/
 5. 0 重叠也写全 False flags，保证 CSV 列稳定。
 6. 逐帧 xvg 不实现（可选弃用），避免 2366 列输出。
 7. `--mark-redundant` 拒绝 `per_tuple`。
+8. 原子写复用统一路径校验，并保留目标文件权限（否则 `mkstemp` 会变成 0600）。
+9. `pi_stacking.h5` 出现多个 π-π Interaction 时显式报错，不静默取第一个。
 
 ### 13.3 验收
 
