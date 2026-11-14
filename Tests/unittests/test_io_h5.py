@@ -610,6 +610,11 @@ class TestAtomicPathValidation:
         with pytest.raises(ValueError):
             save_interactions_atomic([sample_it], "")
 
+    def test_pathlib_accepted(self, sample_it):
+        path = TEMP_DIR / "test_atomic_pathlib.h5"
+        save_interactions_atomic([sample_it], path)
+        assert load_interactions(path)[0].n_pairs == 1
+
     def test_preserves_existing_mode(self, sample_it):
         import os
         import stat

@@ -357,3 +357,23 @@ class TestMarkingInputGuards:
         save_interactions([pi, pi], str(out / "pi_stacking.h5"))
         with pytest.raises(ValueError, match="multiple pi_stacking"):
             _mark_hydrophobic_redundancy(str(out))
+
+    def test_non_pi_interaction_in_pi_file_raises(self):
+        out = TMP_DIR / "non_pi"
+        out.mkdir(parents=True, exist_ok=True)
+        ring1 = self._group(1, "aromatic_ring", 10)
+        ring2 = self._group(2, "aromatic_ring", 20)
+        hydro1 = self._group(3, "hydrophobic", 10)
+        hydro2 = self._group(4, "hydrophobic", 20)
+        wrong_type = Interaction(
+            interaction_type="salt_bridge", groups=[(ring1, ring2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        hydrophobic = Interaction(
+            interaction_type="hydrophobic", groups=[(hydro1, hydro2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        save_interactions([hydrophobic], str(out / "hydrophobic.h5"))
+        save_interactions([wrong_type], str(out / "pi_stacking.h5"))
+        with pytest.raises(ValueError, match="no pi_stacking"):
+            _mark_hydrophobic_redundancy(str(out))

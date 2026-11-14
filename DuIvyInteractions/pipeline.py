@@ -230,6 +230,8 @@ def _load_marking_inputs(hydro_path: str, pi_path: str
         raise ValueError(f"cannot read marking inputs: {e}") from e
     pi_matches = [
         it for it in pi_stacking if it.interaction_type == "pi_stacking"]
+    if pi_stacking and not pi_matches:
+        raise ValueError("no pi_stacking interaction in pi_stacking.h5")
     if len(pi_matches) > 1:
         raise ValueError("multiple pi_stacking interactions in pi_stacking.h5")
     return hydrophobic, pi_matches[0] if pi_matches else None
