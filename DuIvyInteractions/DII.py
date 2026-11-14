@@ -39,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--pairing", default="any", choices=["any", "between"],
                        help="pairing rule between selects: any (default) or between "
                             "(keep only cross-select pairs; requires >=2 --select)")
+    run_p.add_argument("--mark-redundant", action="store_true",
+                       help="mark hydrophobic pair-frames overlapping pi-stacking "
+                            "(mark only, not remove; auto-runs pi_stacking if needed)")
 
     # export 子命令
     export_p = sub.add_parser("export", help="export h5 results to xvg/xpm/csv and print overview")
@@ -126,6 +129,11 @@ def _print_overview(it, exporter) -> None:
     print(f"Frames:   {it.n_frames}")
     if it.n_frames > 0:
         print(f"Time range: {it.times[0]:.1f} ~ {it.times[-1]:.1f} ps")
+    for name, flags in it.flags.items():
+        n_marked = int(flags.any(axis=1).sum())
+        n_frames = int(flags.sum())
+        print(f"Flags:    {name}: {n_marked}/{it.n_pairs} pairs "
+              f"({n_frames} pair-frames)")
     print(f"\nTop {OVERVIEW_TOP_N} occupancies:")
     for i, idx in enumerate(order, 1):
         print(f"  {i}. {exporter.get_pair_label(it, int(idx))}  {occ[idx]:.1%}")
@@ -152,7 +160,8 @@ def main():
             selects = (sum(args.select, []) if args.select else None)
             Pipeline(args.ff, args.strategy).run(
                 args.tpr, args.xtc, args.output, interactions,
-                select=selects, pairing=args.pairing)
+                select=selects, pairing=args.pairing,
+                mark_redundant=args.mark_redundant)
         except ValueError as e:
             # 用户输入/选择歧义 → 友好报错（不暴露 traceback）
             raise SystemExit(f"error: {e}")

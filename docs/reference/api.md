@@ -101,6 +101,12 @@ Pipeline(ff="amber").run(
     select=["segid RBD_pro", "segid KRAS_pro"],
     pairing="between",
 )
+
+# 疏水-芳香重叠标记（只标记不删除；只跑 hydrophobic 时自动补跑 pi_stacking）
+Pipeline(ff="amber").run(
+    "md.tpr", "md.xtc", "out/",
+    interactions=["hydrophobic"], mark_redundant=True,
+)
 ```
 
 > 提示：基团（如一个供体、一个芳香环）须**完整属于某一个 select** 才保留——`--select "name N" --select "name H"` 这类原子级选择会使基团横跨多个 select 而被排除（规则确定，非报错）；残基/分子级选择（`segid`/`resname`/`byres`）不触发。
@@ -181,13 +187,20 @@ detect(groups, trajectory=None, n_workers=1,
 ## 结果序列化（io.h5）
 
 ```python
-from DuIvyInteractions.io import save_interactions, load_interactions
+from DuIvyInteractions.io import (
+    save_interactions, save_interactions_atomic, load_interactions,
+)
 
 save_interactions(results, "out/salt_bridge.h5")   # List[Interaction] -> h5
+save_interactions_atomic(results, "out/salt_bridge.h5")  # 临时文件 + os.replace
 its = load_interactions("out/salt_bridge.h5")      # h5 -> List[Interaction]
 ```
 
 - `save_interactions(interactions, path, compress=True)`：`compress` 启用 gzip 压缩（默认开）。
+- `save_interactions_atomic(...)`：同目录临时文件写成功后 `os.replace`，失败保留原文件。
+- `Interaction.flags`：可选 `Dict[str, np.ndarray]`，值须为 `(n_pairs, n_frames)` bool；当前仅
+  hydrophobic 的 `redundant_pi_stacking`（`--mark-redundant` 产生）。计算入口：
+  `DuIvyInteractions.redundancy.pi_overlap_flags(hydrophobic, pi_stacking)`。
 - `path` 接受 `str` 或 `pathlib.Path`；空路径抛 `ValueError`，非 str/Path 类型抛 `TypeError`。
 - 读取时校验顶层 `format_version`，与 `FORMAT_VERSION = "1.0"` 不匹配抛 `ValueError`。
 - 无损往返（见[数据格式](data_format.md)），项目单测 `test_io_h5.py` 覆盖。
@@ -220,7 +233,7 @@ exp.to_csv_summary(it, "sb_summary.csv")           # 每对汇总（occupancy + 
 | `BondData` | 残基内键：两端残基内索引 + 键类型（`BOND_TYPES`） |
 | `InterResidueBond` | 残基间共价键（两端残基全局索引 + 残基内原子索引 + 键类型） |
 | `Group` | 化学基团：`group_id`/`group_type`/`molecule`/`residue_name`/`residue_id`/`atoms`/`metadata`；属性 `num_atoms`/`atom_indices`/`net_charge`；`group_type` 必须是 `GROUP_TYPES` 的值，`atoms` 非空 |
-| `Interaction` | 一种类型的全部检测结果：`interaction_type`/`groups`/`existence`/`metrics`/`times`；属性 `n_pairs`/`n_frames`、方法 `occupancy()` |
+| `Interaction` | 一种类型的全部检测结果：`interaction_type`/`groups`/`existence`/`metrics`/`times`/`flags`；属性 `n_pairs`/`n_frames`、方法 `occupancy()` |
 | `InteractionSparse` | TwoPass Pass1 的稀疏中间结果（键为 `(group_id, ...)` 元组） |
 
 - `Group.metadata`：键值字典，键必须为字符串，值限 JSON 可序列化类型（str/int/float/bool/None/list/dict；numpy 标量/数组自动兜底）。

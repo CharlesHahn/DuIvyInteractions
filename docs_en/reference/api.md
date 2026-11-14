@@ -102,6 +102,13 @@ Pipeline(ff="amber").run(
     select=["segid seg_0_RBD_pro", "segid seg_2_KRAS_pro"],
     pairing="between",
 )
+
+# Hydrophobic-aromatic overlap marking (mark only, never remove;
+# a hydrophobic-only run auto-runs pi_stacking)
+Pipeline(ff="amber").run(
+    "md.tpr", "md.xtc", "out/",
+    interactions=["hydrophobic"], mark_redundant=True,
+)
 ```
 
 ## Data Reading (system_readers)
@@ -182,13 +189,18 @@ detect(groups, trajectory=None, n_workers=1,
 ## Result Serialization (io.h5)
 
 ```python
-from DuIvyInteractions.io import save_interactions, load_interactions
+from DuIvyInteractions.io import (
+    save_interactions, save_interactions_atomic, load_interactions,
+)
 
 save_interactions(results, "out/salt_bridge.h5")   # List[Interaction] -> h5
+save_interactions_atomic(results, "out/salt_bridge.h5")  # temp file + os.replace
 its = load_interactions("out/salt_bridge.h5")      # h5 -> List[Interaction]
 ```
 
 - `save_interactions(interactions, path, compress=True)`: `compress` enables gzip compression (on by default).
+- `save_interactions_atomic(...)`: writes a same-directory temporary file and `os.replace`s it on success; the original survives a failed write.
+- `Interaction.flags`: optional `Dict[str, np.ndarray]`; values must be `(n_pairs, n_frames)` bool. Currently only hydrophobic's `redundant_pi_stacking` (produced by `--mark-redundant`). Computation entry point: `DuIvyInteractions.redundancy.pi_overlap_flags(hydrophobic, pi_stacking)`.
 - `path` accepts `str` or `pathlib.Path`; an empty path raises `ValueError`, a non-str/Path type raises `TypeError`.
 - The top-level `format_version` is validated on reading; a mismatch with `FORMAT_VERSION = "1.0"` raises `ValueError`.
 - Lossless round-trip (see [HDF5 Storage Format](data_format.md)); the project unit test `test_io_h5.py` covers this guarantee.
@@ -221,7 +233,7 @@ exp.to_csv_summary(it, "sb_summary.csv")           # per-pair summary (occupancy
 | `BondData` | in-residue bond: two in-residue endpoint indices + bond type (in `BOND_TYPES`) |
 | `InterResidueBond` | inter-residue covalent bond (two residue global indices + in-residue atom indices + bond type) |
 | `Group` | chemical group: `group_id`/`group_type`/`molecule`/`residue_name`/`residue_id`/`atoms`/`metadata`; properties `num_atoms`/`atom_indices`/`net_charge`; `group_type` must be a value of `GROUP_TYPES` and `atoms` must be non-empty |
-| `Interaction` | all detection results of one type: `interaction_type`/`groups`/`existence`/`metrics`/`times`; properties `n_pairs`/`n_frames`, method `occupancy()` |
+| `Interaction` | all detection results of one type: `interaction_type`/`groups`/`existence`/`metrics`/`times`/`flags`; properties `n_pairs`/`n_frames`, method `occupancy()` |
 | `InteractionSparse` | sparse intermediate results of TwoPass Pass1 (keyed by `(group_id, ...)` tuples) |
 
 - `Group.metadata`: a key-value dictionary whose keys must be strings and whose values are limited to JSON-serializable types (str/int/float/bool/None/list/dict; numpy scalars/arrays are automatically converted as a fallback).

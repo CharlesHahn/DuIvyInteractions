@@ -32,6 +32,8 @@ interaction_<i>/
 │   ├── distance/           # 数值指标，(n_pairs, n_frames) float，原样存储
 │   └── pistacking_type/    # 字符串指标（π 堆积类型 P/T/N）：展平为 1D 字符串列表存储，
 │                           #   原始 shape 存于该数据集的 attrs['shape']，读取时 reshape 还原
+├── flags/                  # 可选标记组（仅 --mark-redundant 的 hydrophobic.h5 出现）
+│   └── redundant_pi_stacking/  # (n_pairs, n_frames) bool（gzip），True = 与 π-π 重叠
 └── groups/                 # 基团对数据（基团元数据 + 平铺原子数据）
     ├── group_id/           # (n_groups,) 全局基团 ID（int64）
     ├── pair_index/         # (n_groups,) 每个基团所属的 pair 索引（int64）
@@ -52,6 +54,10 @@ interaction_<i>/
         ├── atom_charge         # 电荷（float64）
         └── atom_mass           # 原子质量（float64）
 ```
+
+> `flags/` 是**可选**组：旧代码读取时忽略未知组，不报错；旧代码读入后重存会丢失该组。
+> 新增可选组不升 `format_version`（仍为 `1.0`），因为升版会让旧读者的精确版本校验直接拒读。
+> `flags` 与 `existence` 同 shape；`redundant_pi_stacking` 实现保证 `flags ⊆ existence`。
 
 > 注：`(gzip)` 标记表示该数据集在 `compress=True`（默认）时以 gzip 压缩写入。**属性（attrs）不做压缩**——`compression` 参数只作用于 `create_dataset` 创建的数据集。
 

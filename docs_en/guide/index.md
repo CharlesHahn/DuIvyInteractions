@@ -21,7 +21,8 @@ Reliability notes (code state as of 2026-10-09):
 - **H-bond acceptor determination (fix A1)**: across force fields, non-acceptor N types bearing H (ordinary amides, ammonium, H-bearing pyrrole, guanidinium) are excluded, while Pro N, His H-free pyridine N, neutral amines, and nucleic-acid amino N are retained; per-item evidence is in `doc/acceptor_identification_evidence.md`.
 - **Cross-force-field water exclusion**: water-residue names are governed uniformly by the `GroupIdentifier.WATER_RESIDUES` class attribute (Amber `{SOL,HOH,WAT}`, GROMOS `{SOL}`, CHARMM `{TIP3,HOH,SOL,WAT}`, OPLS `{HOH,HO4,HO5,SOL,WAT}`), so water-bridge and metal-coordination detection exclude water correctly.
 - **Periodic-boundary (PBC) handling**: all eight interaction types × the `two_pass`/`per_frame` strategies are processed under the minimum-image convention (MIC) — distances/angles directly via MIC, aggregate coordinates such as charge centers / ring centers are wrapped before aggregation, and cross-boundary neighbors (e.g. cross-box water-bridge / hydrogen-bond pairs) are detected correctly; design in `doc/pbc_design.md`.
-- Known limitations (GROMOS ligands not supported, water-bridge deduplication, hydrophobic-aromatic deduplication, etc.) are listed in {doc}`/reference/limitations`.
+- **Hydrophobic-aromatic overlap marking**: `--mark-redundant` marks hydrophobic pair-frames overlapping π-π stacking at atom level × per frame (mark only, never remove), with an optional h5 `flags/` group + CSV column; design in `doc/redundancy_marking_design.md`.
+- Known limitations (GROMOS ligands not supported, legacy water-bridge criteria in per_tuple, hydrophobic-aromatic overlap not removed by default, etc.) are listed in {doc}`/reference/limitations`.
 
 ## Reading Path
 

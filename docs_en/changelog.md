@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### 2026-11-14
+
+- **Hydrophobic-aromatic overlap marking (TODO #2)**: `dii run --mark-redundant` marks hydrophobic pair-frames overlapping π-π stacking in `Interaction.flags` (key `redundant_pi_stacking`), **marking only, never removing**:
+  - atom-level × per-frame; `flags = overlap & existence`, guaranteeing `flags ⊆ existence`
+  - a hydrophobic-only run auto-runs `pi_stacking` (its h5 is retained); an explicitly requested π-π run is not duplicated
+  - write-back uses a same-directory temporary file + `os.replace`; marking runs only when this run's hydro and pi both succeed
+  - `hydrophobic.h5` gains an optional `flags/` group (format 1.0 unchanged); `dii export` adds `avg_redundant_pi_stacking` to the summary CSV (fraction of active frames marked True), while xvg/xpm are not filtered
+  - missing `hydrophobic` / `per_tuple` errors out; hydro/pi failure writes no flags and exits non-zero
+  - D927 measured: two_pass 2366 pairs / 67 pairs / 749 pair-frames; per_frame 705 pairs / 9 pairs / 143 pair-frames
+  - design/review: `doc/redundancy_marking_design.md`
+
 ### 2026-11-06
 
 - **Water-bridge criteria switched to explicit-hydrogen standard + three-layer quota** (`per_frame` / `two_pass`):

@@ -7,6 +7,8 @@
 import h5py
 import numpy as np
 import json
+import os
+import tempfile
 from typing import List, Tuple, Dict
 from pathlib import Path
 
@@ -52,6 +54,22 @@ def save_interactions(interactions: List[Interaction], path: str, compress: bool
         # 为每个 Interaction 创建一个 group
         for i, interaction in enumerate(interactions):
             _write_interaction(f, i, interaction, compress)
+
+
+def save_interactions_atomic(interactions: List[Interaction], path: str,
+                             compress: bool = True) -> None:
+    """原子保存：先写同目录临时文件，成功后替换目标文件。"""
+    path = str(path)
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
+    os.close(fd)
+    try:
+        save_interactions(interactions, tmp_path, compress)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def load_interactions(path: str) -> List[Interaction]:
@@ -117,6 +135,13 @@ def _write_interaction(f: h5py.File, idx: int, interaction: Interaction, compres
     # 写入 groups
     _write_groups(grp, interaction.groups, compress)
 
+    # 写入可选 flags（独立于 metrics，避免污染导出指标）
+    if interaction.flags:
+        flags_grp = grp.create_group('flags')
+        for name, values in interaction.flags.items():
+            flags_grp.create_dataset(
+                name, data=values, compression=compression)
+
 
 def _read_interaction(f: h5py.File, idx: int) -> Interaction:
     """读取单个 Interaction。"""
@@ -151,13 +176,20 @@ def _read_interaction(f: h5py.File, idx: int) -> Interaction:
     
     # 读取 groups
     groups = _read_groups(grp)
-    
+
+    # 读取可选 flags（旧文件无此组 → {}）
+    flags = {}
+    if 'flags' in grp:
+        for name in grp['flags']:
+            flags[name] = grp['flags'][name][:]
+
     return Interaction(
         interaction_type=interaction_type,
         groups=groups,
         existence=existence,
         metrics=metrics,
         times=times,
+        flags=flags,
     )
 
 

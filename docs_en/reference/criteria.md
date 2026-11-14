@@ -71,6 +71,8 @@ In the output XPM: 0 = none (white `#FFFFFF`), 1 = T-type (pink `#F67088`), 2 = 
 | `HYDROPH_MIN_DIST` | 0.5 | Minimum distance |
 | `HYDROPH_DIST_MAX` | 4.0 | Maximum distance |
 
+> Aromatic ring carbons also satisfy this criterion, so π-π stacking and hydrophobic interactions may overlap. `--mark-redundant` marks overlapping hydrophobic pair-frames in `Interaction.flags` after detection, but **does not change this criterion or delete records**.
+
 ## Halogen Bond (halogen_bond)
 
 **Criterion**: the distance between halogen X and acceptor A is ≤ 4.0 Å, the C-X···A angle ∈ [135°, 195°] (165°±30°), and the X···A-R angle ∈ [90°, 150°] (120°±30°, using the R neighbor of A closest to 120°).

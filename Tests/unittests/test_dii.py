@@ -79,6 +79,12 @@ class TestBuildParser:
         assert ns.input == "in.h5"
         assert ns.output == "out"
 
+    def test_mark_redundant_parses(self):
+        ns = build_parser().parse_args(
+            ["run", "-t", "t", "-f", "x", "-o", "o", "--ff", "amber",
+             "--mark-redundant"])
+        assert ns.mark_redundant is True
+
     def test_strategy_choice_accepted(self):
         ns = build_parser().parse_args(
             ["run", "-t", "t", "-f", "x", "-o", "o", "--ff", "amber",
@@ -118,13 +124,14 @@ class TestMainRun:
                 calls["strategy"] = strategy
 
             def run(self, tpr, xtc, output, interactions,
-                    select=None, pairing="any"):
+                    select=None, pairing="any", mark_redundant=False):
                 calls["tpr"] = tpr
                 calls["xtc"] = xtc
                 calls["output"] = output
                 calls["interactions"] = interactions
                 calls["select"] = select
                 calls["pairing"] = pairing
+                calls["mark_redundant"] = mark_redundant
 
         import DuIvyInteractions.pipeline as pipeline_mod
         monkeypatch.setattr(pipeline_mod, "Pipeline", FakePipeline)
@@ -142,6 +149,16 @@ class TestMainRun:
         assert calls["tpr"] == "t.tpr"
         assert calls["xtc"] == "t.xtc"
         assert calls["output"] == "out"
+        assert calls["mark_redundant"] is False
+
+    def test_mark_redundant_flag_passed(self, monkeypatch):
+        calls = self._run_main(
+            monkeypatch,
+            ["dii", "run", "-t", "t.tpr", "-f", "t.xtc", "-o", "out",
+             "--ff", "amber", "--interactions", "hydrophobic",
+             "--mark-redundant"])
+        assert calls["mark_redundant"] is True
+        assert calls["interactions"] == ["hydrophobic"]
 
     def test_explicit_types_stripped_lowered(self, monkeypatch):
         calls = self._run_main(

@@ -16,7 +16,7 @@ Detect interactions in the specified trajectory and save the results as HDF5 fil
 
 ```bash
 dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATEGY]
-        [--select SELEXP ...] [--pairing any|between]
+        [--select SELEXP ...] [--pairing any|between] [--mark-redundant]
 ```
 
 ### Arguments
@@ -31,6 +31,7 @@ dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATE
 | `--strategy` | No | `two_pass` | Detection strategy: `two_pass` / `per_frame` / `per_tuple` |
 | `--select` | No | — | MDAnalysis selection string, `action="append", nargs="+"`: may be **repeated** or given as **space-separated multi-values** (e.g. `--select "segid A" "segid B"`); each value defines an **independent** atom set (never merged). A group must be **fully covered by one select** to enter the participation pool (see "User Group Selection & Filtering" below) |
 | `--pairing` | No | `any` | Pairing rule: `any` = all pool candidates without a pairing constraint (default); `between` = keep only candidate pairs whose two ends belong to different selects (requires ≥ 2 selects, otherwise an error) |
+| `--mark-redundant` | No | Off | Mark hydrophobic pair-frames overlapping π-π stacking (**mark only, never remove**). If only `hydrophobic` is requested, `pi_stacking` is auto-run and its h5 retained. Errors if `hydrophobic` is not requested or `per_tuple` is used |
 
 The four `--ff` values map to the identifiers (`DuIvyInteractions/group_identifiers/__init__.py`):
 
@@ -50,6 +51,27 @@ An unknown `--ff` aborts and lists all available values; an unknown `--interacti
 - The `--interactions` value is lowercased, whitespace-stripped, and split on commas (`main` in `DII.py`).
 - `all` is the default and is equivalent to "all 8 types"; **`all` cannot be mixed with other types** — mixing aborts with `'all' cannot be mixed with other types`.
 - A per-type detection failure (e.g. the system contains no metals or halogens) only prints `[WARN] <type> detection failed: <reason>` without interrupting the other types.
+
+### Hydrophobic-Aromatic Overlap Marking (--mark-redundant)
+
+Aromatic ring carbons also satisfy the hydrophobic definition, so π-π stacking and hydrophobic interactions may double-count the same physical contact. `--mark-redundant` performs atom-level, per-frame marking **without deleting** any original record:
+
+```bash
+# Hydrophobic-only run is safe: pi_stacking is auto-run and its h5 retained
+dii run -t md.tpr -f md.xtc -o out/ --ff amber \
+        --interactions hydrophobic --mark-redundant
+
+# pi_stacking explicitly requested: use this run's result, no duplicate auto-run
+dii run -t md.tpr -f md.xtc -o out/ --ff amber \
+        --interactions hydrophobic,pi_stacking --mark-redundant
+```
+
+Behavior:
+- Marks are written to `hydrophobic.h5` as `flags/redundant_pi_stacking` (bool matrix, `flags ⊆ existence`); `dii export -i out/hydrophobic.h5` adds an `avg_redundant_pi_stacking` CSV column (fraction of active frames marked True).
+- A hydrophobic-only run auto-runs `pi_stacking` (`[INFO] auto-running ...`), so the output directory gains a `pi_stacking.h5`; it may be kept or deleted after marking (flags are embedded in hydrophobic.h5).
+- Errors if `hydrophobic` is not requested or `--strategy per_tuple` is used; if either hydro/pi detection fails, no flags are written and the command exits non-zero (no silent success).
+- Marking only adds a column; **xvg/xpm data are not filtered**. For a "clean" result, filter using the CSV column.
+- Re-running without `--mark-redundant` regenerates `hydrophobic.h5` and clears existing flags.
 
 ### User Group Selection & Filtering (--select / --pairing)
 
@@ -232,7 +254,7 @@ For each Interaction, the following files are generated in the output directory:
 | `<type>_<metric>.xvg` | Time series of each numeric metric, one curve per column (corresponding to one group pair) |
 | `<type>_existence.xpm` | Existence heatmap (rows = pairs, columns = frames; white = No, blue = Yes) |
 | `<type>_type.xpm` | π-stacking only: stacking-type map (0=none / 1=T-shaped / 2=parallel) |
-| `<type>_summary.csv` | Per-pair summary statistics (`pair_label, occupancy, avg_<metric>, std_<metric>`) |
+| `<type>_summary.csv` | Per-pair summary statistics (`pair_label, occupancy, avg_<metric>, std_<metric>`; hydrophobic with `--mark-redundant` appends `avg_redundant_pi_stacking`) |
 
 Numeric metrics per type (they determine the `<type>_<metric>.xvg` filenames; data from the `metric_labels` of each exporter):
 
@@ -254,6 +276,7 @@ Filenames are based on the interaction type rather than the Interaction index in
 - `0`: success
 - Non-zero: argument errors, missing/corrupted files, unknown types, empty results, etc., all raised via `SystemExit` (e.g. `unknown interaction type: 'xxx'. Available: ...`, `'all' cannot be mixed with other types`, `cannot read h5 file: ...`).
 - `--select` / `--pairing` errors also exit non-zero: a friendly message prefixed with `error:` is printed without a traceback (e.g. `error: select 语法错误: ...`, `error: select #1 未选中任何原子`, `error: --pairing between 需要至少 2 个 --select`, `error: 参与池内无可用基团（非水基团 0 个）...`).
+- `--mark-redundant` errors also exit non-zero: `hydrophobic` not requested (`error: --mark-redundant requires hydrophobic`), `per_tuple` (`error: --mark-redundant does not support per_tuple`), or hydro/pi detection/write failure (`error: mark-redundant skipped: ...`). Successful marking (including zero overlaps) exits 0.
 
 ## Next Steps
 

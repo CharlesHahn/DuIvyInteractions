@@ -52,6 +52,7 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber
 # 可选参数：
 #   --interactions hydrogen_bond,pi_stacking   只检测部分类型（默认 all=8类）
 #   --strategy two_pass|per_frame|per_tuple    检测策略（默认 two_pass）
+#   --mark-redundant                           标记与 π-π 重叠的疏水对-帧（只标记不删除）
 
 # 导出 h5 结果为 xvg/xpm/csv 并打印概览（支持多 Interaction h5）
 dii export -i out/salt_bridge.h5 -o out_export/
@@ -125,6 +126,7 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber
 # optional arguments:
 #   --interactions hydrogen_bond,pi_stacking    detect only selected types (default all=8)
 #   --strategy two_pass|per_frame|per_tuple     detection strategy (default two_pass)
+#   --mark-redundant                           mark hydrophobic pair-frames overlapping π-π (mark only, not remove)
 
 # export h5 results to xvg/xpm/csv and print overview (supports multi-Interaction h5)
 dii export -i out/salt_bridge.h5 -o out_export/

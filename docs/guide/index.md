@@ -21,7 +21,8 @@ DuIvyInteractions 是一个基于 MD 拓扑力场参数的分子间相互作用�
 - **H 键受体判定（A1 修复）**：跨力场剔除带 H 的非受体 N 类型（普通酰胺/铵/带 H 吡咯/胍基），保留 Pro N / His 无 H 吡啶 / 中性胺 / 核酸氨基；逐项证据见 `doc/acceptor_identification_evidence.md`。
 - **跨力场水排除**：水残基名由 `GroupIdentifier.WATER_RESIDUES` 类属性统一管理（Amber `{SOL,HOH,WAT}`、GROMOS `{SOL}`、CHARMM `{TIP3,HOH,SOL,WAT}`、OPLS `{HOH,HO4,HO5,SOL,WAT}`），水桥/金属配位检测据此正确排除水。
 - **周期边界（PBC）处理**：全部 8 类相互作用 × `two_pass`/`per_frame` 策略已按最小镜像（MIC）约定处理周期边界——距离/角度直接 MIC，电荷中心/环心等聚合坐标先回绕再聚合，跨盒近邻（如水桥、氢键跨盒对）正确检测；设计见 `doc/pbc_design.md`。
-- 已知限制（GROMOS 配体不支持、水桥去重、疏水-芳香去重等）见{doc}`/reference/limitations`。
+- **疏水-芳香重叠标记**：`--mark-redundant` 以原子级 × 逐帧标记与 π-π 重叠的疏水对-帧（只标记不删除），h5 可选 `flags/` 组 + CSV 列；设计见 `doc/redundancy_marking_design.md`。
+- 已知限制（GROMOS 配体不支持、水桥 per_tuple 旧判据、疏水-芳香默认未删除等）见{doc}`/reference/limitations`。
 
 ## 阅读路径
 

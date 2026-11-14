@@ -7,10 +7,12 @@
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from DuIvyInteractions.pipeline import (
     Pipeline, ALL_INTERACTIONS, DETECTOR_CLASSES, STRATEGY_INDEX,
+    _prepare_run_names, _finish_marking, _mark_hydrophobic_redundancy,
 )
 from DuIvyInteractions.system_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
@@ -18,8 +20,9 @@ from DuIvyInteractions.interaction_detectors import (
     HydrogenBondDetectorTwoPass, HydrogenBondDetectorPerFrame,
     HydrogenBondDetectorPerTuple,
 )
-from DuIvyInteractions.io.h5 import load_interactions
-from DuIvyInteractions.core.datas import Group
+from DuIvyInteractions.io.h5 import load_interactions, save_interactions
+from DuIvyInteractions.core.datas import AtomData, Group, Interaction
+from DuIvyInteractions.redundancy import FLAG_PI_OVERLAP
 
 
 TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
@@ -248,3 +251,75 @@ class TestWaterResidues:
         types = {g.group_type for g in groups}
         assert "water" in types
         assert "metal_binding" not in types, "HO4 水不应是 metal_binding"
+
+
+class TestPrepareRunNames:
+    """mark 参数对实际运行类型列表的影响。"""
+
+    def test_mark_off_keeps_requested(self):
+        names = _prepare_run_names(["hydrophobic"], False, "two_pass")
+        assert names == ["hydrophobic"]
+
+    def test_mark_on_auto_adds_pi(self, capsys):
+        names = _prepare_run_names(["hydrophobic"], True, "two_pass")
+        assert names == ["hydrophobic", "pi_stacking"]
+        assert "auto-running pi_stacking" in capsys.readouterr().out
+
+    def test_mark_on_no_duplicate_pi(self):
+        names = _prepare_run_names(
+            ["hydrophobic", "pi_stacking"], True, "two_pass")
+        assert names == ["hydrophobic", "pi_stacking"]
+
+    def test_mark_requires_hydrophobic(self):
+        with pytest.raises(ValueError, match="requires hydrophobic"):
+            _prepare_run_names(["salt_bridge"], True, "two_pass")
+
+    def test_mark_rejects_per_tuple(self):
+        with pytest.raises(ValueError, match="does not support per_tuple"):
+            _prepare_run_names(["hydrophobic"], True, "per_tuple")
+
+
+class TestFinishMarking:
+    """标记阶段只使用本次成功的类型，禁止读旧文件。"""
+
+    def test_missing_dependency_skips_before_io(self, monkeypatch):
+        import DuIvyInteractions.pipeline as pipeline_mod
+        called = {"n": 0}
+
+        def unexpected(*args, **kwargs):
+            called["n"] += 1
+            raise AssertionError("should not read marking inputs")
+
+        monkeypatch.setattr(
+            pipeline_mod, "_mark_hydrophobic_redundancy", unexpected)
+        with pytest.raises(ValueError, match="pi_stacking detection failed"):
+            _finish_marking(str(TMP_DIR / "stale"), {"hydrophobic"})
+        assert called["n"] == 0
+
+
+class TestRunMarking:
+    """run 全链路：默认无 flags；--mark-redundant 自动补跑并写回。"""
+
+    def test_default_run_has_no_flags_and_no_pi(self):
+        out = TMP_DIR / "mark_default"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"])
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        assert interaction.flags == {}
+        assert not (out / "pi_stacking.h5").exists()
+
+    def test_mark_auto_runs_pi_and_writes_flags(self, capsys):
+        out = TMP_DIR / "mark_auto"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"], mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert int(flags.sum()) == 749
+        assert int(flags.any(axis=1).sum()) == 67
+        assert not np.any(flags & ~interaction.existence)
+        captured = capsys.readouterr().out
+        assert "auto-running pi_stacking" in captured
+        assert "marked 67 hydrophobic pairs (749 pair-frames)" in captured

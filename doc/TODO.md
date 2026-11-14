@@ -25,21 +25,22 @@
 
 **实现状态**（2026-08-28 更新）：已在所有 pi_stacking 检测器中通过 `check_planarity: bool = False` 参数实现，默认关闭。
 
-### 2. 疏水-芳香去重 ❌
+### 2. 疏水-芳香重叠标记 ✅（2026-11-14 实现）
 
-**推迟原因**：π-π 堆积已包含疏水接触（芳香环之间的 van der Waals 力），如果同时报告 π-π 堆积和疏水相互作用，会重复计数同一物理接触。
+**原问题**：π-π 堆积已包含疏水接触（芳香环之间的 van der Waals 力），如果同时报告 π-π 堆积和疏水相互作用，会重复计数同一物理接触。
 
-**实现位置**：`interaction_detectors/` 的主流程编排
+**实现（2026-11-14，feature/redundancy-marking）**：采用“标记而非删除”：
+- `Interaction.flags` 可选 `(n_pairs, n_frames)` bool 通道；`flags = overlap & existence`
+- 原子级 × 逐帧：疏水对两端原子分属某个活跃 π-π 环对才标记
+- CLI：`dii run ... --mark-redundant`；只跑 hydrophobic 时自动补跑 π-π（保留其 h5）
+- 输出：`hydrophobic.h5` 的 `flags/redundant_pi_stacking` + `hydrophobic_summary.csv`
+  的 `avg_redundant_pi_stacking` 列；xvg/xpm 不删数据
+- 设计/审查：`doc/redundancy_marking_design.md`
 
-**规则**：
-- 先检测 π-π 堆积
-- 再检测疏水相互作用
-- 移除与 π-π 堆积重叠的疏水接触（两个芳香环的原子之间的疏水接触）
+**实测（D927，101 帧）**：two_pass 疏水 2366 对 / π-π 10 对 / 标记 67 对（749 对-帧）；
+per_frame 705 对 / 标记 9 对（143 对-帧，差异来自既有的同残基去重）。
 
-**参考**：`doc/hydrophobic_definition.md` §4
-
-**设计（2026-11-06，待实现）**：改为"标记而非删除"方案（原子级逐帧标记 + `--mark-redundant`
-开关 + 自动补跑 π-π），详见 `doc/redundancy_marking_design.md`
+**遗留**：per_tuple 不支持；two_pass 的同残基去重仍为独立 TODO（若落地需重跑基线）。
 
 
 ### 3. 基团识别结果需要人为审查！ ✅（2026-11-03 标记完成）

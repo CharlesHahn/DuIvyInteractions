@@ -65,6 +65,7 @@ DuIvyInteraction/
 │   ├── io/                       # h5.py(序列化), interaction_exporter.py + 8 导出子类
 │   ├── pipeline.py               # 编排：Reader→Identifier→Selection→Detector→h5
 │   ├── selection.py              # 用户基团选择与过滤（--select/--pairing 核心逻辑）
+│   ├── redundancy.py             # 疏水-芳香重叠标记（pi_overlap_flags + flags 常量）
 │   ├── DII.py                    # 命令行入口（dii run / dii export）
 │   ├── utils/                    # （空，待实现）
 │   └── visualizers/              # （空，待实现）
@@ -90,6 +91,7 @@ dii run -t md.tpr -f md.xtc -o out/ --ff amber     # 检测→h5（--ff 支持 a
 #   --interactions hydrogen_bond,pi_stacking      # 只检部分类型（默认 all=8）
 #   --strategy two_pass|per_frame|per_tuple       # 策略（默认 two_pass）
 #   --select "segid A" "segid B" --pairing between  # 用户基团选择：只检跨 select 界面（可重复/多值）
+#   --mark-redundant                              # 标记与 π-π 重叠的疏水对-帧（只标记不删除）
 dii export -i out/salt_bridge.h5 -o out_export/   # 导出 xvg/xpm/csv + 概览（支持多 Interaction h5）
 ```
 
@@ -101,7 +103,7 @@ Pipeline(ff="amber").run("md.tpr", "md.xtc", "out/",
     select=["segid seg_0_RBD_pro", "segid seg_2_KRAS_pro"], pairing="between")
 ```
 
-## 当前代码状态（2026-10-09）
+## 当前代码状态（2026-11-14）
 
 - ✅ 阶段一：基团鉴定——**4 力场识别器**（amber / gromos / charmm / opls），
   跨力场受体语义统一（`WATER_RESIDUES` 类属性 + 结构判据，见 `doc/acceptor_identification_evidence.md`）
@@ -110,6 +112,7 @@ Pipeline(ff="amber").run("md.tpr", "md.xtc", "out/",
 - ✅ 阶段四：命令行（dii run / dii export，多 Interaction 遍历 + 空数据/损坏 h5/0 帧防护 + 索引校验）
 - ✅ 阶段五：**用户基团选择与过滤**（`--select` / `--pairing`，CLI + Pipeline，见下）
 - ✅ 阶段六：**周期边界（PBC）处理**（2026-10-14，feature/pbc-handling）：全部 8 类相互作用 × `two_pass`/`per_frame` 按最小镜像（MIC）处理——距离 `calc_bonds(box)`、角度 `calc_angles(box)`、聚合坐标（电荷中心/环心）与投影偏移先 MIC 回绕；基类 `run_pass2` 统一模板 + 3 个钩子（`_build_indices_from_sparse`/`_init_metrics`/`_get_box`）消除 8 个 two_pass 的复制；`per_tuple` 未启用 PBC。设计见 `doc/pbc_design.md`
+- ✅ 阶段七：**疏水-芳香重叠标记**（TODO #2，2026-11-14，feature/redundancy-marking）：`--mark-redundant` 原子级 × 逐帧标记 `Interaction.flags["redundant_pi_stacking"]`，**只标记不删除**；只跑 hydrophobic 时自动补跑 pi_stacking；h5 可选 `flags/` 组（format 1.0 不变）+ CSV `avg_redundant_pi_stacking` 列；写回原子替换；per_tuple 不支持。设计见 `doc/redundancy_marking_design.md`
 - ✅ 真实测试案例：**3 力场**（Amber KRAS-RBD / GROMOS 53A6 / CHARMM36 SMO-BST，8 类相互作用全覆盖）
 
 **H 键受体误判修复（2026-09-30，A1）**：剔除带 H 的非受体 N 类型（普通酰胺/铵/带 H 吡咯/胍基），
@@ -127,9 +130,18 @@ pipeline 与 `_find_metal_binding`/water_bridge 检测器按力场正确排除�
 显式选水（如 `--select "resname SOL"`）时水残基 H_donor/H_acceptor 豁免 WATER_RESIDUES
 排除，可参与蛋白-水氢键。设计见 `doc/group_selection_design.md`。
 
+**疏水-芳香重叠标记（2026-11-14，--mark-redundant）**：`DuIvyInteractions/redundancy.py`
+的 `pi_overlap_flags()` 以原子级 × 逐帧判定疏水对-帧是否落在活跃 π-π 环对内；
+`Interaction.flags["redundant_pi_stacking"]` 与 existence 取交集。CLI 只跑 hydrophobic 时
+自动补跑 pi_stacking（保留 h5），仅本次 hydro/pi 均成功才以“临时文件 + `os.replace`”原子
+写回；未请求 hydrophobic 或使用 per_tuple 直接报错。h5 新增可选 `flags/` 组（format 1.0
+不变），CSV 增加 `avg_redundant_pi_stacking` 列；xvg/xpm 不删除/不过滤。two_pass 基线
+67 对/749 对-帧，per_frame 基线 9 对/143 对-帧（差异来自既有同残基去重）。设计见
+`doc/redundancy_marking_design.md`。
+
 **未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果逐个人工核对
 （自动核查工具已建，4 力场完成核查，见 `doc/group_identification_review.md`）、
-长轨迹 PerFrame 内存优化、疏水-芳香去重等。
+长轨迹 PerFrame 内存优化等。
 
 ## 测试约定（2026-09-30）
 

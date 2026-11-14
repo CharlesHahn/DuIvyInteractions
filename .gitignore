@@ -10,6 +10,7 @@ docs_en/_build/
 
 # MDAnalysis trajectory cache
 .*_offsets.npz
+.*_offsets.lock
 
 # 测试输出生成物（h5/csv/xpm/个人参考文件）
 Tests/interaction_h5data/

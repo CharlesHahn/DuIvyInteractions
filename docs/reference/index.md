@@ -14,7 +14,8 @@ DuIvyInteractions v0.0.4 的参考实现状态如下（与代码——`DuIvyInte
 - **真实测试数据**：Amber KRAS-RBD D927、GROMOS 53A6（蛋白 + 6 配体）、CHARMM36 SMO-BST 三套真实 MD 数据（`Tests/test_MD_case_*`），8 类相互作用全覆盖。
 - **周期边界（PBC）处理**：全部 8 类相互作用 × `two_pass`/`per_frame` 策略已按最小镜像（MIC）约定处理周期边界（距离、角度、电荷中心/环心聚合坐标与投影偏移），`per_tuple` 策略未启用 PBC。详见[已知限制](limitations)与设计文档 `doc/pbc_design.md`。
 - **水桥判据（显式氢）**：`per_frame`/`two_pass` 两侧各判一个氢键（H···A ≤ 2.5 Å、D-H···A ≥ 120°），并保留"水在中间"约束（∠供体H–Ow–受体A ∈ [71°,140°]）与三层配额（每水 ≤2 桥）。详见[判据](criteria)与设计文档 `doc/water_bridge_design.md`。
-- **范围与限制**：金属配位几何构型、疏水-芳香去重、可视化等未实现，详见[已知限制](limitations)。
+- **疏水-芳香重叠标记**：`dii run --mark-redundant` 以原子级 × 逐帧标记与 π-π 重叠的疏水对-帧（**只标记不删除**），h5 可选 `flags/` 组 + CSV `avg_redundant_pi_stacking` 列；只跑 hydrophobic 时自动补跑 π-π。详见[命令参考](../guide/command.md)与设计文档 `doc/redundancy_marking_design.md`。
+- **范围与限制**：金属配位几何构型、可视化等未实现，详见[已知限制](limitations)。
 
 ```{toctree}
 :maxdepth: 1

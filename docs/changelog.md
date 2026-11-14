@@ -2,6 +2,17 @@
 
 ## 未发布
 
+### 2026-11-14
+
+- **疏水-芳香重叠标记（TODO #2）**：`dii run --mark-redundant` 在检测后把与 π-π 堆积重叠的疏水对-帧标记到 `Interaction.flags`（键 `redundant_pi_stacking`），**只标记、不删除**：
+  - 原子级 × 逐帧；`flags = overlap & existence`，保证 `flags ⊆ existence`
+  - 只跑 `hydrophobic` 时自动补跑 `pi_stacking`（保留其 h5）；已请求 π-π 时不重复补跑
+  - 标记写回采用同目录临时文件 + `os.replace` 原子替换；仅本次 hydro/pi 均成功才标记
+  - `hydrophobic.h5` 新增可选 `flags/` 组（format 1.0 不变）；`dii export` 的 summary CSV 增加 `avg_redundant_pi_stacking` 列（活跃帧中 True 的比例），xvg/xpm 不过滤
+  - 无 `hydrophobic` / `per_tuple` 直接报错；hydro/pi 失败时不写 flags 且非零退出
+  - 实测 D927：two_pass 2366 对 / 67 对 / 749 对-帧；per_frame 705 对 / 9 对 / 143 对-帧
+  - 设计/审查：`doc/redundancy_marking_design.md`
+
 ### 2026-11-06
 
 - **水桥判据改为显式氢标准 + 三层配额**（`per_frame` / `two_pass`）：
