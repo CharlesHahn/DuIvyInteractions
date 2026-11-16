@@ -335,6 +335,35 @@ class TestRunMarking:
         assert int(flags.sum()) == 143
         assert int(flags.any(axis=1).sum()) == 9
 
+    def test_mark_with_select_writes_flags(self):
+        """--select 限定参与池后，π-π 与疏水同池过滤，标记仍成立。"""
+        out = TMP_DIR / "mark_select"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"], select=["protein"],
+            mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert int(flags.sum()) == 533
+        assert int(flags.any(axis=1).sum()) == 47
+        assert not np.any(flags & ~interaction.existence)
+
+    def test_mark_with_empty_pi_result(self):
+        """--pairing between 无跨侧 π-π 时，pi_stacking.h5 为空 → 标记全 False。"""
+        out = TMP_DIR / "mark_between"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"],
+            select=["segid seg_0_RBD_pro", "segid seg_2_KRAS_pro"],
+            pairing="between", mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        assert load_interactions(str(out / "pi_stacking.h5")) == []
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert flags.shape == interaction.existence.shape
+        assert not flags.any()
+
 
 class TestMarkingInputGuards:
     """标记输入的多 Interaction 歧义防护。"""
