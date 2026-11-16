@@ -207,12 +207,12 @@ class TestRealDataBaselines:
         assert int(flags.sum()) == 749
 
     def test_per_frame_counts(self, per_frame_result):
-        """per_frame 的疏水同残基去重会改变基线，不能套 two_pass 数字。"""
+        """无同残基聚合后，标记数与 two_pass 一致（差异仅剩候选策略）。"""
         hydro, pi = per_frame_result
         flags = pi_overlap_flags(hydro, pi)
-        assert hydro.n_pairs == 705
-        assert int(flags.any(axis=1).sum()) == 9
-        assert int(flags.sum()) == 143
+        assert hydro.n_pairs == 2351
+        assert int(flags.any(axis=1).sum()) == 67
+        assert int(flags.sum()) == 749
 
     def test_flags_only_on_ring_ring_pairs(self, two_pass_result):
         hydro, pi = two_pass_result

@@ -10,7 +10,8 @@
   - write-back uses a same-directory temporary file + `os.replace`; marking runs only when this run's hydro and pi both succeed
   - `hydrophobic.h5` gains an optional `flags/` group (format 1.0 unchanged); `dii export` adds `avg_redundant_pi_stacking` to the summary CSV (fraction of active frames marked True), while xvg/xpm are not filtered
   - missing `hydrophobic` / `per_tuple` errors out; hydro/pi failure writes no flags and exits non-zero
-  - D927 measured: two_pass 2366 pairs / 67 pairs / 749 pair-frames; per_frame 705 pairs / 9 pairs / 143 pair-frames
+  - D927 measured: two_pass 2366 pairs / 67 pairs / 749 pair-frames; per_frame 2351 pairs / 67 pairs / 749 pair-frames
+  - **Same-day ruling: removed the per_frame/per_tuple same-residue hydrophobic aggregation** (hydrophobic is an atomic-level interaction; same-residue dedup discards real atom-pair contacts); PLIP `refine_hydrophobic` rules 2/3 not adopted; marking baselines of both strategies now agree
   - design/review: `doc/redundancy_marking_design.md`
 
 ### 2026-11-06

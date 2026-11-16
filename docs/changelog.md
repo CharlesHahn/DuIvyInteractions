@@ -10,7 +10,8 @@
   - 标记写回采用同目录临时文件 + `os.replace` 原子替换；仅本次 hydro/pi 均成功才标记
   - `hydrophobic.h5` 新增可选 `flags/` 组（format 1.0 不变）；`dii export` 的 summary CSV 增加 `avg_redundant_pi_stacking` 列（活跃帧中 True 的比例），xvg/xpm 不过滤
   - 无 `hydrophobic` / `per_tuple` 直接报错；hydro/pi 失败时不写 flags 且非零退出
-  - 实测 D927：two_pass 2366 对 / 67 对 / 749 对-帧；per_frame 705 对 / 9 对 / 143 对-帧
+  - 实测 D927：two_pass 2366 对 / 67 对 / 749 对-帧；per_frame 2351 对 / 67 对 / 749 对-帧
+  - **同日裁决：移除 per_frame/per_tuple 的疏水同残基聚合**（疏水是原子级相互作用，同残基去重会丢弃真实原子对接触）；PLIP `refine_hydrophobic` 规则 2/3 不采用，两策略标记基线对齐
   - 设计/审查：`doc/redundancy_marking_design.md`
 
 ### 2026-11-06

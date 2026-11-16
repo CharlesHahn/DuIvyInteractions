@@ -177,20 +177,6 @@ class TestHydrophobicResults:
         """体系应有 734 个疏水原子。"""
         assert len(hydrophobic_groups) == 734
 
-    def test_deduplication(self, hydrophobic_interactions):
-        """去重后，同一原子不应与同残基多个原子同时保留。"""
-        inter = hydrophobic_interactions[0]
-        # 收集每个 (g1_id, r2_id) 对
-        seen = {}
-        for i, (g1, g2) in enumerate(inter.groups):
-            key1 = (g1.group_id, g2.residue_id)
-            key2 = (g2.group_id, g1.residue_id)
-            # 每个 (atom, residue) 对应最多一个接触
-            assert key1 not in seen, f"重复: g1={g1}, g2={g2}"
-            assert key2 not in seen, f"重复: g2={g2}, g1={g1}"
-            seen[key1] = i
-            seen[key2] = i
-
     def test_occupancy_range(self, hydrophobic_interactions):
         """占位率应在 [0, 1] 范围内。"""
         occ = hydrophobic_interactions[0].occupancy()

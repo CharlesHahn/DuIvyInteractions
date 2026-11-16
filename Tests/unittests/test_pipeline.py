@@ -332,8 +332,8 @@ class TestRunMarking:
         assert (out / "pi_stacking.h5").exists()
         interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
         flags = interaction.flags[FLAG_PI_OVERLAP]
-        assert int(flags.sum()) == 143
-        assert int(flags.any(axis=1).sum()) == 9
+        assert int(flags.sum()) == 749
+        assert int(flags.any(axis=1).sum()) == 67
 
     def test_mark_with_select_writes_flags(self):
         """--select 限定参与池后，π-π 与疏水同池过滤，标记仍成立。"""

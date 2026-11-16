@@ -104,7 +104,9 @@ class TestHydrophobicPerFrame:
         assert len(hydrophobics) > 0
 
     def test_n_pairs(self, hydrophobics):
-        assert hydrophobics[0].n_pairs == 16
+        # 疏水是原子级相互作用，不做同残基聚合（2026-11-16 移除）；
+        # 旧基线 16 是 1001 帧全局去重的失真结果
+        assert hydrophobics[0].n_pairs == 79
 
 
 # ============================================================

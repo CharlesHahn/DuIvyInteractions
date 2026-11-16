@@ -135,9 +135,10 @@ pipeline 与 `_find_metal_binding`/water_bridge 检测器按力场正确排除�
 `Interaction.flags["redundant_pi_stacking"]` 与 existence 取交集。CLI 只跑 hydrophobic 时
 自动补跑 pi_stacking（保留 h5），仅本次 hydro/pi 均成功才以“临时文件 + `os.replace`”原子
 写回；未请求 hydrophobic 或使用 per_tuple 直接报错。h5 新增可选 `flags/` 组（format 1.0
-不变），CSV 增加 `avg_redundant_pi_stacking` 列；xvg/xpm 不删除/不过滤。two_pass 基线
-67 对/749 对-帧，per_frame 基线 9 对/143 对-帧（差异来自既有同残基去重）。设计见
-`doc/redundancy_marking_design.md`。
+不变），CSV 增加 `avg_redundant_pi_stacking` 列；xvg/xpm 不删除/不过滤。two_pass 与
+per_frame 基线一致：67 对/749 对-帧（per_frame 2351 对 vs two_pass 2366 对，差异仅来自
+候选策略；2026-11-16 裁决移除 per_frame 的同残基聚合——疏水是原子级相互作用，不允许
+同残基去重）。设计见 `doc/redundancy_marking_design.md`。
 
 **未实现**（详见 `doc/TODO.md`）：可视化、`utils/output.py`、基团识别结果逐个人工核对
 （自动核查工具已建，4 力场完成核查，见 `doc/group_identification_review.md`）、

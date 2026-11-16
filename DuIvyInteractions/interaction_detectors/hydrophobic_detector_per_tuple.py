@@ -78,37 +78,3 @@ class HydrophobicDetectorPerTuple(InteractionDetectorPerTuple):
         """距离在 0.5~4.0 Å 之间。"""
         return (metrics["distance"] > HYDROPH_MIN_DIST) & \
                (metrics["distance"] < HYDROPH_DIST_MAX)
-
-    def _post_process(self, results: list) -> list:
-        """去重：同一原子与同残基多个原子的接触，只保留最近的。
-
-        对于每个 (group_id, residue_id) 对，只保留平均距离最近的那个接触。
-        一个 pair 必须是它所有 key 的最优解才会被保留。
-        """
-        if not results:
-            return results
-
-        # 第一步：找出每个 key 的最优 pair index
-        best = {}  # (group_id, residue_id) → (index, avg_dist)
-
-        for i, (gt, existence, metrics) in enumerate(results):
-            g1, g2 = gt
-            avg_dist = float(np.mean(metrics["distance"][existence]))
-
-            key1 = (g1.group_id, g2.residue_id)
-            key2 = (g2.group_id, g1.residue_id)
-
-            for key in [key1, key2]:
-                if key not in best or avg_dist < best[key][1]:
-                    best[key] = (i, avg_dist)
-
-        # 第二步：只保留对所有 key 都是最优的 pair
-        keep = []
-        for i, (gt, existence, metrics) in enumerate(results):
-            g1, g2 = gt
-            key1 = (g1.group_id, g2.residue_id)
-            key2 = (g2.group_id, g1.residue_id)
-            if best[key1][0] == i and best[key2][0] == i:
-                keep.append(i)
-
-        return [results[i] for i in keep]
