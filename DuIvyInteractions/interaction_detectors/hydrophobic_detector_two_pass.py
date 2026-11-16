@@ -77,10 +77,7 @@ class HydrophobicDetectorTwoPass(InteractionDetectorTwoPass):
                 sparse_data[group_ids]["frames"].append(f)
                 sparse_data[group_ids]["metrics"]["distance"].append(dist)
 
-        # TODO: 后处理去重 — 同一 (group_id, residue_id) 对只保留平均距离最近的 pair
-        # 物理原因：残基 LEU100 有 3 个疏水碳 C1/C2/C3，配体有 CA，
-        # CA-C1、CA-C2、CA-C3 都是 "CA-LEU100" 的疏水接触，应只保留最近的。
-        # 实现：计算每对在 active 帧的平均距离，每 (group_id, residue_id) 只保留最优。
+        # 疏水是原子级相互作用：每个原子对接触独立成立，不做同残基聚合
 
         return InteractionSparse(interaction_type=self.name, data=sparse_data)
 

@@ -38,9 +38,9 @@
 - 设计/审查：`doc/redundancy_marking_design.md`
 
 **实测（D927，101 帧）**：two_pass 疏水 2366 对 / π-π 10 对 / 标记 67 对（749 对-帧）；
-per_frame 705 对 / 标记 9 对（143 对-帧，差异来自既有的同残基去重）。
+per_frame 705 对 / 标记 9 对（143 对-帧，差异来自 per_frame 对同残基多原子对接触的聚合）。
 
-**遗留**：per_tuple 不支持；two_pass 的同残基去重未实现（见 #20），其落地会改变本条的标记基线（67 对 / 749 对-帧）。
+**遗留**：per_tuple 不支持标记。两种策略的疏水结果本就不要求一致：疏水是**原子级**相互作用，two_pass 保留全部原子对接触（two_pass 2366 对 / 标记 67 对 / 749 对-帧），per_frame 对同一残基的多个原子对接触做了聚合（705 对 / 标记 9 对 / 143 对-帧）。两套基线各自独立有效。
 
 
 ### 3. 基团识别结果需要人为审查！ ✅（2026-11-03 标记完成）
@@ -436,25 +436,6 @@ old/new 判定差异 0/0.000%"反推为 groups 层差异；但该差异在当前
 其余力场（Amber/CHARMM）的氢键基线经全量回归验证**未过期**。
 
 **优先级**：已关闭（2026-10-29）
-
-### 20. two_pass 疏水同残基去重 ❌（未排期）
-
-**现状**：`per_frame` 的疏水检测器实现了"同一 `(group_id, residue_id)` 对只保留平均距离
-最近的 pair"的后处理去重（见 `hydrophobic_detector_per_frame.py`）；`two_pass` **未实现**，
-代码内留有 TODO（`hydrophobic_detector_two_pass.py:80`）。
-
-**影响**：同一体系两种策略的疏水对数不同——D927（101 帧）实测 two_pass 2366 对、
-per_frame 705 对（3.4 倍）。该差异会传导到依赖疏水对集合的功能：
-`--mark-redundant` 的标记数 two_pass 67 对 / 749 对-帧，per_frame 9 对 / 143 对-帧
-（见 #2 与 `doc/redundancy_marking_design.md` §8）。
-
-**注意（落地时必须同步）**：
-1. 重跑 `Tests/unittests/test_redundancy.py` 的 two_pass 基线（2366 / 67 / 749）
-   与 `doc/redundancy_marking_design.md` §8 的数字；
-2. 重跑 `Tests/unittests/test_pipeline.py::TestRunMarking` 中写死的 67 / 749；
-3. 检查 `docs/reference/limitations.md` 的"跨策略差异"条目是否需要删除。
-
-**优先级**：低（不影响正确性，仅跨策略一致性）
 
 ---
 
