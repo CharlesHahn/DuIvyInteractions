@@ -10,9 +10,15 @@
   - 标记写回采用同目录临时文件 + `os.replace` 原子替换；仅本次 hydro/pi 均成功才标记
   - `hydrophobic.h5` 新增可选 `flags/` 组（format 1.0 不变）；`dii export` 的 summary CSV 增加 `avg_redundant_pi_stacking` 列（活跃帧中 True 的比例），xvg/xpm 不过滤
   - 无 `hydrophobic` / `per_tuple` 直接报错；hydro/pi 失败时不写 flags 且非零退出
-  - 实测 D927：two_pass 2366 对 / 67 对 / 749 对-帧；per_frame 2351 对 / 67 对 / 749 对-帧
-  - **同日裁决：移除 per_frame/per_tuple 的疏水同残基聚合**（疏水是原子级相互作用，同残基去重会丢弃真实原子对接触）；PLIP `refine_hydrophobic` 规则 2/3 不采用，两策略标记基线对齐
+  - 实测 D927（同残基聚合移除后）：two_pass 2366 对 / 67 对 / 749 对-帧；per_frame 2351 对 / 67 对 / 749 对-帧
   - 设计/审查：`doc/redundancy_marking_design.md`
+
+### 2026-11-16
+
+- **移除疏水同残基去重**（用户裁决：疏水是**原子级**相互作用，同残基去重丢弃真实的原子对接触、影响数据准确性；PLIP `refine_hydrophobic` 规则 2/3 不采用）：
+  - 删除 per_frame `_deduplicate`（跨帧全局决策 + "全 key 最优"连锁删除，D927 实测 37% 接触组整组消失）与 per_tuple `_post_process`（死代码）
+  - 移除后两策略基线对齐：标记数一致（67 对 / 749 对-帧）；对数残差（2351 vs 2366）仅来自候选策略
+  - 测试基线更新：D927 per_frame 705→2351；CHARMM 25→157、GROMOS 16→79（旧值为 1001 帧全局去重的失真结果）
 
 ### 2026-11-06
 

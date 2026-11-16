@@ -10,8 +10,14 @@
   - write-back uses a same-directory temporary file + `os.replace`; marking runs only when this run's hydro and pi both succeed
   - `hydrophobic.h5` gains an optional `flags/` group (format 1.0 unchanged); `dii export` adds `avg_redundant_pi_stacking` to the summary CSV (fraction of active frames marked True), while xvg/xpm are not filtered
   - missing `hydrophobic` / `per_tuple` errors out; hydro/pi failure writes no flags and exits non-zero
-  - D927 measured: two_pass 2366 pairs / 67 pairs / 749 pair-frames; per_frame 2351 pairs / 67 pairs / 749 pair-frames
-  - **Same-day ruling: removed the per_frame/per_tuple same-residue hydrophobic aggregation** (hydrophobic is an atomic-level interaction; same-residue dedup discards real atom-pair contacts); PLIP `refine_hydrophobic` rules 2/3 not adopted; marking baselines of both strategies now agree
+  - D927 measured (after same-residue aggregation removal): two_pass 2366 pairs / 67 pairs / 749 pair-frames; per_frame 2351 pairs / 67 pairs / 749 pair-frames
+
+### 2026-11-16
+
+- **Removed the hydrophobic same-residue deduplication** (user ruling: hydrophobic is an **atomic-level** interaction; same-residue dedup discards real atom-pair contacts and harms data accuracy; PLIP `refine_hydrophobic` rules 2/3 not adopted):
+  - removed per_frame `_deduplicate` (cross-frame global decision + "best-for-all-keys" chain deletion; 37% of contact groups vanished entirely on D927) and per_tuple `_post_process` (dead code)
+  - after removal, both strategies align: identical marking counts (67 pairs / 749 pair-frames); the pair-count residual (2351 vs 2366) comes only from the candidate strategy
+  - test baselines updated: D927 per_frame 705→2351; CHARMM 25→157, GROMOS 16→79 (old values were artifacts of 1001-frame global dedup)
   - design/review: `doc/redundancy_marking_design.md`
 
 ### 2026-11-06
