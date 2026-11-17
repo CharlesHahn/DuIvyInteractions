@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""水桥检测器。
+"""水桥检测器（PerTuple 策略）。
 
 判据：水分子位于供体和受体之间，距离和角度满足 PLIP 定义。
 参考：PLIP, Jiang et al. 2005。
+
+⚠️ 本策略**保留 PLIP 旧判据**，未采用 `doc/water_bridge_design.md` 的显式-H 新判据：
+该策略"逐候选组遍历全部帧"，架构上无法实现跨候选组的配额（每水 ≤2 桥）。
+PerFrame / TwoPass 策略已采用新判据；本策略按 AGENTS.md 处于"可能被舍弃"状态，测试不跑。
 """
 
 import numpy as np

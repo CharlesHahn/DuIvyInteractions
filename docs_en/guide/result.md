@@ -23,6 +23,7 @@ Top 5 occupancies:
 
 - **Pairs**: the number of group pairs of this type (`Interaction.n_pairs`). The detectors keep only pairs judged to exist in at least one frame; candidate pairs that never occur do not enter the results or the exported files.
 - **Frames / time range**: the total number of frames and the first-to-last frame time (ps, one decimal place).
+- **Flags**: present only for marked h5 files, formatted as `redundant_pi_stacking: N/M pairs (K pair-frames)`.
 - **Top N occupancy**: the N pairs with the highest occupancy (`OVERVIEW_TOP_N = 5`). Occupancy = number of frames in which the pair exists / total number of frames (`Interaction.occupancy()`), i.e. the fraction of the simulation during which the interaction is present, in the range 0–1.
 
 ## Output File Overview
@@ -60,6 +61,9 @@ xvg is the standard GROMACS time series format and can be plotted with DuIvyTool
 | `occupancy` | Occupancy (0–1, four decimal places) |
 | `avg_<metric>` | Mean of the metric over **active frames** (frames where the pair exists) |
 | `std_<metric>` | Standard deviation of the metric over active frames |
+| `avg_redundant_pi_stacking` | Present only with `--mark-redundant`: fraction of active frames overlapping π-π stacking (0–1) |
+
+> Marking is an additional column; it **does not delete** any hydrophobic row/frame, and xvg/xpm still contain all original data. If the overview shows `Flags: redundant_pi_stacking: N/M pairs (K pair-frames)`, N hydrophobic pairs (K pair-frames) overlap π-π stacking; h5 files produced without marking have neither the column nor the line.
 
 The statistics are computed over active frames only (the code takes `metrics[i][existence[i]]` and uses nanmean/nanstd); if all active-frame values of a metric are NaN, the corresponding cells are left empty. String metrics (e.g. the π-stacking `pistacking_type`) do not enter the CSV.
 
@@ -103,7 +107,7 @@ The `<type>_<metric>.xvg` files and the metric columns of `summary.csv` are defi
 | `hydrophobic` | `distance`: atom-atom distance (Å) |
 | `halogen_bond` | `distance`: X···A distance (Å); `don_angle`: C-X···A angle (°); `acc_angle`: X···A-R angle (°) |
 | `metal_coordination` | `distance`: metal-ligand distance (Å) |
-| `water_bridge` | `dist_dw`: D-Ow distance (Å); `dist_wa`: Ow-A distance (Å); `theta`: O-H···Ow angle (°); `omega`: H-Ow···A angle (°) |
+| `water_bridge` | `dist_h_ow`: H···Ow distance (Å); `angle_dh_ow`: D-H···Ow angle (°); `dist_d_ow`: D···Ow distance (Å); `dist_hw_a`: Hw···A distance (Å); `angle_ow_hw_a`: Ow-Hw···A angle (°); `dist_ow_a`: Ow···A distance (Å); `angle_h_ow_a`: donor H–Ow···A angle (°, water-in-between constraint) |
 | `pi_cation` | `distance`: ring-charge distance (Å); `offset`: offset (Å) |
 
 ## Pair Label Format

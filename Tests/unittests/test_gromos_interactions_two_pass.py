@@ -4,7 +4,7 @@
 覆盖：氢键 / 疏水（蛋白-配体间）；盐桥 / π-π（蛋白内）。
 使用 `Tests/test_MD_case_gromos/` 真实 tpr+xtc。
 
-⚠️ 注意：本测试的全部数值断言（pair 数：氢键 379、疏水 161、
+⚠️ 注意：本测试的全部数值断言（pair 数：氢键 292、疏水 161、
 盐桥 18、π-π 8）来自程序自动探测，【尚未经人工核验】
 （未与 gmx 工具或人工分子分析交叉确认）。数值可能与真实化学
 不符，请谨慎引用，待人工核验后更新。
@@ -83,7 +83,9 @@ class TestHydrogenBondTwoPass:
         assert len(hydrogen_bonds) > 0
 
     def test_n_pairs(self, hydrogen_bonds):
-        assert hydrogen_bonds[0].n_pairs == 287  # 修复后：剔除带 H 非受体 N，H 键 pair 减少
+        # 287（A1 受体修复后）→ 292：PBC(MIC) 修正后新增 5 对跨周期边界真实氢键
+        # （MIC 3.0-3.9 Å，对应欧氏距离 78-81 Å；见 doc/TODO.md #19）
+        assert hydrogen_bonds[0].n_pairs == 292
 
     def test_all_inter_protein_ligand(self, hydrogen_bonds):
         it = hydrogen_bonds[0]

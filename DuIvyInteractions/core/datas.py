@@ -74,6 +74,8 @@ class Interaction:
         groups: 基团对列表，每对是一个 tuple
         existence: (n_pairs, n_frames) bool 数组
         metrics: 几何指标字典，值为 (n_pairs, n_frames) 数组
+        times: (n_frames,) 帧时间
+        flags: 可选的 (n_pairs, n_frames) bool 标记字典
     """
 
     interaction_type: str
@@ -81,6 +83,7 @@ class Interaction:
     existence: np.ndarray
     metrics: Dict[str, np.ndarray]
     times: np.ndarray
+    flags: Dict[str, np.ndarray] = field(default_factory=dict)
 
     def __post_init__(self):
         """验证数据完整性。"""
@@ -101,6 +104,21 @@ class Interaction:
                 f"times shape {times.shape} != n_frames {n_frames}"
             )
         self.times = times
+        self._validate_flags(n_pairs, n_frames)
+
+    def _validate_flags(self, n_pairs: int, n_frames: int) -> None:
+        """校验 flags 的 dtype 与 shape。"""
+        for name, values in self.flags.items():
+            flags = np.asarray(values)
+            if flags.dtype != np.bool_:
+                raise ValueError(
+                    f"flag {name} dtype {flags.dtype} != bool"
+                )
+            if flags.shape != (n_pairs, n_frames):
+                raise ValueError(
+                    f"flag {name} shape {flags.shape} != ({n_pairs}, {n_frames})"
+                )
+            self.flags[name] = flags
 
     @property
     def n_pairs(self) -> int:

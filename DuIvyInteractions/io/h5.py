@@ -7,6 +7,9 @@
 import h5py
 import numpy as np
 import json
+import os
+import stat
+import tempfile
 from typing import List, Tuple, Dict
 from pathlib import Path
 
@@ -30,6 +33,16 @@ def _json_default(obj):
     return str(obj)
 
 
+def _normalize_path(path) -> str:
+    """校验并归一化 h5 路径（str/Path，非空）。"""
+    if not isinstance(path, (str, Path)):
+        raise TypeError(f"path must be str or Path, got {type(path)}")
+    path = str(path)
+    if path == '':
+        raise ValueError("path cannot be empty")
+    return path
+
+
 def save_interactions(interactions: List[Interaction], path: str, compress: bool = True) -> None:
     """保存 Interaction 列表到 HDF5 文件。
 
@@ -38,11 +51,7 @@ def save_interactions(interactions: List[Interaction], path: str, compress: bool
         path: 输出文件路径
         compress: 是否启用 gzip 压缩
     """
-    if not isinstance(path, (str, Path)):
-        raise TypeError(f"path must be str or Path, got {type(path)}")
-    path = str(path)
-    if path == '':
-        raise ValueError("path cannot be empty")
+    path = _normalize_path(path)
 
     with h5py.File(path, 'w') as f:
         # 写入格式版本
@@ -54,6 +63,26 @@ def save_interactions(interactions: List[Interaction], path: str, compress: bool
             _write_interaction(f, i, interaction, compress)
 
 
+def save_interactions_atomic(interactions: List[Interaction], path: str,
+                             compress: bool = True) -> None:
+    """原子保存：先写同目录临时文件，成功后替换目标文件。"""
+    path = _normalize_path(path)
+    directory = os.path.dirname(os.path.abspath(path))
+    mode = None
+    if os.path.exists(path):
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
+    os.close(fd)
+    try:
+        save_interactions(interactions, tmp_path, compress)
+        os.chmod(tmp_path, mode if mode is not None else 0o644)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def load_interactions(path: str) -> List[Interaction]:
     """从 HDF5 文件加载 Interaction 列表。
 
@@ -63,13 +92,8 @@ def load_interactions(path: str) -> List[Interaction]:
     Returns:
         Interaction 列表
     """
-    if not isinstance(path, (str, Path)):
-        raise TypeError(f"path must be str or Path, got {type(path)}")
-    path = str(path)
-    if path == '':
-        raise ValueError("path cannot be empty")
+    path = _normalize_path(path)
     interactions = []
-    
     with h5py.File(path, 'r') as f:
         # 检查格式版本
         version = f.attrs.get('format_version', 'unknown')
@@ -117,6 +141,13 @@ def _write_interaction(f: h5py.File, idx: int, interaction: Interaction, compres
     # 写入 groups
     _write_groups(grp, interaction.groups, compress)
 
+    # 写入可选 flags（独立于 metrics，避免污染导出指标）
+    if interaction.flags:
+        flags_grp = grp.create_group('flags')
+        for name, values in interaction.flags.items():
+            flags_grp.create_dataset(
+                name, data=values, compression=compression)
+
 
 def _read_interaction(f: h5py.File, idx: int) -> Interaction:
     """读取单个 Interaction。"""
@@ -151,13 +182,20 @@ def _read_interaction(f: h5py.File, idx: int) -> Interaction:
     
     # 读取 groups
     groups = _read_groups(grp)
-    
+
+    # 读取可选 flags（旧文件无此组 → {}）
+    flags = {}
+    if 'flags' in grp:
+        for name in grp['flags']:
+            flags[name] = grp['flags'][name][:]
+
     return Interaction(
         interaction_type=interaction_type,
         groups=groups,
         existence=existence,
         metrics=metrics,
         times=times,
+        flags=flags,
     )
 
 

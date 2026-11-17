@@ -16,7 +16,7 @@ dii [-h] {run,export} ...
 
 ```bash
 dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATEGY]
-           [--select SELEXP ...] [--pairing any|between]
+           [--select SELEXP ...] [--pairing any|between] [--mark-redundant]
 ```
 
 ### 参数
@@ -31,6 +31,7 @@ dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATE
 | `--strategy` | 否 | `two_pass` | 检测策略：`two_pass` / `per_frame` / `per_tuple` |
 | `--select` | 否 | 无 | MDAnalysis 选择串，`action="append", nargs="+"`：可**重复出现**或**单次多值**（如 `--select "segid A" "segid B"`）；每个值定义一个**独立**的原子集合（不合并）。基团须**完整属于**某一个 select 才进入参与池（见下文"用户基团选择与过滤"） |
 | `--pairing` | 否 | `any` | 配对规则：`any` = 参与池内全部候选不设配对约束（默认）；`between` = 仅保留两端基团分属不同 select 的候选对（需 ≥2 个 select，否则报错） |
+| `--mark-redundant` | 否 | 关 | 标记与 π-π 堆积重叠的疏水对-帧（**只标记、不删除**）。只跑 `hydrophobic` 时会自动补跑 `pi_stacking` 并在输出目录保留其 h5；未请求 `hydrophobic` 或使用 `per_tuple` 时报错 |
 
 `--ff` 四个取值对应的识别器（`DuIvyInteractions/group_identifiers/__init__.py`）：
 
@@ -50,6 +51,33 @@ dii run -t TPR -f XTC -o OUTPUT --ff FF [--interactions LIST] [--strategy STRATE
 - `--interactions` 值先统一转小写、去除首尾空白，再按逗号切分（`DII.py` 的 `main`）。
 - `all` 是默认值，等价于"全部 8 类"；**`all` 不得与其他类型混用**，混用时报错 `'all' cannot be mixed with other types`。
 - 单类型检测失败（如体系不含金属、无卤素）只打印 `[WARN] <类型> detection failed: <原因>`，不中断其余类型。
+
+### 疏水-芳香重叠标记（--mark-redundant）
+
+芳香环碳同时满足疏水定义，π-π 堆积与疏水可能对同一物理接触重复计数。`--mark-redundant`
+在检测后做原子级、逐帧标记，**不删除**任何原始记录：
+
+```bash
+# 只跑疏水也安全：自动补跑 pi_stacking，并保留其 h5
+dii run -t md.tpr -f md.xtc -o out/ --ff amber \
+        --interactions hydrophobic --mark-redundant
+
+# 已显式请求 π-π：直接使用本次结果，不重复补跑
+dii run -t md.tpr -f md.xtc -o out/ --ff amber \
+        --interactions hydrophobic,pi_stacking --mark-redundant
+```
+
+行为：
+- 标记写入 `hydrophobic.h5` 的 `flags/redundant_pi_stacking`（bool 矩阵，`flags ⊆ existence`）；
+  `dii export -i out/hydrophobic.h5` 的 CSV 增加 `avg_redundant_pi_stacking` 列（活跃帧中 True 的比例）。
+- 只跑 `hydrophobic` 时会自动补跑 `pi_stacking`（`[INFO] auto-running ...`），输出目录会多一个
+  `pi_stacking.h5`；该文件可保留，也可在标记完成后删除（flags 已内嵌于 hydrophobic.h5）。
+- 未请求 `hydrophobic`、或 `--strategy per_tuple` 时直接报错退出；hydro/pi 任一检测失败时
+  不写 flags 并报错退出（不会静默成功）。
+- 标记只加列，**不删 xvg/xpm 数据**；需要“干净”结果请按 CSV 列自行过滤。
+- 不带 `--mark-redundant` 重跑会重新生成 `hydrophobic.h5`，已有 flags 会被清除。
+- 标记只在 `dii run` 阶段产生；已有 h5 不能事后补标记，需重新运行。
+- `--select` 截断芳香环时，该环不进入 π-π（与显式 π-π 结果一致），相关疏水对不会被标记。
 
 ### 用户基团选择与过滤（--select / --pairing）
 
@@ -232,7 +260,7 @@ Top 5 occupancies:
 | `<类型>_<指标>.xvg` | 每个数值指标的时间序列，每列一条曲线（对应一个基团对） |
 | `<类型>_existence.xpm` | 存在性热力图（行=pair，列=帧；白=No，蓝=Yes） |
 | `<类型>_type.xpm` | 仅 π-堆积：堆积类型图（0=无 / 1=T 型 / 2=平行） |
-| `<类型>_summary.csv` | 每对的汇总统计（`pair_label, occupancy, avg_<指标>, std_<指标>`） |
+| `<类型>_summary.csv` | 每对的汇总统计（`pair_label, occupancy, avg_<指标>, std_<指标>`；带 `--mark-redundant` 的 hydrophobic 末尾多 `avg_redundant_pi_stacking`） |
 
 各类型的数值指标（`<类型>_<指标>.xvg` 的文件名由此决定，数据来自各导出器的 `metric_labels`）：
 
@@ -244,7 +272,7 @@ Top 5 occupancies:
 | `hydrophobic` | `distance` |
 | `halogen_bond` | `distance`（X···A 距离）、`don_angle`（C-X···A 角）、`acc_angle`（X···A-R 角） |
 | `metal_coordination` | `distance`（金属-配位原子距离） |
-| `water_bridge` | `dist_dw`（D-Ow）、`dist_wa`（Ow-A）、`theta`（O-H···Ow 角）、`omega`（H-Ow···A 角） |
+| `water_bridge` | `dist_h_ow`（H···Ow）、`angle_dh_ow`（D-H···Ow 角）、`dist_d_ow`（D···Ow）、`dist_hw_a`（Hw···A）、`angle_ow_hw_a`（Ow-Hw···A 角）、`dist_ow_a`（Ow···A）、`angle_h_ow_a`（供体H–Ow···A 角） |
 | `pi_cation` | `distance`（环-电荷距离）、`offset`（偏移） |
 
 文件名不以 Interaction 在 h5 中的序号命名，而以类型名命名——`dii run` 输出的原始 h5 文件名（`<类型>.h5`）与导出文件名（`<类型>_xxx`）一一对应。
@@ -254,6 +282,7 @@ Top 5 occupancies:
 - `0`：成功
 - 非零：参数错误、文件不存在/损坏、未知类型、空结果等，均通过 `SystemExit` 抛出（如 `unknown interaction type: 'xxx'. Available: ...`、`'all' cannot be mixed with other types`、`cannot read h5 file: ...`）。
 - `--select` / `--pairing` 相关错误同样非零退出：输出带 `error:` 前缀的友好提示（如 `error: select 语法错误: ...`、`error: select #1 未选中任何原子`、`error: --pairing between 需要至少 2 个 --select`、`error: 参与池内无可用基团（非水基团 0 个）...`），不暴露 traceback。
+- `--mark-redundant` 相关错误同样非零退出：未请求 `hydrophobic`（`error: --mark-redundant requires hydrophobic`）、`per_tuple`（`error: --mark-redundant does not support per_tuple`）、或 hydro/pi 检测失败/写回失败（`error: mark-redundant skipped: ...`）。成功标记（包括 0 重叠）退出 0。
 
 ## 下一步
 

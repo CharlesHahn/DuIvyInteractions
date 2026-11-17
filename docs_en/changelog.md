@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.1.0 (2026-11-17)
+
+### 2026-11-14
+
+- **Hydrophobic-aromatic overlap marking (TODO #2)**: `dii run --mark-redundant` marks hydrophobic pair-frames overlapping π-π stacking in `Interaction.flags` (key `redundant_pi_stacking`), **marking only, never removing**:
+  - atom-level × per-frame; `flags = overlap & existence`, guaranteeing `flags ⊆ existence`
+  - a hydrophobic-only run auto-runs `pi_stacking` (its h5 is retained); an explicitly requested π-π run is not duplicated
+  - write-back uses a same-directory temporary file + `os.replace`; marking runs only when this run's hydro and pi both succeed
+  - `hydrophobic.h5` gains an optional `flags/` group (format 1.0 unchanged); `dii export` adds `avg_redundant_pi_stacking` to the summary CSV (fraction of active frames marked True), while xvg/xpm are not filtered
+  - missing `hydrophobic` / `per_tuple` errors out; hydro/pi failure writes no flags and exits non-zero
+  - D927 measured (after same-residue aggregation removal): two_pass 2366 pairs / 67 pairs / 749 pair-frames; per_frame 2351 pairs / 67 pairs / 749 pair-frames
+
+### 2026-11-16
+
+- **Removed the hydrophobic same-residue deduplication** (user ruling: hydrophobic is an **atomic-level** interaction; same-residue dedup discards real atom-pair contacts and harms data accuracy; PLIP `refine_hydrophobic` rules 2/3 not adopted):
+  - removed per_frame `_deduplicate` (cross-frame global decision + "best-for-all-keys" chain deletion; 37% of contact groups vanished entirely on D927) and per_tuple `_post_process` (dead code)
+  - after removal, both strategies align: identical marking counts (67 pairs / 749 pair-frames); the pair-count residual (2351 vs 2366) comes only from the candidate strategy
+  - test baselines updated: D927 per_frame 705→2351; CHARMM 25→157, GROMOS 16→79 (old values were artifacts of 1001-frame global dedup)
+  - design/review: `doc/redundancy_marking_design.md`
+
+### 2026-11-06
+
+- **Water-bridge criteria switched to explicit-hydrogen standard + three-layer quota** (`per_frame` / `two_pass`):
+  - each side is judged as a hydrogen bond (Baker & Hubbard 1984): donor side `H···Ow ≤ 2.5 Å` and `D-H···Ow ≥ 120°`; acceptor side `Hw···A ≤ 2.5 Å` and `Ow-Hw···A ≥ 120°`
+  - the "water in between" constraint is retained: `∠(donor H–Ow–acceptor A) ∈ [71°, 140°]` (PLIP `omega` semantics)
+  - three-layer quota (per frame): each water hydrogen maps to at most 1 acceptor, each water oxygen to at most 2 donors, and each water yields at most 2 bridges
+  - metrics are now `dist_h_ow` / `angle_dh_ow` / `dist_d_ow` / `dist_hw_a` / `angle_ow_hw_a` / `dist_ow_a` / `angle_h_ow_a` (the old `dist_dw`/`dist_wa`/`theta`/`omega` are retired)
+  - the `per_tuple` strategy (no longer maintained) keeps the legacy PLIP criteria
+  - design document: `doc/water_bridge_design.md`
+
 ## v0.0.4 (2026-10-14)
 
 ### 2026-10-14

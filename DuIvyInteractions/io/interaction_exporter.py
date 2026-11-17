@@ -311,6 +311,9 @@ class InteractionExporter(ABC):
                 numeric_metrics.append(name)
                 headers.append(f"avg_{name}")
                 headers.append(f"std_{name}")
+        flag_names = list(interaction.flags)
+        for name in flag_names:
+            headers.append(f"avg_{name}")
 
         # 逐行
         rows = []
@@ -327,6 +330,9 @@ class InteractionExporter(ABC):
                 else:
                     row.append("")
                     row.append("")
+            for name in flag_names:
+                active = interaction.flags[name][i][interaction.existence[i]]
+                row.append(f"{np.mean(active):.4f}" if active.size else "")
             rows.append(row)
 
         # 写文件

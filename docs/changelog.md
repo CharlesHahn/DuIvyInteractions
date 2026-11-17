@@ -1,5 +1,35 @@
 # 变更日志
 
+## v0.1.0（2026-11-17）
+
+### 2026-11-14
+
+- **疏水-芳香重叠标记（TODO #2）**：`dii run --mark-redundant` 在检测后把与 π-π 堆积重叠的疏水对-帧标记到 `Interaction.flags`（键 `redundant_pi_stacking`），**只标记、不删除**：
+  - 原子级 × 逐帧；`flags = overlap & existence`，保证 `flags ⊆ existence`
+  - 只跑 `hydrophobic` 时自动补跑 `pi_stacking`（保留其 h5）；已请求 π-π 时不重复补跑
+  - 标记写回采用同目录临时文件 + `os.replace` 原子替换；仅本次 hydro/pi 均成功才标记
+  - `hydrophobic.h5` 新增可选 `flags/` 组（format 1.0 不变）；`dii export` 的 summary CSV 增加 `avg_redundant_pi_stacking` 列（活跃帧中 True 的比例），xvg/xpm 不过滤
+  - 无 `hydrophobic` / `per_tuple` 直接报错；hydro/pi 失败时不写 flags 且非零退出
+  - 实测 D927（同残基聚合移除后）：two_pass 2366 对 / 67 对 / 749 对-帧；per_frame 2351 对 / 67 对 / 749 对-帧
+  - 设计/审查：`doc/redundancy_marking_design.md`
+
+### 2026-11-16
+
+- **移除疏水同残基去重**（用户裁决：疏水是**原子级**相互作用，同残基去重丢弃真实的原子对接触、影响数据准确性；PLIP `refine_hydrophobic` 规则 2/3 不采用）：
+  - 删除 per_frame `_deduplicate`（跨帧全局决策 + "全 key 最优"连锁删除，D927 实测 37% 接触组整组消失）与 per_tuple `_post_process`（死代码）
+  - 移除后两策略基线对齐：标记数一致（67 对 / 749 对-帧）；对数残差（2351 vs 2366）仅来自候选策略
+  - 测试基线更新：D927 per_frame 705→2351；CHARMM 25→157、GROMOS 16→79（旧值为 1001 帧全局去重的失真结果）
+
+### 2026-11-06
+
+- **水桥判据改为显式氢标准 + 三层配额**（`per_frame` / `two_pass`）：
+  - 两侧各判一个氢键（Baker & Hubbard 1984）：供体侧 `H···Ow ≤ 2.5 Å` 且 `D-H···Ow ≥ 120°`；受体侧 `Hw···A ≤ 2.5 Å` 且 `Ow-Hw···A ≥ 120°`
+  - 保留"水在中间"约束：`∠(供体H–Ow–受体A) ∈ [71°, 140°]`（PLIP `omega` 语义）
+  - 三层配额（逐帧）：每个水 H 最多 1 个受体、每个水 O 最多 2 个供体、每水最多 2 桥
+  - 指标改为 `dist_h_ow` / `angle_dh_ow` / `dist_d_ow` / `dist_hw_a` / `angle_ow_hw_a` / `dist_ow_a` / `angle_h_ow_a`（旧 `dist_dw`/`dist_wa`/`theta`/`omega` 停用）
+  - `per_tuple` 策略（已不被维护）保留旧 PLIP 判据
+  - 设计文档：`doc/water_bridge_design.md`
+
 ## v0.0.4（2026-10-14）
 
 ### 2026-10-14

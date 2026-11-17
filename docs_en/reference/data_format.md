@@ -33,6 +33,8 @@ interaction_<i>/
 │   └── pistacking_type/    # string metric (π stacking type P/T/N): flattened to a 1D string list,
 │                           #   the original shape is stored in this dataset's attrs['shape'],
 │                           #   and restored by reshape on reading
+├── flags/                  # optional flag group (only in hydrophobic.h5 with --mark-redundant)
+│   └── redundant_pi_stacking/  # (n_pairs, n_frames) bool (gzip), True = overlaps π-π
 └── groups/                 # pair data (group metadata + flattened atom data)
     ├── group_id/           # (n_groups,) global group ID (int64)
     ├── pair_index/         # (n_groups,) index of the pair each group belongs to (int64)
@@ -53,6 +55,8 @@ interaction_<i>/
         ├── atom_charge         # charge (float64)
         └── atom_mass           # atomic mass (float64)
 ```
+
+> `flags/` is an **optional** group: old readers ignore unknown groups without error; old code that loads and re-saves a file loses the group. Adding an optional group does **not** bump `format_version` (still `1.0`), because bumping would make old readers' exact-version check reject the file. `flags` has the same shape as `existence`; `redundant_pi_stacking` guarantees `flags ⊆ existence`.
 
 > Note: the `(gzip)` marker indicates that the dataset is written with gzip compression when `compress=True` (the default). **Attributes are never compressed** — the `compression` parameter applies only to datasets created by `create_dataset`.
 

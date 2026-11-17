@@ -7,10 +7,12 @@
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from DuIvyInteractions.pipeline import (
     Pipeline, ALL_INTERACTIONS, DETECTOR_CLASSES, STRATEGY_INDEX,
+    _prepare_run_names, _finish_marking, _mark_hydrophobic_redundancy,
 )
 from DuIvyInteractions.system_readers import GmxTprReader
 from DuIvyInteractions.group_identifiers import AmberFFGroupIdentifier
@@ -18,8 +20,9 @@ from DuIvyInteractions.interaction_detectors import (
     HydrogenBondDetectorTwoPass, HydrogenBondDetectorPerFrame,
     HydrogenBondDetectorPerTuple,
 )
-from DuIvyInteractions.io.h5 import load_interactions
-from DuIvyInteractions.core.datas import Group
+from DuIvyInteractions.io.h5 import load_interactions, save_interactions
+from DuIvyInteractions.core.datas import AtomData, Group, Interaction
+from DuIvyInteractions.redundancy import FLAG_PI_OVERLAP
 
 
 TPR_FILE = Path(__file__).parent.parent / "test_MD_case_amber" / "md.tpr"
@@ -248,3 +251,169 @@ class TestWaterResidues:
         types = {g.group_type for g in groups}
         assert "water" in types
         assert "metal_binding" not in types, "HO4 水不应是 metal_binding"
+
+
+class TestPrepareRunNames:
+    """mark 参数对实际运行类型列表的影响。"""
+
+    def test_mark_off_keeps_requested(self):
+        names = _prepare_run_names(["hydrophobic"], False, "two_pass")
+        assert names == ["hydrophobic"]
+
+    def test_mark_on_auto_adds_pi(self, capsys):
+        names = _prepare_run_names(["hydrophobic"], True, "two_pass")
+        assert names == ["hydrophobic", "pi_stacking"]
+        assert "auto-running pi_stacking" in capsys.readouterr().out
+
+    def test_mark_on_no_duplicate_pi(self):
+        names = _prepare_run_names(
+            ["hydrophobic", "pi_stacking"], True, "two_pass")
+        assert names == ["hydrophobic", "pi_stacking"]
+
+    def test_mark_requires_hydrophobic(self):
+        with pytest.raises(ValueError, match="requires hydrophobic"):
+            _prepare_run_names(["salt_bridge"], True, "two_pass")
+
+    def test_mark_rejects_per_tuple(self):
+        with pytest.raises(ValueError, match="does not support per_tuple"):
+            _prepare_run_names(["hydrophobic"], True, "per_tuple")
+
+
+class TestFinishMarking:
+    """标记阶段只使用本次成功的类型，禁止读旧文件。"""
+
+    def test_missing_dependency_skips_before_io(self, monkeypatch):
+        import DuIvyInteractions.pipeline as pipeline_mod
+        called = {"n": 0}
+
+        def unexpected(*args, **kwargs):
+            called["n"] += 1
+            raise AssertionError("should not read marking inputs")
+
+        monkeypatch.setattr(
+            pipeline_mod, "_mark_hydrophobic_redundancy", unexpected)
+        with pytest.raises(ValueError, match="pi_stacking detection failed"):
+            _finish_marking(str(TMP_DIR / "stale"), {"hydrophobic"})
+        assert called["n"] == 0
+
+
+class TestRunMarking:
+    """run 全链路：默认无 flags；--mark-redundant 自动补跑并写回。"""
+
+    def test_default_run_has_no_flags_and_no_pi(self):
+        out = TMP_DIR / "mark_default"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"])
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        assert interaction.flags == {}
+        assert not (out / "pi_stacking.h5").exists()
+
+    def test_mark_auto_runs_pi_and_writes_flags(self, capsys):
+        out = TMP_DIR / "mark_auto"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"], mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert int(flags.sum()) == 749
+        assert int(flags.any(axis=1).sum()) == 67
+        assert not np.any(flags & ~interaction.existence)
+        captured = capsys.readouterr().out
+        assert "auto-running pi_stacking" in captured
+        assert "marked 67 hydrophobic pairs (749 pair-frames)" in captured
+
+    def test_mark_per_frame_uses_per_frame_baseline(self):
+        out = TMP_DIR / "mark_per_frame"
+        Pipeline("amber", "per_frame").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"], mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert int(flags.sum()) == 749
+        assert int(flags.any(axis=1).sum()) == 67
+
+    def test_mark_with_select_writes_flags(self):
+        """--select 限定参与池后，π-π 与疏水同池过滤，标记仍成立。"""
+        out = TMP_DIR / "mark_select"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"], select=["protein"],
+            mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert int(flags.sum()) == 533
+        assert int(flags.any(axis=1).sum()) == 47
+        assert not np.any(flags & ~interaction.existence)
+
+    def test_mark_with_empty_pi_result(self):
+        """--pairing between 无跨侧 π-π 时，pi_stacking.h5 为空 → 标记全 False。"""
+        out = TMP_DIR / "mark_between"
+        Pipeline("amber", "two_pass").run(
+            str(TPR_FILE), str(XTC_FILE), str(out),
+            interactions=["hydrophobic"],
+            select=["segid seg_0_RBD_pro", "segid seg_2_KRAS_pro"],
+            pairing="between", mark_redundant=True)
+        assert (out / "pi_stacking.h5").exists()
+        assert load_interactions(str(out / "pi_stacking.h5")) == []
+        interaction = load_interactions(str(out / "hydrophobic.h5"))[0]
+        flags = interaction.flags[FLAG_PI_OVERLAP]
+        assert flags.shape == interaction.existence.shape
+        assert not flags.any()
+
+
+class TestMarkingInputGuards:
+    """标记输入的多 Interaction 歧义防护。"""
+
+    def _group(self, group_id, group_type, atom_idx):
+        atom = AtomData(
+            atom_global_idx=atom_idx, atom_idx_in_residue=0,
+            atom_name="C", atom_type="ca", atom_element="C",
+            atom_charge=0.0, atom_mass=12.0,
+        )
+        return Group(group_id=group_id, group_type=group_type,
+                     molecule="m", residue_name="PHE", residue_id=1,
+                     atoms=[atom])
+
+    def test_multiple_pi_interactions_raise(self):
+        out = TMP_DIR / "multi_pi"
+        out.mkdir(parents=True, exist_ok=True)
+        ring1 = self._group(1, "aromatic_ring", 10)
+        ring2 = self._group(2, "aromatic_ring", 20)
+        hydro1 = self._group(3, "hydrophobic", 10)
+        hydro2 = self._group(4, "hydrophobic", 20)
+        pi = Interaction(
+            interaction_type="pi_stacking", groups=[(ring1, ring2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        hydrophobic = Interaction(
+            interaction_type="hydrophobic", groups=[(hydro1, hydro2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        save_interactions([hydrophobic], str(out / "hydrophobic.h5"))
+        save_interactions([pi, pi], str(out / "pi_stacking.h5"))
+        with pytest.raises(ValueError, match="multiple pi_stacking"):
+            _mark_hydrophobic_redundancy(str(out))
+
+    def test_non_pi_interaction_in_pi_file_raises(self):
+        out = TMP_DIR / "non_pi"
+        out.mkdir(parents=True, exist_ok=True)
+        ring1 = self._group(1, "aromatic_ring", 10)
+        ring2 = self._group(2, "aromatic_ring", 20)
+        hydro1 = self._group(3, "hydrophobic", 10)
+        hydro2 = self._group(4, "hydrophobic", 20)
+        wrong_type = Interaction(
+            interaction_type="salt_bridge", groups=[(ring1, ring2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        hydrophobic = Interaction(
+            interaction_type="hydrophobic", groups=[(hydro1, hydro2)],
+            existence=np.ones((1, 1), dtype=bool), metrics={},
+            times=np.array([0.0]))
+        save_interactions([hydrophobic], str(out / "hydrophobic.h5"))
+        save_interactions([wrong_type], str(out / "pi_stacking.h5"))
+        with pytest.raises(ValueError, match="no pi_stacking"):
+            _mark_hydrophobic_redundancy(str(out))

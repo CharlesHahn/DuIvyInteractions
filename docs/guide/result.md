@@ -23,6 +23,7 @@ Top 5 occupancies:
 
 - **Pairs**：该类型下基团对的数量（`Interaction.n_pairs`）。检测器只保留至少在一帧被判定存在的基团对，从未出现的候选对不会进入结果与导出文件。
 - **Frames / Time range**：轨迹总帧数与首尾帧时间（ps，保留 1 位小数）。
+- **Flags**：仅带标记的 h5 出现，格式 `redundant_pi_stacking: N/M pairs (K pair-frames)`。
 - **Top N 占位率**：占位率最高的 N 对（`OVERVIEW_TOP_N = 5`）。占位率（occupancy）= 该对存在的帧数 / 总帧数（`Interaction.occupancy()`），即该相互作用在整个模拟中出现的时间比例，取值 0–1。
 
 ## 输出文件总览
@@ -60,6 +61,11 @@ xvg 是 GROMACS 标准时间序列格式，可用 DuIvyTools 或 Xmgrace 绘图�
 | `occupancy` | 占位率（0–1，保留 4 位小数） |
 | `avg_<metric>` | 该指标在**活跃帧**（该对存在的帧）上的均值 |
 | `std_<metric>` | 该指标在活跃帧上的标准差 |
+| `avg_redundant_pi_stacking` | 仅 `--mark-redundant` 时出现：活跃帧中与 π-π 堆积重叠的比例（0–1） |
+
+> 标记为附加列，**不删除**任何疏水行/帧；xvg/xpm 仍包含全部原始数据。若概览中出现
+> `Flags: redundant_pi_stacking: N/M pairs (K pair-frames)`，表示 N 对疏水（共 K 个对-帧）
+> 与 π-π 重叠；未请求标记的 h5 没有该列/该行。
 
 统计只基于活跃帧（代码取 `metrics[i][existence[i]]` 并用 nanmean/nanstd）；某对活跃帧的指标全部为 NaN 时，对应单元格留空。字符串指标（如 π-堆积的 `pistacking_type`）不进入 CSV。
 
@@ -103,7 +109,7 @@ xpm 是 GROMACS 标准矩阵热力图格式，可直观查看"哪些基团对在
 | `hydrophobic` | `distance`：原子间距（Å） |
 | `halogen_bond` | `distance`：X···A 距离（Å）；`don_angle`：C-X···A 角（°）；`acc_angle`：X···A-R 角（°） |
 | `metal_coordination` | `distance`：金属-配位原子距离（Å） |
-| `water_bridge` | `dist_dw`：D-Ow 距离（Å）；`dist_wa`：Ow-A 距离（Å）；`theta`：O-H···Ow 角（°）；`omega`：H-Ow···A 角（°） |
+| `water_bridge` | `dist_h_ow`：H···Ow 距离（Å）；`angle_dh_ow`：D-H···Ow 角（°）；`dist_d_ow`：D···Ow 距离（Å）；`dist_hw_a`：Hw···A 距离（Å）；`angle_ow_hw_a`：Ow-Hw···A 角（°）；`dist_ow_a`：Ow···A 距离（Å）；`angle_h_ow_a`：供体H–Ow···A 角（°，水在中间约束） |
 | `pi_cation` | `distance`：环心-正电中心距离（Å）；`offset`：偏移（Å） |
 
 ## 基团对标签格式

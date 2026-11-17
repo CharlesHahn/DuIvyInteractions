@@ -53,7 +53,9 @@ class TestWaterBridgePerFrame:
         assert len(water_bridges_pf) > 0
 
     def test_n_pairs(self, water_bridges_pf):
-        assert water_bridges_pf[0].n_pairs == 1329
+        # 新判据（显式 H + Baker-Hubbard + 水在中间 + 三层配额）：109 对（原 PLIP 1329）；
+        # PerFrame 候选只基于第一帧（设计原则）
+        assert water_bridges_pf[0].n_pairs == 109
 
 
 class TestWaterBridgeTwoPass:
@@ -62,4 +64,5 @@ class TestWaterBridgeTwoPass:
         assert len(water_bridges_tp) > 0
 
     def test_n_pairs(self, water_bridges_tp):
-        assert water_bridges_tp[0].n_pairs == 1678
+        # 新判据候选数：414，其中有存在帧 367（原 PLIP 宽松判据 1678）
+        assert water_bridges_tp[0].n_pairs == 414

@@ -17,13 +17,16 @@ from ..core.datas import Group, Interaction
 from ..core.pbc import get_box
 
 
-# PLIP 阈值
-WATER_BRIDGE_MINDIST = 2.5   # Å，水 O 到极性原子最小距离
-WATER_BRIDGE_MAXDIST = 4.1   # Å，水 O 到极性原子最大距离
-WATER_BRIDGE_OMEGA_MIN = 71  # °，受体-水O-供体H 最小角度
-WATER_BRIDGE_OMEGA_MAX = 140 # °，受体-水O-供体H 最大角度
-WATER_BRIDGE_THETA_MIN = 100 # °，水O-供体H-供体D 最小角度
-PREFILTER_CUTOFF = WATER_BRIDGE_MAXDIST * 2  # 8.2 Å
+# 氢键几何判据（Baker & Hubbard 1984；设计见 doc/water_bridge_design.md）
+WATER_BRIDGE_HB_DIST_MAX = 2.5      # Å，H···A 距离上限
+WATER_BRIDGE_HB_ANGLE_MIN = 120.0   # °，D-H···A 角度下限
+WATER_BRIDGE_MIN_DIST = 0.5         # Å，防原子重叠下界
+WATER_BRIDGE_MAX_DONORS = 2         # 每水每帧最多供体数（2 对孤对）
+WATER_BRIDGE_MAX_BRIDGES = 2        # 每水每帧最多桥数（2 个 H）
+WATER_BRIDGE_PREFILTER = 3.0        # Å，候选预筛半径（H···O / H_w···A）
+WATER_BRIDGE_OMEGA_MIN = 71.0       # °，A-Ow···H(供体) 最小角（"水在中间"约束）
+WATER_BRIDGE_OMEGA_MAX = 140.0      # °，A-Ow···H(供体) 最大角
+PREFILTER_CUTOFF = WATER_BRIDGE_PREFILTER  # 兼容旧名
 
 
 class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
@@ -48,7 +51,8 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
 
     @property
     def metric_names(self) -> List[str]:
-        return ["dist_dw", "dist_wa", "theta", "omega"]
+        return ["dist_h_ow", "angle_dh_ow", "dist_d_ow",
+                "dist_hw_a", "angle_ow_hw_a", "dist_ow_a", "angle_h_ow_a"]
 
     # ==================== 抽象方法（基类要求，此处不使用） ====================
 
@@ -59,14 +63,17 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         raise NotImplementedError("detect() is overridden, this method is not used")
 
     def apply_threshold(self, metrics):
-        dw_ok = (metrics["dist_dw"] > WATER_BRIDGE_MINDIST) & \
-                (metrics["dist_dw"] < WATER_BRIDGE_MAXDIST)
-        wa_ok = (metrics["dist_wa"] > WATER_BRIDGE_MINDIST) & \
-                (metrics["dist_wa"] < WATER_BRIDGE_MAXDIST)
-        theta_ok = metrics["theta"] >= WATER_BRIDGE_THETA_MIN
-        omega_ok = (metrics["omega"] >= WATER_BRIDGE_OMEGA_MIN) & \
-                   (metrics["omega"] <= WATER_BRIDGE_OMEGA_MAX)
-        return dw_ok & wa_ok & theta_ok & omega_ok
+        """H···A ≤ 2.5 Å 且 D-H···A ≥ 120°（两侧各一，见设计文档 §2.2）。"""
+        dw_ok = (metrics["dist_h_ow"] > WATER_BRIDGE_MIN_DIST) & \
+                (metrics["dist_h_ow"] <= WATER_BRIDGE_HB_DIST_MAX)
+        wa_ok = (metrics["dist_hw_a"] > WATER_BRIDGE_MIN_DIST) & \
+                (metrics["dist_hw_a"] <= WATER_BRIDGE_HB_DIST_MAX)
+        theta_ok = metrics["angle_dh_ow"] >= WATER_BRIDGE_HB_ANGLE_MIN
+        omega_ok = metrics["angle_ow_hw_a"] >= WATER_BRIDGE_HB_ANGLE_MIN
+        # "水在中间"约束（PLIP omega 等价）：供体 H 与受体 A 在水 O 两侧
+        mid_ok = (metrics["angle_h_ow_a"] >= WATER_BRIDGE_OMEGA_MIN) & \
+                 (metrics["angle_h_ow_a"] <= WATER_BRIDGE_OMEGA_MAX)
+        return dw_ok & wa_ok & theta_ok & omega_ok & mid_ok
 
     # ==================== 重写 detect ====================
 
@@ -95,37 +102,46 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         if not donors or not waters or not acceptors:
             return []
 
+        # 退化检查：判据依赖水的显式 H（见设计文档 §6）
+        if any(sum(1 for a in w.atoms if a.atom_element == "H") < 2 for w in waters):
+            print("[WARN] water_bridge: water has no explicit H, skipped")
+            return []
+
         # 2. 构建索引数组
         self._donor_d_idx = np.array([g.atoms[0].atom_global_idx for g in donors])
         self._donor_h_idx = np.array([g.atoms[1].atom_global_idx for g in donors])
         self._water_ow_idx = np.array([g.atoms[0].atom_global_idx for g in waters])
         self._acceptor_a_idx = np.array([g.atoms[0].atom_global_idx for g in acceptors])
+        # 水的两个 H（每水 2 个，形状 (n_water, 2)）
+        self._water_hw_idx = np.array(
+            [[w.atoms[1].atom_global_idx, w.atoms[2].atom_global_idx] for w in waters])
 
-        # 3. 第一帧 KDTree 预筛选（PBC 感知；全对 + 按 w 分组组合三元组）
-        from MDAnalysis.lib.distances import capped_distance, calc_bonds
+        # 3. 第一帧 KDTree 预筛选（PBC 感知；基于显式 H 的距离）
+        #    设计原则：PerFrame 策略的候选集只基于第一帧（后续帧复用该候选集）
+        from MDAnalysis.lib.distances import capped_distance
         first_pos = trajectory[0].positions
         first_box = get_box(trajectory[0])
-        d_pos = first_pos[self._donor_d_idx]
+        h_pos = first_pos[self._donor_h_idx]
         w_pos = first_pos[self._water_ow_idx]
+        hw_pos = first_pos[self._water_hw_idx.ravel()]
         a_pos = first_pos[self._acceptor_a_idx]
 
-        # 全体 w↔d、w↔a 候选对（pairs[:,0]=w，两组对齐后按 w 分组）
-        dw_pairs = capped_distance(
-            w_pos, d_pos, PREFILTER_CUTOFF,
+        ho_pairs = capped_distance(
+            h_pos, w_pos, PREFILTER_CUTOFF,
             box=first_box, method='pkdtree', return_distances=False)
-        wa_pairs = capped_distance(
-            w_pos, a_pos, PREFILTER_CUTOFF,
+        hwa_pairs = capped_distance(
+            hw_pos, a_pos, PREFILTER_CUTOFF,
             box=first_box, method='pkdtree', return_distances=False)
 
-        if len(dw_pairs) == 0 or len(wa_pairs) == 0:
+        if len(ho_pairs) == 0 or len(hwa_pairs) == 0:
             return []
 
-        dw_by_w = defaultdict(list)
-        for idx in range(len(dw_pairs)):
-            dw_by_w[dw_pairs[idx, 0]].append(dw_pairs[idx, 1])
-        wa_by_w = defaultdict(list)
-        for idx in range(len(wa_pairs)):
-            wa_by_w[wa_pairs[idx, 0]].append(wa_pairs[idx, 1])
+        dw_by_w = defaultdict(set)
+        for k in range(len(ho_pairs)):
+            dw_by_w[ho_pairs[k, 1]].add(ho_pairs[k, 0])
+        wa_by_w = defaultdict(set)
+        for k in range(len(hwa_pairs)):
+            wa_by_w[hwa_pairs[k, 0] // 2].add(hwa_pairs[k, 1])
 
         common_w = set(dw_by_w) & set(wa_by_w)
         if not common_w:
@@ -135,10 +151,6 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         for wi in common_w:
             for di in dw_by_w[wi]:
                 for ai in wa_by_w[wi]:
-                    # D-A 最短距排除（MIC）
-                    if calc_bonds(d_pos[di:di+1], a_pos[ai:ai+1],
-                                  box=first_box)[0] < WATER_BRIDGE_MINDIST:
-                        continue
                     triple_d.append(di)
                     triple_w.append(wi)
                     triple_a.append(ai)
@@ -172,22 +184,25 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
 
         # 5. 预分配结果数组
         existence = np.zeros((n_triples, n_frames), dtype=bool)
-        dist_dw = np.zeros((n_triples, n_frames))
-        dist_wa = np.zeros((n_triples, n_frames))
-        theta = np.zeros((n_triples, n_frames))
-        omega = np.zeros((n_triples, n_frames))
+        metrics_out = {name: np.zeros((n_triples, n_frames))
+                       for name in self.metric_names}
         times = np.empty(n_frames)
 
-        # 6. 逐帧计算（PBC 感知）
+        # 每对的水/供体身份（配额用）
+        water_uid = np.array([waters[wi].group_id for wi in triple_w])
+        donor_uid = np.array([donors[di].group_id for di in triple_d])
+
+        # 6. 逐帧计算（PBC 感知）+ 配额
         for f, ts in enumerate(trajectory):
             times[f] = ts.time
             positions = ts.positions
-            metrics = self._compute_metrics(positions, get_box(ts))
-            dist_dw[:, f] = metrics["dist_dw"]
-            dist_wa[:, f] = metrics["dist_wa"]
-            theta[:, f] = metrics["theta"]
-            omega[:, f] = metrics["omega"]
-            existence[:, f] = self.apply_threshold(metrics)
+            frame_metrics = self._compute_metrics(positions, get_box(ts))
+            ok = self.apply_threshold(frame_metrics)
+            ok = self._apply_water_quota(
+                ok, frame_metrics, water_uid, donor_uid)
+            existence[:, f] = ok
+            for name in self.metric_names:
+                metrics_out[name][:, f] = frame_metrics[name]
 
         # 7. 过滤从未存在的三元组
         has_any = np.any(existence, axis=1)
@@ -201,20 +216,58 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
             interaction_type=self.name,
             groups=tuples,
             existence=existence[has_any],
-            metrics={
-                "dist_dw": dist_dw[has_any],
-                "dist_wa": dist_wa[has_any],
-                "theta": theta[has_any],
-                "omega": omega[has_any],
-            },
+            metrics={name: arr[has_any] for name, arr in metrics_out.items()},
             times=times,
         )]
+
+    # ==================== 配额（去重） ====================
+
+    @staticmethod
+    def _apply_water_quota(ok, frame_metrics, water_uid, donor_uid):
+        """三层配额（逐帧）：每水H≤1受体、每水O≤2供体、每水≤2桥。
+
+        设计见 doc/water_bridge_design.md §3.1。
+
+        第 3 层的候选为「受体侧保留的 (H_w, A)」×「供体侧保留的 D」组合
+        （k×m，最多 4），按两侧角度之和择优取前 2——这样"同一供体 + 水的两个 H
+        指向两个受体"可保留为 2 个桥。
+        """
+        idx = np.where(ok)[0]
+        if len(idx) == 0:
+            return ok
+        ang = frame_metrics["angle_ow_hw_a"]
+        ang_d = frame_metrics["angle_dh_ow"]
+        dh = frame_metrics["dist_h_ow"]
+        hw = frame_metrics["hw_id"]
+        keep = np.zeros_like(ok)
+        for w in np.unique(water_uid[idx]):
+            cand = idx[water_uid[idx] == w]
+            # 第 1 层：每 (水, H_w) 保留角度最优的 1 个受体
+            by_h = {}
+            for i in cand:
+                h = hw[i]
+                if h not in by_h or ang[i] > ang[by_h[h]]:
+                    by_h[h] = i
+            # 第 2 层：每水 O 保留 dist_h_ow 最小的 2 个供体（按供体去重）
+            by_d = {}
+            for i in cand:
+                d = donor_uid[i]
+                if d not in by_d or dh[i] < dh[by_d[d]]:
+                    by_d[d] = i
+            donors_kept = sorted(by_d.values(), key=lambda i: dh[i])[:WATER_BRIDGE_MAX_DONORS]
+            # 第 3 层：受体侧候选 × 供体侧候选 → 按两侧角度和择优取前 2
+            combos = [(i, j) for i in by_h.values() for j in donors_kept]
+            combos.sort(key=lambda p: -(ang[p[0]] + ang_d[p[1]]))
+            for i, _ in combos[:WATER_BRIDGE_MAX_BRIDGES]:
+                keep[i] = True
+        return keep
 
     # ==================== 向量化计算 ====================
 
     def _compute_metrics(self, positions, box=None):
         """向量化计算全部候选三元组的指标（MIC）。
 
+        受体侧对水的 HW1/HW2 各算一次，取 angle_ow_hw_a 更优者并记录 hw_id。
         box: 盒尺寸（MIC）；None = 欧氏距离（无 PBC）。
         """
         from MDAnalysis.lib.distances import calc_bonds, calc_angles
@@ -223,25 +276,35 @@ class WaterBridgeDetectorPerFrame(InteractionDetectorPerFrame):
         tw = self._triple_w
         ta = self._triple_a
 
-        # 取坐标：(n_triples, 3)
         d = positions[self._donor_d_idx[td]]
         h = positions[self._donor_h_idx[td]]
         ow = positions[self._water_ow_idx[tw]]
         a = positions[self._acceptor_a_idx[ta]]
 
-        # 距离（MIC）
-        dist_dw = calc_bonds(d, ow, box=box)
-        dist_wa = calc_bonds(ow, a, box=box)
+        # 供体侧
+        dist_h_ow = calc_bonds(h, ow, box=box)
+        dist_d_ow = calc_bonds(d, ow, box=box)
+        angle_dh_ow = np.degrees(calc_angles(d, h, ow, box=box))
 
-        # theta 角：水O-供体H-供体D（顶点 h；calc_angles 返回弧度）
-        theta = np.degrees(calc_angles(ow, h, d, box=box))
-
-        # omega 角：受体-水O-供体H（顶点 ow）
-        omega = np.degrees(calc_angles(a, ow, h, box=box))
+        # 受体侧：HW1 / HW2 各算一次，取角度更优者
+        hw1 = positions[self._water_hw_idx[tw, 0]]
+        hw2 = positions[self._water_hw_idx[tw, 1]]
+        dist_hw1 = calc_bonds(hw1, a, box=box)
+        dist_hw2 = calc_bonds(hw2, a, box=box)
+        ang1 = np.degrees(calc_angles(ow, hw1, a, box=box))
+        ang2 = np.degrees(calc_angles(ow, hw2, a, box=box))
+        use2 = ang2 > ang1
+        dist_hw_a = np.where(use2, dist_hw2, dist_hw1)
+        angle_ow_hw_a = np.where(use2, ang2, ang1)
+        dist_ow_a = calc_bonds(ow, a, box=box)
 
         return {
-            "dist_dw": dist_dw,
-            "dist_wa": dist_wa,
-            "theta": theta,
-            "omega": omega,
+            "dist_h_ow": dist_h_ow,
+            "angle_dh_ow": angle_dh_ow,
+            "dist_d_ow": dist_d_ow,
+            "dist_hw_a": dist_hw_a,
+            "angle_ow_hw_a": angle_ow_hw_a,
+            "dist_ow_a": dist_ow_a,
+            "hw_id": use2.astype(float),
+            "angle_h_ow_a": np.degrees(calc_angles(h, ow, a, box=box)),
         }

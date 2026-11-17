@@ -41,13 +41,14 @@ dii run -t <topology.tpr> -f <trajectory.xtc> -o <out_dir> --ff amber [选项]
 ```
 
 - 必填：`-t/--tpr`、`-f/--xtc`、`-o/--output`、`--ff`（支持 `amber` / `gromos` / `charmm` / `opls` 四个取值，分别对应 Amber 全家族 + GAFF、GROMOS 53A6/54A7、CHARMM36/C36m、OPLS-AA/L 的类型映射）
-- 可选：`--interactions`（逗号分隔，默认 all）；`--strategy`（`two_pass` 默认 / `per_frame` / `per_tuple`）；`--select`（MDAnalysis 选择串，可重复/多值，限定参与池）；`--pairing`（`any` 默认 / `between`，仅保留跨 select 对）
+- 可选：`--interactions`（逗号分隔，默认 all）；`--strategy`（`two_pass` 默认 / `per_frame` / `per_tuple`）；`--select`（MDAnalysis 选择串，可重复/多值，限定参与池）；`--pairing`（`any` 默认 / `between`，仅保留跨 select 对）；`--mark-redundant`（标记与 π-π 重叠的疏水对-帧，只标记不删除；只跑 hydrophobic 时自动补跑 pi_stacking；不支持 per_tuple）
 - 8 种类型：`hydrogen_bond, pi_stacking, salt_bridge, hydrophobic, halogen_bond, metal_coordination, water_bridge, pi_cation`
 
 要点：
 - 每个类型输出独立 `<type>.h5` 到输出目录
 - 单个类型失败不中断其余，打印 `[WARN] <type> detection failed: <原因>`
 - 策略：`two_pass` 默认且最快（KDTree 优化）；长轨迹（数万帧以上）优先 `two_pass`，避免 `per_frame` 预分配大矩阵；`per_tuple` 是参考实现、最慢
+- `--mark-redundant`：输出 `hydrophobic.h5` 的 `flags/redundant_pi_stacking` 与 CSV 的 `avg_redundant_pi_stacking` 列；xvg/xpm 不删数据；只跑 hydrophobic 时自动补跑 π-π（多一个 `pi_stacking.h5`）
 - 先跑少量类型验证命令正确，再全量
 
 ## dii export —— 导出结果

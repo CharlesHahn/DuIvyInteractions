@@ -853,3 +853,38 @@ class TestDIIExportAdversarial:
         # 两个 summary 都在
         summaries = [n for n in names if n.endswith("_summary.csv")]
         assert len(summaries) == 2
+
+
+class TestCsvSummaryFlags:
+    """flags 以独立列追加到 CSV，不污染 metrics。"""
+
+    def test_flag_column_value(self):
+        g1 = _make_group(0, "hydrophobic", [_make_atom(10, "CB", "C")],
+                         "LEU", 10)
+        g2 = _make_group(1, "hydrophobic", [_make_atom(20, "CB", "C")],
+                         "ILE", 20)
+        it = Interaction(
+            interaction_type="hydrophobic",
+            groups=[(g1, g2)],
+            existence=np.array([[True, True, False]]),
+            metrics={"distance": np.array([[3.8, 3.9, 9.0]])},
+            times=np.array([0.0, 10.0, 20.0]),
+            flags={"redundant_pi_stacking":
+                   np.array([[True, False, False]])},
+        )
+        path = str(TEMP_DIR / "summary_flags.csv")
+        HydrophobicExporter().to_csv_summary(it, path)
+        import csv as csv_mod
+        with open(path) as f:
+            rows = list(csv_mod.reader(f))
+        assert rows[0][-1] == "avg_redundant_pi_stacking"
+        assert float(rows[1][-1]) == pytest.approx(0.5)
+
+    def test_no_flags_no_extra_column(self, saltbridge_interaction,
+                                      saltbridge_exporter):
+        import csv as csv_mod
+        path = str(TEMP_DIR / "summary_no_flags.csv")
+        saltbridge_exporter.to_csv_summary(saltbridge_interaction, path)
+        with open(path) as f:
+            headers = next(csv_mod.reader(f))
+        assert not any(h.startswith("avg_redundant") for h in headers)

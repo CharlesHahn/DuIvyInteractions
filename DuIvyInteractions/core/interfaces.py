@@ -561,7 +561,8 @@ class InteractionDetectorTwoPass(ABC):
             times[f] = ts.time
             frame_metrics = self.compute_pair_metrics(
                 group_tuples, ts.positions, box=self._get_box(ts))
-            existence[:, f] = self.apply_threshold(frame_metrics)
+            existence[:, f] = self._post_threshold(
+                self.apply_threshold(frame_metrics), frame_metrics, group_tuples)
             for name in self.metric_names:
                 metrics[name][:, f] = frame_metrics[name]
 
@@ -587,6 +588,20 @@ class InteractionDetectorTwoPass(ABC):
     def _get_box(self, ts):
         """逐帧盒尺寸钩子（默认 None=欧氏；PBC 化子类覆盖返回 get_box(ts)）。"""
         return None
+
+    def _post_threshold(self, ok: np.ndarray, frame_metrics: Dict[str, np.ndarray],
+                        group_tuples: List[Tuple[Group, ...]]) -> np.ndarray:
+        """阈值判定后的可选后处理钩子（默认原样返回）。
+
+        Args:
+            ok: apply_threshold 返回的逐对布尔数组
+            frame_metrics: 当帧的 metrics 字典（可含非 metric_names 的临时键）
+            group_tuples: 全部候选组的元组列表（与 ok 等长）
+
+        Returns:
+            处理后的布尔数组（默认返回原值）
+        """
+        return ok
 
     # ==================== 公共接口 ====================
 

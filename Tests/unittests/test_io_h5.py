@@ -11,7 +11,9 @@ import os
 from pathlib import Path
 
 from DuIvyInteractions.core.datas import Interaction, Group, AtomData
-from DuIvyInteractions.io.h5 import save_interactions, load_interactions
+from DuIvyInteractions.io.h5 import (
+    save_interactions, save_interactions_atomic, load_interactions,
+)
 
 
 # 临时目录路径
@@ -502,3 +504,122 @@ class TestH5PathValidation:
         loaded = load_interactions(path)
         assert len(loaded) == 1
         assert loaded[0].interaction_type == "pi_stacking"
+
+
+class TestH5Flags:
+    """可选 flags 组的往返、旧文件兼容与原子写回。"""
+
+    def test_flags_roundtrip(self, sample_interaction):
+        flags = np.zeros_like(sample_interaction.existence, dtype=bool)
+        flags[0, 1] = True
+        flags[1, 3] = True
+        sample_interaction.flags["redundant_pi_stacking"] = flags
+        path = TEMP_DIR / "test_flags.h5"
+
+        save_interactions([sample_interaction], str(path))
+        loaded = load_interactions(str(path))[0]
+
+        assert set(loaded.flags) == {"redundant_pi_stacking"}
+        assert loaded.flags["redundant_pi_stacking"].dtype == bool
+        np.testing.assert_array_equal(
+            loaded.flags["redundant_pi_stacking"], flags)
+
+    def test_no_flags_group_reads_empty(self, sample_interaction):
+        path = TEMP_DIR / "test_no_flags.h5"
+        save_interactions([sample_interaction], str(path))
+        loaded = load_interactions(str(path))[0]
+        assert loaded.flags == {}
+
+    def test_flags_shape_validation(self, sample_interaction):
+        with pytest.raises(ValueError, match="flag bad shape"):
+            Interaction(
+                interaction_type=sample_interaction.interaction_type,
+                groups=sample_interaction.groups,
+                existence=sample_interaction.existence,
+                metrics=sample_interaction.metrics,
+                times=sample_interaction.times,
+                flags={"bad": np.zeros((1, 1), dtype=bool)},
+            )
+
+    def test_flags_dtype_validation(self, sample_interaction):
+        with pytest.raises(ValueError, match="flag bad dtype"):
+            Interaction(
+                interaction_type=sample_interaction.interaction_type,
+                groups=sample_interaction.groups,
+                existence=sample_interaction.existence,
+                metrics=sample_interaction.metrics,
+                times=sample_interaction.times,
+                flags={"bad": np.zeros(sample_interaction.existence.shape)},
+            )
+
+    def test_atomic_save_writes_target(self, sample_interaction):
+        path = TEMP_DIR / "test_atomic.h5"
+        save_interactions_atomic([sample_interaction], str(path))
+        assert path.exists()
+        assert not list(TEMP_DIR.glob(f".{path.name}.*.tmp"))
+        assert load_interactions(str(path))[0].n_pairs == 2
+
+    def test_atomic_save_preserves_original_on_failure(
+            self, sample_interaction, monkeypatch):
+        import DuIvyInteractions.io.h5 as h5_mod
+        path = TEMP_DIR / "test_atomic_failure.h5"
+        save_interactions([sample_interaction], str(path))
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(h5_mod, "save_interactions", fail)
+        with pytest.raises(RuntimeError, match="disk full"):
+            save_interactions_atomic([sample_interaction], str(path))
+        assert not list(TEMP_DIR.glob(f".{path.name}.*.tmp"))
+        assert load_interactions(str(path))[0].n_pairs == 2
+
+
+class TestAtomicPathValidation:
+    """原子写路径校验与权限保留（与 save_interactions 一致）。"""
+
+    @pytest.fixture
+    def sample_it(self):
+        atom = AtomData(
+            atom_global_idx=0, atom_idx_in_residue=0,
+            atom_name="C", atom_type="ca", atom_element="C",
+            atom_charge=0.0, atom_mass=12.011,
+        )
+        group = Group(
+            group_id=1, group_type="aromatic_ring", molecule="D927",
+            residue_name="D927", residue_id=1, atoms=[atom], metadata={},
+        )
+        return Interaction(
+            interaction_type="pi_stacking",
+            groups=[(group, group)],
+            existence=np.array([[True]]),
+            metrics={"distance": np.array([[4.0]])},
+            times=np.array([0.0]),
+        )
+
+    def test_bytesio_rejected(self, sample_it):
+        import io
+        with pytest.raises(TypeError):
+            save_interactions_atomic([sample_it], io.BytesIO())
+
+    def test_none_rejected(self, sample_it):
+        with pytest.raises(TypeError):
+            save_interactions_atomic([sample_it], None)
+
+    def test_empty_string_rejected(self, sample_it):
+        with pytest.raises(ValueError):
+            save_interactions_atomic([sample_it], "")
+
+    def test_pathlib_accepted(self, sample_it):
+        path = TEMP_DIR / "test_atomic_pathlib.h5"
+        save_interactions_atomic([sample_it], path)
+        assert load_interactions(path)[0].n_pairs == 1
+
+    def test_preserves_existing_mode(self, sample_it):
+        import os
+        import stat
+        path = TEMP_DIR / "test_atomic_mode.h5"
+        save_interactions([sample_it], str(path))
+        os.chmod(path, 0o640)
+        save_interactions_atomic([sample_it], str(path))
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o640

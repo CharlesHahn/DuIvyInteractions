@@ -25,23 +25,36 @@
 
 **实现状态**（2026-08-28 更新）：已在所有 pi_stacking 检测器中通过 `check_planarity: bool = False` 参数实现，默认关闭。
 
-### 2. 疏水-芳香去重 ❌
+### 2. 疏水-芳香重叠标记 ✅（2026-11-14 实现）
 
-**推迟原因**：π-π 堆积已包含疏水接触（芳香环之间的 van der Waals 力），如果同时报告 π-π 堆积和疏水相互作用，会重复计数同一物理接触。
+**原问题**：π-π 堆积已包含疏水接触（芳香环之间的 van der Waals 力），如果同时报告 π-π 堆积和疏水相互作用，会重复计数同一物理接触。
 
-**实现位置**：`interaction_detectors/` 的主流程编排
+**实现（2026-11-14，feature/redundancy-marking）**：采用“标记而非删除”：
+- `Interaction.flags` 可选 `(n_pairs, n_frames)` bool 通道；`flags = overlap & existence`
+- 原子级 × 逐帧：疏水对两端原子分属某个活跃 π-π 环对才标记
+- CLI：`dii run ... --mark-redundant`；只跑 hydrophobic 时自动补跑 π-π（保留其 h5）
+- 输出：`hydrophobic.h5` 的 `flags/redundant_pi_stacking` + `hydrophobic_summary.csv`
+  的 `avg_redundant_pi_stacking` 列；xvg/xpm 不删数据
+- 设计/审查：`doc/redundancy_marking_design.md`
 
-**规则**：
-- 先检测 π-π 堆积
-- 再检测疏水相互作用
-- 移除与 π-π 堆积重叠的疏水接触（两个芳香环的原子之间的疏水接触）
+**实测（D927，101 帧）**：two_pass 疏水 2366 对 / π-π 10 对 / 标记 67 对（749 对-帧）；
+per_frame 2351 对 / 标记 67 对（749 对-帧，与 two_pass 一致；2026-11-16 移除同残基聚合后对齐）。
 
-**参考**：`doc/hydrophobic_definition.md` §4
+**遗留**：per_tuple 不支持标记。疏水是**原子级**相互作用，两策略均不做同残基聚合（2026-11-16 裁决，per_frame 的同残基聚合已移除）：two_pass 2366 对 / 标记 67 对 / 749 对-帧，per_frame 2351 对 / 标记 67 对 / 749 对-帧（标记数一致，对数差异仅来自候选策略）。
 
 
-### 3. 基团识别结果需要人为审查！ ⏳
+### 3. 基团识别结果需要人为审查！ ✅（2026-11-03 标记完成）
 
 目前基于真实数据识别得到的基团的数据，还需要人去手工一个一个核对一下确认一下。单元测试的真实数据测试是基于现有代码输出结果做的，不一定对。以人工审查过的结果为准！
+
+**完成状态（2026-11-03）**：以"自动核查 + 文献核验 + 对抗性审查"替代人工逐个核对完成：
+- 自动 diff 工具 `Tests/tools/verify_identification.py`（独立化学基准，4 力场）
+- 三力场真实体系 + OPLS 合成体系核查：缺失=0（`doc/group_identification_review.md` §4）
+- 8 个子 agent 文献核验"多余"项：PRO/MET/CYS/HIS 受体全部确认正确
+- 对抗性审查：F1 卤素、F2 嘌呤环均确认"忠实力场语义非缺陷"
+- 实际修复：3c GROMOS 中性胺受体判据（`d1dc7fa`）
+
+**优先级**：已关闭（2026-11-03）
 
 ### 4. 可选的候选对预过滤优化 ✅
 
@@ -82,31 +95,107 @@ detector.detect(groups, trajectory,
 
 **状态**：已实现。
 
-### 6. 官能团分类粗糙问题 ❌
+### 6. 官能团分类粗糙问题 ✅（2026-11-03 对抗性审查：设计如此，不修改）
 
-**问题**：PLIP 的 `is_functional_group` 对氮基团分类粗糙。"tertamine" 实际包含所有 sp3 氮（NR₃、NR₃H⁺、NH₃⁺ 等），不是化学意义上的"叔胺"。当前代码复现了 PLIP 的定义，导致蛋白 N 末端 NH₃⁺ 被误判为 tertamine。
+**原问题**：PLIP 的 `is_functional_group` 对氮基团分类粗糙。"tertamine" 实际包含所有
+sp3 氮（NR₃、NR₃H⁺、NH₃⁺ 等），不是化学意义上的"叔胺"。
 
-**待改进**：需要更精细的氮基团分类，区分叔胺、伯胺、仲胺等不同化学基团。
+**对抗性审查（2026-11-03）→ 关闭，不修改代码**：
+1. **标签粗糙但功能正确**：N 末端 NH₃⁺ 被标 `func_group='tertamine'`（化学是伯胺），但
+   判成 `charged_positive` 是**正确且必需**的（NH₃⁺ 本就带正电，参与盐桥/π-cation）。
+2. **修改方案有破坏性副作用**：拟议的"重原子（非 H）≥3"判据会丢失蛋白 N 末端
+   NH₃⁺ 的正电基团——实测 KRAS-RBD 42→40（ASN0 RBD、MET143 KRAS 两个 N 端丢失），
+   因为 N 末端残基不在 `POSITIVE_RESIDUES` 字典，唯一依赖 tertamine 路径判正电。
+   改判据 → 盐桥/π-cation 漏检。
+3. **标签无下游消费**：`func_group` 在检测器/pipeline/selection 层**零消费者**
+   （grep 实测）；pi_cation 的 tertamine 角度检查（#7）尚未实现。当前标签不影响结果。
+4. **忠实 PLIP**：PLIP 用 `tertamine` 粗粒度覆盖所有 sp3 正电胺，属其既定行为；
+   项目"忠实复现 PLIP 定义"是设计声明（AGENTS.md），非缺陷。
 
-**影响**：pi-cation 检测的叔胺角度检查会误触发。
+**结论**：#6 是"标签命名与化学命名不一致"，**非功能缺陷**；修改判据会破坏功能而被否决。
+若日后实现 #7（tertamine π-cation 角度检查）时需区分 N 末端，再单独设计（须保留
+N 末端正电资格）。
 
-### 7. PLIP 对 tertamine 的 pi-cation 特殊处理 ❌
+**优先级**：已关闭（2026-11-03，设计如此）
 
-**现象**：PLIP 在 `pication()` 中对 tertamine 做了额外角度检查，其他正电基团（quartamine、guanidine、sulfonium）没有此检查。
+### 7. PLIP 对 tertamine 的 pi-cation 特殊处理 ✅（决策：不实现，设计如此）
 
-**PLIP 的操作**：计算胺的三个邻居平面的法向量（`amine_normal`），与环法向量（`ring.normal`）取夹角。若夹角 ≤ 30°，排除该 pi-cation 对。
+**PLIP 的实际操作**（源码 `plip/structure/detection.py` → `pication()`，2026-11 核对）：
+计算胺的三个取代基平面法向量 `amine_normal = cross(c0→c1, c2→c0)`，与环法向量
+`ring.normal` 取夹角 `a = min(b, 180-b)`；**`a ≤ 30°` 时保留该 pi-cation 对，`a > 30°` 时排除**
+（源码写作 `if not a > 30.0: append(...)`）。
 
-**PLIP 注释**：`"Special case here if the ligand has a tertiary amine, check an additional angle. Otherwise, we might have a pi-cation interaction 'through' the ligand."`
+> ⚠️ 本条目原始描述（"若夹角 ≤ 30° 排除"）**方向写反**，已按源码更正。
 
-**待理解**：为什么只有 tertamine 需要这个检查？这个角度条件（≤ 30°）的物理含义是什么？为什么它能防止"穿过配体"的假阳性？
+**物理含义**：`amine_normal` ≈ N 的孤对轴方向。夹角小（≤30°）表示孤对轴指向环心
+→ 阳离子真正骑在 π 电子云上 → 真 π-cation；夹角大（>30°）表示环横在胺伞面一侧、
+被三个取代基隔开 → PLIP 要排除的"穿过配体（through the ligand）"假阳性。
 
-### 8. 金属配位几何构型匹配 ❌
+**作用范围**：仅当正电基团属于**配体**且 `fgroup == 'tertamine'` 时检查
+（源码 `type(p).__name__ == 'lcharge'`，调用点 `pication(rings_bs, ligand.get_pos_charged(), False)`）；
+**蛋白侧正电基团（含蛋白 N 末端 NH₃⁺）从不施加此检查**。
 
-**推迟原因**：第一版只做距离判据，几何构型匹配复杂度高。
+**决策（不实现）依据**：
+1. **PLIP 该实现自身有两处缺陷**：① `amine_normal` 取 `OBAtomAtomIter` 前 3 个邻居而不检查
+   元素——质子化叔胺 R₃NH⁺（3C+1H）会取到 H，法向量不再是取代基伞面且依赖迭代顺序；
+   ② 特例分支后 `break` 跳出 `pos_charged` 循环——同一芳香环对其余配体正电基团（胍基/季铵等）
+   的评估被跳过，多正电基团配体可能漏报。照抄即继承缺陷。
+2. **蛋白侧本不受约束**：本项目核心场景（蛋白-蛋白界面等）在该判据下与 PLIP 无偏差。
+3. **现有数据零触发**：三套真实体系（Amber/GROMOS/CHARMM）无真叔胺，判据在任何已验证
+   结果上均不生效。
+4. **属性定位**：这是 PLIP 针对特定几何假阳性的启发式过滤，非 π-cation 的定义性化学判据；
+   不做不违背化学正确性，但**属已声明的已知偏差**（见 `docs/reference/limitations.md`）。
 
-**PLIP 的操作**：按金属分组后，计算所有配位原子的角度，与已知几何构型（linear/trigonal/tetrahedral/octahedral 等）比较，选择 RMS 最小的构型，移除不符合该构型的多余配位原子。
+**遗留已知偏差表述**：当阳离子配体含叔胺、且芳香环位于其取代基侧（而非孤对侧）时，本项目
+不施加额外角度过滤 → 相对 PLIP 可能**多报**该 π-cation（PLIP 眼中的"穿过配体"假阳性我们不剔除）。
 
-**实现位置**：`interaction_detectors/metal_coordination_detector_*.py`
+**实现位置**（若未来要做）：识别器在 `Group.metadata` 存真叔胺的 3 个重原子邻居全局索引 →
+pi_cation 检测器（3 策略）按索引取坐标算法向量并与环法向量比较；需先定义"配体/蛋白"判定规则
+（PLIP 用 receptor/ligand 角色，本项目仅有 molecule 名 + `--select`）。
+
+**优先级**：已关闭（2026-11-05 决策：不实现，设计如此）
+
+### 8. 金属配位几何构型匹配 ❌（保留，未排期）
+
+**现状**：`metal_coordination` 只判金属-配位原子距离 < 3.0 Å，输出为
+`(metal, binding_atom)` pair 级，仅 `distance` 指标，没有配位球角度/几何构型。
+
+**PLIP 的操作**：按金属分组后，计算所有配位原子的角度，与已知几何构型
+（linear/trigonal/tetrahedral/octahedral 等）比较，选择 RMS 最小的构型，
+移除不符合该构型的多余配位原子。
+
+**暂不实现的原因**：
+1. **数据模型不匹配**：当前一行是 `(metal, binding_atom)` pair；几何构型是
+   “metal × frame”级信息，角度属于同一金属周围两个配体向量的关系，不属于单个
+   pair。若要把角度作为结果输出，需要改 metrics/exporter，甚至 metal-centric
+   数据模型，而不是只加一个角度字段。
+2. **per_tuple 策略不兼容**：`per_tuple` 一次只看到一个 `(metal, binding)` 对，
+   看不到同一金属的其他配体，无法计算配位球几何；只支持 two_pass/per_frame
+   会进一步拉大策略差异。
+3. **配位球不完整**：#9 已让 `metal_binding` 排除水；Na/K/Ca 等金属的真实配位球
+   常以水为主，非水配体可能只剩 1–2 个，几何拟合欠定。若把水算进几何，需要改
+   `required_group_types`、`_filter_groups` 与纯水排除规则，牵动 pipeline，不是
+   检测器局部改动。
+4. **金属差异大**：项目 `METAL_IONS` 有 42 种元素，但没有氧化态/配位偏好；
+   Na/K/Ca 配位灵活，Mg/Zn/过渡金属偏好不同。统一几何模板容易把真实弱配位当作
+   “多余”删除，产生 false negative。
+5. **PBC 角度**：几何需要以金属为顶点的两两角度并做 MIC；two_pass/per_frame 都要
+   单独处理，需补跨盒测试。
+6. **验证数据不足**：现有金属真实基线只有 D927 的 Mg/Na；CHARMM 体系无金属，
+   缺少 tetrahedral/square-planar/octahedral 等几何的真实对照，需先建合成测试。
+7. **收益/风险不划算**：当前金属配位只是少数体系；严格几何过滤可能比 distance-only
+   更差（尤其 Na/K/Ca），且项目 KISS 原则不支持“可能有用”的复杂功能。
+
+**若未来实现**：优先走最小方案——只改 two_pass/per_frame，检测器内按
+`metal.group_id × frame` 聚合，角度只作为内部筛选 mask，pair 级 `existence`
+过滤，不改变 h5 字段；per_tuple 明确不支持。若要把角度作为结果输出，先单独设计
+metal-centric 表示。实现前需新增 `doc/metal_geometry_design.md` 锁定
+“是否输出角度 / 是否含水 / pair 级还是 metal-centric”三个决策。
+
+**实现位置**：`interaction_detectors/metal_coordination_detector_{two_pass,per_frame}.py`
+（`per_tuple` 不适用）。
+
+**优先级**：保留，未排期；当前接受 distance-only 的已知偏差。
 
 ### 9. 金属配位排除纯水配位 ✅
 
@@ -129,39 +218,75 @@ detector.detect(groups, trajectory,
 - TwoPass 版：Pass1 用 KDTree 逐帧发现，Pass2 只对 active 三元组补全
 - PerTuple 版：仍为原始实现（参考用）
 
-### 11. 水桥水分子去重 ❌
+### 11. 水桥水分子去重 ✅（2026-11-06 改为显式-H 判据 + 三层配额）
 
-**推迟原因**：第一版暂不做。
+**原记录（错误）**："PLIP 的操作：一个水分子最多参与 2 个氢键，保留 H-O-H 角度最接近 110° 的两个。"
 
-**PLIP 的操作**：一个水分子最多参与 2 个氢键（两个 H 各做一个供体）。如果超过 2 个候选，保留水分子 H-O-H 角度最接近 110° 的两个。
+**对抗性审查更正（2026-11-05）**：
+1. PLIP 的 `refine_water_bridges()`（`preparation.py`）是**三步**——供体-氢键互斥 + (水,受体)去重 + 每水最多 2 桥，择优用 `|110° − omega|`（`omega` = 受体–水O–供体H，顶点**水氧**，不是水自身的 H-O-H 角）
+2. PLIP 只用水的氧，是因为其输入为 **PDB**（结晶水通常无 H）；本项目 tpr 为**全原子拓扑**，水有显式 H（Amber 37021 个水全含 OW/HW1/HW2）
+3. 现有实现在"每水桥数"上无任何收敛（实测单帧最大 **13** 桥，26.5% 的水实例 >2 桥）
 
-### 12. 水桥单元测试结果断言 ⏳
+**实现（2026-11-06）**：改用**显式水氢的氢键标准**（Baker & Hubbard 1984）+ 三层配额：
+- 供体侧 `D–H···Ow`：H···Ow ≤ 2.5 Å 且 D-H···Ow ≥ 120°
+- 受体侧 `Ow–Hw···A`：Hw···A ≤ 2.5 Å 且 Ow-Hw···A ≥ 120°
+- 水在中间：`∠(供体H–Ow–受体A)` ∈ [71°, 140°]（保留 PLIP omega 语义）
+- 配额：① 每水 H ≤1 受体；② 每水 O ≤2 供体；③ 每水 ≤2 桥（逐帧）
+- 设计文档：`doc/water_bridge_design.md`
 
-**推迟原因**：性能问题导致无法跑完全量检测，无法获取真实数据结果。
+**实测效果（D927）**：
+| 指标 | 旧（PLIP 宽松） | 新（显式-H） |
+|---|---|---|
+| 单帧桥数 | 249 | 53 |
+| per_frame 候选对 | 1698 | 86（候选仅第一帧，设计原则） |
+| two_pass 候选 / 有存在帧 | 14598 / 14562 | 3130 / 2913 |
+| 每水最大桥数 | 13 | 2（配额违反 0） |
+| 判据边界违反 | — | 0（max H···O=2.50、min 角=120.0°） |
+| 帧 0 两策略一致 | — | 53 = 53（全轨迹对数因候选策略不同而不同，属设计） |
 
-**待补充**：解决性能问题后，补充具体的结果数据断言（水桥数量、top pair 等）。
+CHARMM 全原子体系（SMO-BST）：per_frame 1329→109、two_pass 1678→414（有存在帧 367）。
 
-**实现状态**（2026-08-28 更新）：PerFrame 和 TwoPass 版性能问题已解决，可补充断言。
+**遗留**：`per_tuple` 策略保留旧 PLIP 判据（逐候选组架构无法实现跨组配额），该策略按 AGENTS.md 已不被维护、测试不跑。
 
-### 13. PerFrame 检测器长轨迹内存优化 ❌
+**优先级**：已关闭（2026-11-06）
 
-**问题**：PerFrame 检测器预分配 (n_pairs, n_frames) 的 distance/angle 矩阵。D927 体系氢键候选对 42,603 个，101 帧时矩阵约 71 MB，可接受。但外推到 1μs 轨迹（500,000 帧），矩阵将达到 342 GB，不可接受。
+### 12. 水桥单元测试结果断言 ✅（2026-11-03 补全 TwoPass 断言）
 
-**根因**：当前实现对全部候选对存储每一帧的 distance/angle，即使大部分 pair 最终被阈值淘汰（42,603 候选 → 119 有效）。
+**原跟踪**：性能问题曾导致无法跑完全量检测、无法获取真实数据结果；性能解决后
+（2026-08-28 更新）可补充断言。
 
-**优化方案**：只存 existence 矩阵（bool，1 byte），不存 distance/angle。最终过滤后，对存活的 ~100 个 pair 重新遍迹计算 distance/angle。
+**补齐（2026-11-03）**：
+- **PerFrame**：已有数值断言（`n_pairs == 1698`、`occupancy` 范围、`top_pair` 组成与
+  `occ > 0.9`）
+- **TwoPass**（本次补，注意与 PerFrame 数值不同——策略差异）：
+  - `test_n_pairs_candidates`：`n_pairs == 14598`（候选三元组总数，TwoPass 保留全部含
+    从未存在者）
+  - `test_active_pairs`：有存在帧的对数 `== 14562`（排除 36 个从未存在的候选）
+  - `test_top_pair`：`occ > 0.9` 且第二元为 water
+  - `test_top_pair_identity`：top pair 与 PerFrame 一致（LEU95 H_donor → SOL water →
+    PHE104 H_acceptor，占有率 `0.970`）
 
-| | 当前方案 | 优化方案 |
-|:--|:---------|:---------|
-| 氢键 101 帧 | 71 MB | 4.1 MB (existence only) |
-| 氢键 500,000 帧 | 342 GB | 20.3 GB (existence only) |
-| 最终结果 | 同 | 同（重算存活 pair） |
+**验证**：TwoPass 19 passed；全量回归 685 passed / 0 failed。
 
-**进一步优化**：existence 矩阵也可改为稀疏存储或增量累积，将 20.3 GB 降到更低。
+**优先级**：已关闭（2026-11-03）
 
-**实现位置**：`interaction_detectors/*_per_frame.py` 的 `detect()` 方法。
+### 13. PerFrame 检测器长轨迹内存优化 ✅（2026-11-06 决策：设计如此，不优化）
 
-**优先级**：低（当前 101 帧测试场景无压力，1μs 轨迹时再做）。
+**原记录**：PerFrame 预分配 `(n_pairs, n_frames)` 的 distance/angle 矩阵，1μs 轨迹
+（500,000 帧）下氢键可达数百 GB；曾提议"只存 existence、存活对再重算"。
+
+**决策（不优化）依据**：
+1. **预分配是 PerFrame 策略的定义**——`(n_pairs, n_frames)` 稠密矩阵正是"逐帧对所有候选
+   向量化计算"的前提；内存随 `候选数 × 帧数` 增长是该策略的固有表现，不是缺陷。
+2. **长轨迹场景已由 TwoPass 承接**：TwoPass 覆盖全部 8 类相互作用、稀疏存储（只存活跃的
+   对-帧，不随 `候选数 × 帧数` 增长），且是**默认策略**（`--strategy` 默认 `two_pass`）。
+3. **该权衡已声明**：`docs/reference/limitations.md`「长轨迹内存占用」条目。
+4. **优化投入产出不成立**：即使只存 existence，500,000 帧氢键仍需约 21 GB，仍不可用于 μs
+   级轨迹 → 优化后仍未优于 TwoPass，且需多读一遍轨迹。
+
+**结论**：PerFrame 保持设计原样；长轨迹请使用 `two_pass` 策略。
+
+**优先级**：已关闭（2026-11-06，设计如此）
 
 ### 14. Interaction 结果序列化（保存/加载） ✅（已被 HDF5 替代实现）
 
@@ -195,16 +320,23 @@ detector.detect(groups, trajectory,
 
 **优先级**：中（当前无紧迫需求，Pipeline 完成后实现）
 
-### 15. 水桥 TwoPass 未添加 WATER_BRIDGE_MINDIST 下界 ❌
+### 15. 水桥 TwoPass 未添加 WATER_BRIDGE_MINDIST 下界 ✅（已修复 2026-10-30）
 
-**现状**：策略三（TwoPass）的水桥检测器在 `apply_threshold` 中未添加 `dist > WATER_BRIDGE_MINDIST`（2.5Å）的下界检查，仅检查 `dist < 4.1Å` 上界。策略一（PerTuple）和策略二（PerFrame）均有此下界。
+**原现状**：策略三（TwoPass）的水桥检测器在 `apply_threshold` 中未添加
+`dist > WATER_BRIDGE_MINDIST`（2.5Å）的下界检查，仅检查 `dist < 4.1Å` 上界。
+策略一（PerTuple）和策略二（PerFrame）均有此下界。
 
-**影响**：TwoPass 会保留 Ow-A 距离 < 2.5Å 的三元组（如 2.48Å），而策略一/二会排除这些。D927 体系单帧测试中，TwoPass 多出 3 对（381 vs 378）。
+**原影响**：TwoPass 会保留 Ow-A 距离 < 2.5Å 的三元组（如 2.48Å），而策略一/二会排除。
 
-**待决定**：是否需要在 TwoPass 的 `apply_threshold` 中添加此下界。
+**修复（2026-10-30）**：TwoPass `apply_threshold` 补上下界（`dist_dw`/`dist_wa` 均 > 2.5Å），
+与策略一/二对齐；新增常量 `WATER_BRIDGE_MINDIST = 2.5`。
+
+**验证**：D927 全轨迹（101 帧）修复前存在帧中 `dist_dw < 2.5` 有 2 个、`dist_wa < 2.5` 有
+162 个对-帧组合，修复后**均为 0**；真实体系水桥数与策略二一致。新增回归断言
+（`test_active_dist_dw_range`/`test_active_dist_wa_range` 补下界）。
 
 
-### 16. 周期性问题 ✅（feature/pbc-handling 实现，待合并）
+### 16. 周期性问题 ✅（已实现并合并：v0.0.4）
 
 **原问题**：相互作用（尤其水桥/氢键）可能受周期边界影响；原建议替换到 MDAnalysis 的周期接口。
 
@@ -215,12 +347,15 @@ detector.detect(groups, trajectory,
 未包裹坐标亦正确（实测 + 单测锁定，见 `Tests/unittests/test_pbc.py`）。对应 7 个
 feat 提交 + 1 个 DRY 重构提交 + 29 个 PBC 单测。
 
+**合并状态（2026-10-29，✅ 已合并）**：feature/pbc-handling → dev（`870872e`）→
+master（`a9dca03`，tag `v0.0.4`）；dev 与 master 已同步至 `2a6c824`。合入时全量回归通过
+（276 tests），三斜盒/未包裹坐标已有单测锁定。
+
 **仍遗留**：
 - `per_tuple` 策略保持非 PBC（将被舍弃，跨盒对有差异，limitations 注明）
 - 水桥 two_pass D–A 距离下界（2.5 Å）：既有 TODO #15，另案处理
-- 真实体系回归与三斜盒规模验证：留待分支合入门禁
 
-### 17. 正电残基的铵/胍氮被误判为 H 键受体 ⚠️（新力场通用，已确认 OPLS/CHARMM/GROMOS 存在）
+### 17. 正电残基的铵/胍氮被误判为 H 键受体 ✅（已修复 2026-09-30）
 
 **现状**：受体判定逻辑（`_find_acceptors`）为"类型 ∈ 受体表 且 q<0"。各力场受体表均含氮类（如 OPLS `opls_287`/CHARMM `NH3`/GROMOS `NL` 等铵氮类型）。带负电荷的铵氮（如 OPLS LYSH NZ q=-0.30、CHARMM 质子化 His 咪唑氮 q=-0.51）因此被识别为 H_acceptor。
 
@@ -243,34 +378,44 @@ feat 提交 + 1 个 DRY 重构提交 + 29 个 PBC 单测。
 > GROMOS 真实体系 acceptor 336→206（=减 130 主链 N）、H 键 pair 108→86、水桥 2541→1698。
 > 本条关闭。
 
-**优先级**：低（当前阳性影响有限，作为已知现状记录）
+**优先级**：已关闭（2026-09-30 修复；2026-10-29 状态更新——本次核查（`doc/group_identification_review.md`）实测
+Amber/CHARMM/GROMOS 真实体系无带 H 的 N 被判受体，进一步佐证修复有效）
 
-### 18. 识别器 H 选择非确定性（含等价氢残基）❌（2026-10-14 对抗性审查发现）
+### 18. 识别器 H 选择非确定性（含等价氢残基）✅（2026-11-03 对抗性审查关闭）
 
-**现象**：含等价氢的残基（如 ARG 胍基 NH2 的 HH21/HH22、LYS NH3 的多 H）在基团
-鉴定时，供体基团 atoms 列表的 H 选择受 Python set/dict 迭代顺序（哈希种子随机）
-影响——**同一体系两次运行可能选到不同等价 H**（实测：ARG NH2 基团一次产出
-`[NH2, HH22]`、另一次 `[NH2, HH21]`），导致水桥/氢键角度（theta/omega）跨运行
-不稳定，检测结果非确定。
+**原现象（2026-10-14 记录）**：含等价氢的残基（如 ARG 胍基 NH2 的 HH21/HH22、LYS NH3 的多 H）
+在基团鉴定时，供体基团 atoms 列表的 H 选择曾被认为受 Python set/dict 迭代顺序（哈希种子
+随机）影响——同一体系两次运行可能选到不同等价 H（当时实测：ARG NH2 基团一次产出
+`[NH2, HH22]`、另一次 `[NH2, HH21]`），导致水桥/氢键角度（theta/omega）跨运行不稳定。
 
-**发现过程**：PBC 改造（feature/pbc-handling）新旧对比时，per_frame 水桥出现
-62 个"存在帧差异"三元组——经逐层排查（固定 groups 后 old/new 公式 166,246
-三元组-帧组合判定差异 0/0.000%），确认差异全部源于识别器 H 选择非确定性，
-**与 PBC 改造无关**（既有问题，旧实现同样存在）。
+**对抗性审查（2026-11-03）→ 关闭**：**当前代码下该现象不可复现**。证据：
 
-**影响**：水桥、氢键检测（供体基团含多个等价 H 时）结果跨运行不稳定；盐桥等
-不含 H 的类型不受影响。
+1. **代码机制**：`_find_donors` 遍历 `res.bonds`（有序列表），**每个 D-H 键独立建组**
+   （`atoms=[D, H]`）——ARG NH2 的两个等价 H（HH21/HH22）各自成为**独立供体组、同时存在**，
+   不存在"从多个等价 H 中选择一个"的逻辑。`467d3c1`（2026-08-28，H_donor 原子结构优化：
+   `metadata={"h_atom": h_atom}` → `atoms=[d_atom, h_atom]`）已结构性消除"选择一个 H"的路径。
+2. **哈希依赖**：PYTHONHASHSEED 只影响 str/bytes 哈希，不影响 int；全部决定输出顺序的
+   set/dict 遍历（去重 key、水桥 `set(dw_by_w)` 等）键均为 **int**（全局索引/group_id），
+   迭代顺序稳定。
+3. **实测（多种子 × 多策略 × 多运行）输出签名全部一致**：
+   - 识别器：4 力场（Amber/GROMOS/CHARMM/OPLS）× PYTHONHASHSEED∈{0,42,123,random}，
+     151985/1454/5677/113 基团的 SHA256 签名完全一致
+   - 完整 pipeline（识别→检测→h5 含 exists 矩阵）：two_pass 6 种子 + per_frame 5 种子 +
+     10 次随机 seed，water_bridge/hydrogen_bond 签名全部一致
+   - per_frame 水桥 5 次独立进程：n_pairs=1698、存在帧签名 `d7973715...` 完全一致
 
-**待处理**：
-- 在识别器供体基团构建时，按确定性规则选择 H（如原子名排序取最小者，或
-  按残基内 H 的原子序/键序稳定排序），消除对 set/dict 迭代顺序的依赖
-- 实现后需验证：同一体系多次运行结果完全一致（补稳定性测试）
+**原"发现过程"说明**：PBC 改造对比时的 62 个"存在帧差异"三元组，经"固定 groups 后
+old/new 判定差异 0/0.000%"反推为 groups 层差异；但该差异在当前代码下无法复现（见上），
+应为当时中间版本（H 存于 metadata 时期）的产物，或 PBC 改造过程临时代码所致。
+
+**遗留建议（非阻塞）**：可补一个"确定性守护测试"（固定 seed 双跑 assert 完全一致）防止
+未来改动重新引入；已登记为可选加固项。
 
 **实现位置**：`group_identifiers/*_ff_identifier.py` 的供体基团（H_donor）构建处
 
-**优先级**：中（影响结果可复现性，属正确性问题；但不影响 PBC 改造本身）
+**优先级**：已关闭（2026-11-03，对抗性审查确认当前代码无此问题）
 
-### 19. GROMOS 氢键 two_pass 测试基线过期（287→292）❌（2026-10-14 核查发现）
+### 19. GROMOS 氢键 two_pass 测试基线过期（287→292）✅（2026-10-29 核对并更新）
 
 **现象**：`Tests/unittests/test_gromos_interactions_two_pass.py::TestHydrogenBondTwoPass::test_n_pairs`
 断言 `n_pairs == 287`，实际产生 **292**（+5），测试失败。
@@ -282,12 +427,15 @@ feat 提交 + 1 个 DRY 重构提交 + 29 个 PBC 单测。
 **根因推测**：基线 287 记录于 `f2b5796`（A1 受体修复），此后 v0.0.4 的 PBC 改造（MIC 距离
 计算）改变了跨周期边界氢键对的判定，但该测试基线未同步更新。
 
-**待处理**：
-- 核对 292 是否为 PBC 修正后的正确值（检查新增 5 对是否合理）
-- 更新基线（或核对后修正）
-- 顺带检查其他力场/策略的氢键基线是否同样过期
+**核对结论（2026-10-29）**：**292 为正确值**。逐帧对比 MIC 距离与欧氏距离：满足 MIC 判据
+（D-A ≤ 4.1 Å）而欧氏距离不满足的「对-帧」组合共 6 个，涉及 5 个**跨周期边界真实氢键对**，
+例如 SER35→5ZIN134（MIC 3.8 Å / 欧氏 78.6 Å）、ASN36→5ZIN134（MIC 3.2 Å / 欧氏 79.3 Å）。
+即 PBC 修正正确检出了旧基线（287，非 PBC 时代）漏检的跨盒氢键——**287 已过期**。
 
-**优先级**：中（测试失败会掩盖后续回归问题；但不影响 3c 修改本身）
+**处理**：`test_n_pairs` 断言更新 287→292 并注释说明；文件头部注释氢键数同步 379→292。
+其余力场（Amber/CHARMM）的氢键基线经全量回归验证**未过期**。
+
+**优先级**：已关闭（2026-10-29）
 
 ---
 

@@ -132,9 +132,6 @@ class HydrophobicDetectorPerFrame(InteractionDetectorPerFrame):
         existence = existence[has_any]
         distance = distance[has_any]
 
-        # 8. 去重
-        tuples, existence, distance = self._deduplicate(tuples, existence, distance)
-
         if not tuples:
             return []
 
@@ -146,46 +143,3 @@ class HydrophobicDetectorPerFrame(InteractionDetectorPerFrame):
             times=times,
         )]
 
-    # ==================== 去重 ====================
-
-    @staticmethod
-    def _deduplicate(tuples, existence, distance):
-        """去重：同一原子与同残基多个原子的接触，只保留最近的。
-
-        对于每个 (group_id, residue_id) 对，只保留平均距离最近的那个接触。
-        一个 pair 必须是它所有 key 的最优解才会被保留。
-        """
-        n_pairs = len(tuples)
-        if n_pairs == 0:
-            return tuples, existence, distance
-
-        # 第一步：找出每个 key 的最优 pair index
-        best = {}  # (group_id, residue_id) → (index, avg_dist)
-
-        for i, (g1, g2) in enumerate(tuples):
-            active = existence[i]
-            if not np.any(active):
-                continue
-            avg_dist = float(np.mean(distance[i][active]))
-
-            key1 = (g1.group_id, g2.residue_id)
-            key2 = (g2.group_id, g1.residue_id)
-
-            for key in [key1, key2]:
-                if key not in best or avg_dist < best[key][1]:
-                    best[key] = (i, avg_dist)
-
-        # 第二步：只保留对所有 key 都是最优的 pair
-        keep = []
-        for i, (g1, g2) in enumerate(tuples):
-            key1 = (g1.group_id, g2.residue_id)
-            key2 = (g2.group_id, g1.residue_id)
-            if key1 in best and key2 in best:
-                if best[key1][0] == i and best[key2][0] == i:
-                    keep.append(i)
-
-        if not keep:
-            return [], np.array([]), np.array([])
-
-        keep = np.array(keep)
-        return [tuples[i] for i in keep], existence[keep], distance[keep]

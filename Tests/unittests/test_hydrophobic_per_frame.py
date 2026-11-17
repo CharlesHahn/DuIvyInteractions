@@ -60,7 +60,9 @@ class TestHydrophobicPerFrameBasic:
 class TestHydrophobicPerFrameResults:
 
     def test_n_pairs(self, hydrophobic):
-        assert hydrophobic[0].n_pairs == 705
+        # 疏水是原子级相互作用：每个原子对接触独立成立，不做同残基聚合
+        # （2351 vs two_pass 2366：差异来自 per_frame 首帧候选策略）
+        assert hydrophobic[0].n_pairs == 2351
 
     def test_occupancy_range(self, hydrophobic):
         occ = hydrophobic[0].occupancy()
