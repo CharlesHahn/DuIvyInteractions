@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="mark hydrophobic pair-frames overlapping pi-stacking "
                             "(mark only, not remove; auto-runs pi_stacking if needed)")
 
+    # web 子命令
+    web_p = sub.add_parser("web", help="launch local web UI to explore h5 results")
+    web_p.add_argument("--port", type=int, default=8888, help="listen port, default 8888 (auto-advance if taken)")
+    web_p.add_argument("--host", default="127.0.0.1", help="bind host, default 127.0.0.1")
+
     # export 子命令
     export_p = sub.add_parser("export", help="export h5 results to xvg/xpm/csv and print overview")
     export_p.add_argument("-i", "--input", required=True, help="h5 file path")
@@ -54,22 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
 def _run_export(args) -> None:
     """导出 h5 结果为 xvg/xpm/csv，并打印概览。"""
     from .io.h5 import load_interactions
-    from .io import (
-        HydrogenBondExporter, SaltBridgeExporter, PiStackingExporter, PiCationExporter,
-        HalogenBondExporter, HydrophobicExporter, MetalCoordinationExporter, WaterBridgeExporter,
-    )
+    from .io import EXPORTER_CLASSES
 
-    # h5 里的 interaction_type（检测器名）→ Exporter 子类
-    exporter_classes = {
-        "hydrogen_bond": HydrogenBondExporter,
-        "pi_stacking": PiStackingExporter,
-        "salt_bridge": SaltBridgeExporter,
-        "hydrophobic": HydrophobicExporter,
-        "halogen_bond": HalogenBondExporter,
-        "metal_coordination": MetalCoordinationExporter,
-        "water_bridge": WaterBridgeExporter,
-        "pi_cation": PiCationExporter,
-    }
+    # h5 里的 interaction_type（检测器名）→ Exporter 子类（注册表见 io/__init__.py）
+    exporter_classes = EXPORTER_CLASSES
 
     try:
         interactions = load_interactions(args.input)
@@ -140,6 +133,32 @@ def _print_overview(it, exporter) -> None:
         print(f"  {i}. {exporter.get_pair_label(it, int(idx))}  {occ[idx]:.1%}")
 
 
+def _free_port(host: str, port: int, tries: int = 10) -> int:
+    """端口占用时 +1 顺延（最多 tries 个），返回首个可用端口。"""
+    import socket
+    for candidate in range(port, port + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, candidate))
+                return candidate
+            except OSError:
+                continue
+    raise SystemExit(f"error: no free port in {port}..{port + tries - 1}")
+
+
+def _run_web(args) -> None:
+    """启动本地 Web 界面（dii web）：仅绑定 --host/--port，自动开浏览器。"""
+    from .web.app import create_app
+    port = _free_port(args.host, args.port)
+    url = f"http://127.0.0.1:{port}"
+    print(f"[INFO] dii web serving at {url} (Ctrl+C to stop)")
+    import threading
+    import webbrowser
+    threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+    import uvicorn
+    uvicorn.run(create_app(), host=args.host, port=port, log_level="warning")
+
+
 def main():
     """命令行入口。"""
     args = build_parser().parse_args()
@@ -166,6 +185,8 @@ def main():
         except ValueError as e:
             # 用户输入/选择歧义 → 友好报错（不暴露 traceback）
             raise SystemExit(f"error: {e}")
+    elif args.command == "web":
+        _run_web(args)
     elif args.command == "export":
         _run_export(args)
 

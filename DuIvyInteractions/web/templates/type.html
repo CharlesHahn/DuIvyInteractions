@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ type }} — 表格</h1>
+<p>
+  <a href="/pair/{{ type }}/0">→ 下钻页（pair 0）</a> |
+  <a href="/download/csv/{{ type }}?search={{ search }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}">下载 CSV（当前视图）</a>
+</p>
+<form method="get" action="/type/{{ type }}">
+  <input type="text" name="search" value="{{ search }}" placeholder="搜索 pair_label">
+  <select name="sort_by">
+    {% for col in columns %}<option value="{{ col }}" {{ "selected" if col == sort_by }}>{{ col }}</option>{% endfor %}
+  </select>
+  <select name="sort_dir">
+    <option value="asc" {{ "selected" if sort_dir == "asc" }}>asc</option>
+    <option value="desc" {{ "selected" if sort_dir == "desc" }}>desc</option>
+  </select>
+  <button>应用</button>
+</form>
+<p>{{ total }} 对（第 {{ page }}/{{ pages }} 页）
+  {% if page > 1 %}<a href="/type/{{ type }}?search={{ search }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}&page={{ page-1 }}">‹ 上一页</a>{% endif %}
+  {% if page < pages %}<a href="/type/{{ type }}?search={{ search }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}&page={{ page+1 }}">下一页 ›</a>{% endif %}
+</p>
+<table>
+<tr>{% for col in columns %}<th>{{ col }}</th>{% endfor %}</tr>
+{% for row in rows %}
+<tr>{% for col in columns %}<td>{{ row[col] }}</td>{% endfor %}</tr>
+{% endfor %}
+</table>
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ label }} <small style="color:#888">{{ type }} / pair {{ idx }}</small></h1>
+<p><a href="/type/{{ type }}">‹ 返回 {{ type }} 表格</a>
+{% if idx > 0 %} | <a href="/pair/{{ type }}/{{ idx-1 }}">‹ 上一对</a>{% endif %}
+{% if idx < n_pairs - 1 %} | <a href="/pair/{{ type }}/{{ idx+1 }}">下一对 ›</a>{% endif %}
+</p>
+<h2>元信息</h2>
+<table>
+<tr><th>位置</th><th>类型</th><th>残基</th><th>分子</th><th>原子</th></tr>
+{% for g in meta.groups %}
+<tr><td>{{ loop.index }}</td><td>{{ g.group_type }}</td><td>{{ g.residue_name }}{{ g.residue_id }}</td><td>{{ g.molecule }}</td><td>{{ g.atom_names | join(", ") }}</td></tr>
+{% endfor %}
+</table>
+<h2>Existence</h2><div id="figExistence"></div>
+{% for name in metric_names %}
+<h2>{{ name }}</h2><div id="fig{{ loop.index }}"></div>
+{% endfor %}
+<script src="/static/plotly-basic.min.js"></script>
+<script>
+var figs = {{ figures | tojson }};
+figs.forEach(function(fig){ Plotly.newPlot(document.getElementById(fig.div), fig.data, fig.layout); });
+</script>
+{% endblock %}
