@@ -1,78 +1,114 @@
 # -*- coding: utf-8 -*-
-"""Web 可视化图表层：Plotly JSON 组装（纯 dict，不依赖 plotly.py）。
-
-前端（plotly.js-basic）直接 Plotly.newPlot(el, figure_json)。
-"""
+"""Web 图表层：组装 Plotly JSON（前端用 plotly.js 渲染）。"""
 
 from typing import Dict, List
 
 import numpy as np
 
+from .data import METRIC_UNITS
+
 PLOT_BG = "rgba(0,0,0,0)"
 FONT = {"size": 12}
-MARGIN = {"l": 56, "r": 16, "t": 40, "b": 40}
+EXISTENCE_ROW = 0.14       # existence 子图纵向占比
+SUBPLOT_GAP = 0.05         # 子图间距（纵向占比）
+CHART_COLORS = ("#4f46e5", "#0891b2", "#d97706", "#059669", "#db2777")
+HEIGHT_BASE = 130          # 组合图基础高度（px）
+HEIGHT_PER_METRIC = 120    # 每个指标子图追加高度（px）
+PAIR_MARGIN = {"l": 72, "r": 20, "t": 24, "b": 44}
+AXIS_FONT = {"size": 11}
+EXISTENCE_RANGE = [0.0, 1.3]
 
 
-def _layout(title: str, x_title: str, y_title: str,
-            barmode: str = None) -> Dict:
-    """统一布局（W1 全部图共用）。"""
+def fig_pair(data: Dict) -> Dict:
+    """下钻组合图：existence 带 + 每指标一行，共享时间轴并统一悬浮。"""
+    metrics = list(data["series"])
+    domains = _domains(len(metrics))
+    traces = [_existence_trace(data)]
+    traces += [_metric_trace(data["series"][name], name, i)
+               for i, name in enumerate(metrics)]
+    return {"data": traces,
+            "layout": _pair_layout(metrics, domains)}
+
+
+def _domains(n_metrics: int) -> List[List[float]]:
+    """自上而下分配纵向区间：existence 一行 + 每指标一行（含间隔）。"""
+    metric_h = (1 - EXISTENCE_ROW - SUBPLOT_GAP * n_metrics) / max(n_metrics, 1)
+    heights = [EXISTENCE_ROW] + [metric_h] * n_metrics
+    domains, top = [], 1.0
+    for height in heights:
+        domains.append([round(top - height, 4), round(top, 4)])
+        top -= height + SUBPLOT_GAP
+    return domains
+
+
+def _pair_layout(metrics: List[str],
+                 domains: List[List[float]]) -> Dict:
+    """组合图布局：顶部 existence、下方每指标一行、各轴共享 x。"""
     layout = {
-        "title": {"text": title, "font": FONT},
-        "xaxis": {"title": {"text": x_title}, "gridcolor": "#eee"},
-        "yaxis": {"title": {"text": y_title}, "gridcolor": "#eee"},
-        "margin": MARGIN,
-        "paper_bgcolor": PLOT_BG,
-        "plot_bgcolor": PLOT_BG,
-        "font": FONT,
-        "showlegend": True,
+        "height": HEIGHT_BASE + HEIGHT_PER_METRIC * max(len(metrics), 1),
+        "margin": PAIR_MARGIN,
+        "paper_bgcolor": PLOT_BG, "plot_bgcolor": PLOT_BG, "font": FONT,
+        "showlegend": False, "hovermode": "x unified", "hoversubplots": "axis",
+        "xaxis": {"domain": [0, 1], "anchor": "y",
+                  "showgrid": False, "zeroline": False,
+                  "showticklabels": not metrics},
+        "yaxis": {"domain": domains[0], "anchor": "x", "range": EXISTENCE_RANGE,
+                  "tickvals": [0, 1],
+                  "title": {"text": "exists", "font": AXIS_FONT},
+                  "gridcolor": "#eef0f4", "zeroline": False},
     }
-    if barmode:
-        layout["barmode"] = barmode
+    layout.update(_metric_axes(metrics, domains))
     return layout
 
 
-def fig_existence_timeline(times: List[float], existence: List[int],
-                           pair_label: str) -> Dict:
-    """单对 existence 时间线（阶梯线，0/1）。"""
-    trace = {
-        "type": "scatter", "mode": "lines",
-        "x": times, "y": existence,
-        "line": {"shape": "hv", "width": 1.5},
-        "name": "existence",
-        "showlegend": False,
-    }
-    return {"data": [trace],
-            "layout": _layout(f"Existence — {pair_label}", "Time (ps)", "Existence")}
+def _metric_axes(metrics: List[str], domains: List[List[float]]) -> Dict:
+    """各指标子图的 x/y 轴定义（共享顶部 x 轴）。"""
+    bottom = len(metrics) - 1
+    axes = {}
+    for i, name in enumerate(metrics):
+        axes[f"yaxis{i + 2}"] = _metric_axis(name, domains[i + 1], i)
+        axes[f"xaxis{i + 2}"] = _metric_xaxis(i, bottom)
+    return axes
 
 
-def fig_metric_timeseries(times: List[float], values: List[float],
-                          metric_name: str, pair_label: str) -> Dict:
-    """单对单指标逐帧曲线（存在帧取值，缺失帧为 null 断点）。"""
-    masked = _masked(times, values)
-    trace = {
-        "type": "scatter", "mode": "lines+markers",
-        "x": masked["x"], "y": masked["y"],
-        "line": {"width": 1.5}, "marker": {"size": 4},
-        "name": metric_name,
-        "showlegend": False,
-    }
-    return {"data": [trace],
-            "layout": _layout(f"{metric_name} — {pair_label}",
-                              "Time (ps)", metric_name)}
+def _metric_axis(name: str, domain: List[float], i: int) -> Dict:
+    """指标子图的 y 轴（锚定同名 x 轴，标题带单位）。"""
+    unit = METRIC_UNITS.get(name)
+    title = f"{name} ({unit})" if unit else name
+    return {"domain": domain, "anchor": f"x{i + 2}",
+            "title": {"text": title, "font": AXIS_FONT},
+            "gridcolor": "#eef0f4", "zeroline": False}
 
 
-def fig_occupancy_hist(occupancies: List[float], type_name: str) -> Dict:
-    """类型总览：全对 occupancy 直方图。"""
-    trace = {
-        "type": "histogram",
-        "x": list(occupancies),
-        "xbins": {"start": 0.0, "end": 1.0, "size": 0.05},
-        "marker": {"color": "#4a7ebb"},
-        "showlegend": False,
-    }
-    return {"data": [trace],
-            "layout": _layout(f"Occupancy distribution — {type_name}",
-                              "Occupancy", "Pairs")}
+def _metric_xaxis(i: int, bottom: int) -> Dict:
+    """指标子图的 x 轴：匹配顶部轴缩放，仅最底部显示刻度。"""
+    axis = {"domain": [0, 1], "anchor": f"y{i + 2}", "matches": "x",
+            "showgrid": False, "zeroline": False,
+            "showticklabels": i == bottom}
+    if i == bottom:
+        axis["title"] = {"text": "Time (ps)"}
+    return axis
+
+
+def _existence_trace(data: Dict) -> Dict:
+    """existence 阶梯带（0/1 填充，顶部一行）。"""
+    return {"type": "scatter", "mode": "lines",
+            "x": data["times"], "y": data["existence"],
+            "line": {"shape": "hv", "width": 1, "color": "#4f46e5"},
+            "fill": "tozeroy", "fillcolor": "rgba(79,70,229,0.16)",
+            "name": "existence", "showlegend": False,
+            "hovertemplate": "existence %{y}<extra></extra>"}
+
+
+def _metric_trace(series: Dict, name: str, i: int) -> Dict:
+    """单个指标曲线（NaN → null 断点），第 i 行子图。"""
+    masked = _masked(series["times"], series["values"])
+    return {"type": "scatter", "mode": "lines",
+            "x": masked["x"], "y": masked["y"],
+            "line": {"width": 1.4, "color": CHART_COLORS[i % len(CHART_COLORS)]},
+            "name": name, "showlegend": False,
+            "xaxis": f"x{i + 2}", "yaxis": f"y{i + 2}",
+            "hovertemplate": name + " %{y:.3f}<extra></extra>"}
 
 
 def _masked(times: List[float], values: List[float]) -> Dict[str, List]:

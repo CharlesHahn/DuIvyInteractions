@@ -1,33 +1,81 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>总览</h1>
-<form method="post" action="/select">
-  <input type="text" name="path" placeholder="h5 文件或输出目录路径" style="width:420px">
-  <button>选择数据源</button>
-</form>
-{% if recent %}
-<p style="margin-top:8px">最近使用：
-{% for r in recent %}<form class="inline" method="post" action="/select"><input type="hidden" name="path" value="{{ r }}"><button>{{ r | truncate(48) }}</button></form>{% endfor %}
-</p>
-{% endif %}
+{% if error %}<div class="banner">{{ error }}</div>{% endif %}
+{% if warning %}<div class="banner">{{ warning }}</div>{% endif %}
 {% if not cards %}
-<p style="color:#888">尚无数据源：请输入 <code>dii run</code> 的输出目录（含 *.h5）或单个 h5 文件。</p>
-{% endif %}
-{% for c in cards %}
-<div class="card">
-  <h2><a href="/type/{{ c.type }}">{{ c.type }}</a></h2>
-  <p>{{ c.n_pairs }} 对 × {{ c.n_frames }} 帧<br>
-  {% if c.flags %}flags: {{ c.flags | join(", ") }}{% else %}无 flags{% endif %}</p>
-  <div id="occ{{ loop.index }}"></div>
+<section class="hero">
+  <div class="hero-icon">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    </svg>
+  </div>
+  <h1>Open interaction results</h1>
+  <p>Point at the output folder of <code>dii run</code>, or at one single <code>.h5</code> file.</p>
+  <form class="source-form" method="post" action="/select">
+    <input type="text" name="path" placeholder="C:\path\to\out  or  out\hydrogen_bond.h5" required>
+    <button class="btn btn-primary btn-lg">Open</button>
+    <button type="button" class="btn btn-lg" id="browseBtn">Browse…</button>
+  </form>
+  <p class="hint">Browse selects a folder (every <code>*.h5</code> inside is loaded); a single file can be typed.</p>
+  {% if recent %}
+  <div class="recent">
+    <p>recent</p>
+    <div class="chips">
+      {% for r in recent %}
+      <form method="post" action="/select"><input type="hidden" name="path" value="{{ r }}"><button class="chip" title="{{ r }}">{{ r }}</button></form>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% else %}
+<div class="section-head">
+  <div>
+    <h1>overview</h1>
+    <p class="muted">{{ cards | length }} interaction types · {{ ds_name }}</p>
+  </div>
+  <form class="source-form compact" method="post" action="/select">
+    <input type="text" name="path" placeholder="folder or .h5 path" required>
+    <button class="btn btn-sm">Open</button>
+    <button type="button" class="btn btn-sm" id="browseBtn">Browse…</button>
+  </form>
 </div>
-{% endfor %}
-{% if figures %}
-<script src="/static/plotly-basic.min.js"></script>
-<script>
-var figs = {{ figures | tojson }};
-figs.forEach(function(fig, i){
-  Plotly.newPlot(document.getElementById("occ" + (i+1)), fig.data, fig.layout);
-});
-</script>
+<div class="grid">
+  {% for c in cards %}
+  <a class="card" data-t="{{ c.data_type }}" href="/type/{{ c.type | urlencode }}" title="{{ c.h5_path }}">
+    <div class="card-top"><span class="dot"></span><span class="card-label">{{ c.type }}</span></div>
+    <div class="card-metric"><span class="num">{{ c.n_pairs }}</span><span class="unit">pairs · {{ c.n_frames }} frames</span></div>
+    {% if c.n_pairs and c.n_frames %}
+    {% set top = c.occupancy.hist | max %}
+    <div class="bars mini">{% for v in c.occupancy.hist %}<span style="height: {{ (v / top * 100) | round(1) if top else 0 }}%" title="{{ v }} pairs"></span>{% endfor %}</div>
+    <div class="bars-axis"><span>occupancy 0%</span><span>100%</span></div>
+    {% else %}
+    <p class="muted card-empty">no data</p>
+    {% endif %}
+    {% if c.flags %}<div class="tags">{% for f in c.flags %}<span class="tag">{{ f }}</span>{% endfor %}</div>{% endif %}
+  </a>
+  {% endfor %}
+</div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var browse = document.getElementById('browseBtn');
+  var input = document.querySelector('.source-form input[name="path"]');
+  if (!browse || !input) return;
+  browse.addEventListener('click', function () {
+    browse.disabled = true;
+    fetch('/api/pick', {method: 'POST'})
+      .then(function (resp) { return resp.json(); })
+      .then(function (data) {
+        if (data.path) { input.value = data.path; return; }
+        if (data.error) showToast('browse unavailable: ' + data.error);
+      })
+      .catch(function (error) { showToast('browse failed: ' + error); })
+      .finally(function () { browse.disabled = false; });
+  });
+})();
+</script>
 {% endblock %}

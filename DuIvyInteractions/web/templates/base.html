@@ -1,32 +1,52 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>DII Web — {{ title }}</title>
-<style>
-body{font:13px/1.5 system-ui,sans-serif;margin:0;display:flex}
-nav{width:180px;min-height:100vh;background:#f5f6f7;border-right:1px solid #ddd;padding:12px}
-main{flex:1;padding:16px;max-width:1200px}
-h1{font-size:16px} h2{font-size:14px}
-table{border-collapse:collapse;width:100%}
-th,td{border:1px solid #ddd;padding:4px 8px;text-align:right}
-th{background:#f5f6f7;cursor:pointer}
-td:first-child,th:first-child{text-align:left}
-.card{display:inline-block;vertical-align:top;border:1px solid #ddd;border-radius:6px;padding:10px;margin:6px;width:230px}
-form.inline{display:inline}
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DII · {{ title }}</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<nav>
-  <h1>DII Web</h1>
-  <p><a href="/">总览</a></p>
-  {% if datasource %}
-  <p><b>数据源</b><br><code style="font-size:11px">{{ datasource }}</code></p>
+<header class="topbar">
+  <a class="brand" href="/"><span class="brand-mark">DII</span><span>DuIvy Interactions</span></a>
+  {% if ds_name %}
+  <div class="ds-chip" title="{{ datasource }}"><span class="dot"></span><span class="ds-name">{{ ds_name }}</span></div>
   {% endif %}
-  {% for c in cards %}<p><a href="/type/{{ c.type }}">{{ c.type }}</a> ({{ c.n_pairs }})</p>{% endfor %}
-</nav>
-<main>
-{% block main %}{% endblock %}
-</main>
+  <div class="topbar-spacer"></div>
+  {% if ds_name and title != "overview" %}
+  <a class="btn btn-ghost btn-sm" href="/">change data source</a>
+  {% endif %}
+</header>
+<div class="layout">
+  {% if types %}
+  <aside class="sidebar">
+    <p class="side-title">interactions</p>
+    {% for t in types %}
+    <a class="side-item{% if t.type == active_type %} active{% endif %}" data-t="{{ t.data_type }}" href="/type/{{ t.type | urlencode }}">
+      <span class="dot"></span><span class="side-label">{{ t.type }}</span><span class="side-count">{{ t.n_pairs }}</span>
+    </a>
+    {% endfor %}
+  </aside>
+  {% endif %}
+  <main class="content">{% block main %}{% endblock %}</main>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+{% block scripts %}{% endblock %}
+<script>
+(function () {
+  var toast = document.getElementById('toast');
+  var timer = null;
+  window.showToast = function (text, sticky) {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!text) { toast.classList.add('hidden'); return; }
+    toast.textContent = text;
+    toast.classList.remove('hidden');
+    if (!sticky) {
+      timer = setTimeout(function () { toast.classList.add('hidden'); }, 4000);
+    }
+  };
+})();
+</script>
 </body>
 </html>

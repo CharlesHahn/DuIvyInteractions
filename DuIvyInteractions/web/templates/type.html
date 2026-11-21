@@ -1,29 +1,191 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>{{ type }} — 表格</h1>
-<p>
-  <a href="/pair/{{ type }}/0">→ 下钻页（pair 0）</a> |
-  <a href="/download/csv/{{ type }}?search={{ search }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}">下载 CSV（当前视图）</a>
-</p>
-<form method="get" action="/type/{{ type }}">
-  <input type="text" name="search" value="{{ search }}" placeholder="搜索 pair_label">
-  <select name="sort_by">
-    {% for col in columns %}<option value="{{ col }}" {{ "selected" if col == sort_by }}>{{ col }}</option>{% endfor %}
-  </select>
-  <select name="sort_dir">
-    <option value="asc" {{ "selected" if sort_dir == "asc" }}>asc</option>
-    <option value="desc" {{ "selected" if sort_dir == "desc" }}>desc</option>
-  </select>
-  <button>应用</button>
-</form>
-<p>{{ total }} 对（第 {{ page }}/{{ pages }} 页）
-  {% if page > 1 %}<a href="/type/{{ type }}?search={{ search }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}&page={{ page-1 }}">‹ 上一页</a>{% endif %}
-  {% if page < pages %}<a href="/type/{{ type }}?search={{ search }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}&page={{ page+1 }}">下一页 ›</a>{% endif %}
-</p>
-<table>
-<tr>{% for col in columns %}<th>{{ col }}</th>{% endfor %}</tr>
-{% for row in rows %}
-<tr>{% for col in columns %}<td>{{ row[col] }}</td>{% endfor %}</tr>
-{% endfor %}
-</table>
+<div class="breadcrumb"><a href="/">overview</a> / <span>{{ type }}</span></div>
+
+<div class="section-head">
+  <div>
+    <h1>{{ type }}</h1>
+    <p class="muted">{{ n_pairs }} pairs · {{ n_frames }} frames</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-sm" href="/download/csv/{{ type | urlencode }}?search={{ search | urlencode }}&sort_by={{ sort_by | urlencode }}&sort_dir={{ sort_dir }}&min_occupancy={{ min_occupancy }}">CSV (all rows)</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>metadata</h2>
+  <div class="meta-grid">
+    <div><span class="k">h5 file</span><span class="v mono" title="{{ meta.h5_path }}">{{ meta.h5_path }}</span></div>
+    <div><span class="k">interaction type</span><span class="v mono">{{ meta.type }}</span></div>
+    <div><span class="k">pairs</span><span class="v">{{ meta.n_pairs }}</span></div>
+    <div><span class="k">frames</span><span class="v">{{ meta.n_frames }}</span></div>
+    <div><span class="k">time range (ps)</span><span class="v">{{ meta.time_start if meta.time_start is not none else "—" }} → {{ meta.time_end if meta.time_end is not none else "—" }}</span></div>
+    <div><span class="k">metrics</span><span class="v mono">{{ meta.metrics | join(", ") }}</span></div>
+    <div><span class="k">flags</span><span class="v mono">{{ meta.flags | join(", ") if meta.flags else "none" }}</span></div>
+    {% if meta.file %}
+    <div><span class="k">file size</span><span class="v">{{ meta.file.size_kb }} KB</span></div>
+    <div><span class="k">modified</span><span class="v mono">{{ meta.file.mtime }}</span></div>
+    <div><span class="k">format version</span><span class="v mono">{{ meta.file.format_version or "—" }}</span></div>
+    <div><span class="k">interactions in file</span><span class="v">{{ meta.file.n_interactions }}</span></div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel matrix-panel">
+  <div class="matrix-head">
+    <span class="muted">pairs × frames — hover a cell for its metrics, click a row to drill down</span>
+    <span id="matrixInfo" class="muted"></span>
+  </div>
+  <div class="frame-controls">
+    <label class="field">matrix window
+      <input type="number" id="viewStart" min="0" max="{{ n_frames - 1 if n_frames else 0 }}" value="0"{% if not n_frames %} disabled{% endif %}>
+      <span>–</span>
+      <input type="number" id="viewEnd" min="0" max="{{ n_frames - 1 if n_frames else 0 }}" value="{{ (n_frames - 1) if n_frames else 0 }}"{% if not n_frames %} disabled{% endif %}>
+    </label>
+    <button class="btn btn-sm" id="applyWindow"{% if not n_frames %} disabled{% endif %}>apply window</button>
+    <span id="windowInfo" class="muted"></span>
+  </div>
+  <form class="toolbar" method="get" action="/type/{{ type | urlencode }}">
+    <input type="search" name="search" value="{{ search }}" placeholder="filter pair label…">
+    <label class="field">min occupancy
+      <input type="number" name="min_occupancy" value="{{ min_occupancy }}" min="0" max="1" step="0.05">
+    </label>
+    <select name="sort_by">
+      <option value="occupancy"{% if sort_by == "occupancy" %} selected{% endif %}>sort: occupancy</option>
+      <option value="label"{% if sort_by == "label" %} selected{% endif %}>sort: label</option>
+      <option value="index"{% if sort_by == "index" %} selected{% endif %}>sort: index</option>
+    </select>
+    <select name="sort_dir">
+      <option value="desc"{% if sort_dir == "desc" %} selected{% endif %}>desc</option>
+      <option value="asc"{% if sort_dir == "asc" %} selected{% endif %}>asc</option>
+    </select>
+    <button class="btn btn-sm">apply filters</button>
+  </form>
+  <div class="matrix-wrap">
+    <div class="matrix-scroll" id="matrixScroll">
+      <canvas id="matrixCanvas" aria-label="pairs by frames interaction matrix"></canvas>
+      <div id="matrixSpacer"></div>
+    </div>
+    <div class="matrix-tip hidden" id="matrixTip"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="section-head compact">
+    <h2>aggregates · {{ table.total }} pairs</h2>
+    <span class="muted">page {{ table.page }} / {{ table.pages }}</span>
+  </div>
+  {% if table.rows %}
+  <div class="table-wrap short">
+    <table>
+      <thead><tr>{% for col in table.columns %}{% set base = col[4:] if (col.startswith("avg_") or col.startswith("std_")) else "" %}<th>{{ col }}{% if base and table.units.get(base) %} ({{ table.units[base] }}){% endif %}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for row in table.rows %}
+      <tr>
+        {% for col in table.columns %}
+        <td>
+          {% if col == "pair_label" %}<a class="pair-link" href="/pair/{{ type | urlencode }}/{{ row["index"] }}">{{ row[col] }}</a>
+          {% elif col == "occupancy" or col.startswith("flag_") %}{{ "%.1f%%" | format(row[col] * 100) if row[col] != "" else "—" }}
+          {% elif col.startswith("avg_") or col.startswith("std_") %}{{ "%.3f" | format(row[col]) if row[col] != "" else "—" }}
+          {% else %}{{ row[col] }}{% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if table.pages > 1 %}
+  <div class="pager">
+    {% if table.page > 1 %}<a class="btn btn-sm" href="/type/{{ type | urlencode }}?search={{ search | urlencode }}&min_occupancy={{ min_occupancy }}&sort_by={{ sort_by | urlencode }}&sort_dir={{ sort_dir }}&page={{ table.page - 1 }}">‹ previous</a>{% endif %}
+    <span class="spacer"></span>
+    {% if table.page < table.pages %}<a class="btn btn-sm" href="/type/{{ type | urlencode }}?search={{ search | urlencode }}&min_occupancy={{ min_occupancy }}&sort_by={{ sort_by | urlencode }}&sort_dir={{ sort_dir }}&page={{ table.page + 1 }}">next ›</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <p class="muted">no pairs match the current filter</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="frame-controls">
+    <label class="field">inspect frame
+      <input type="range" id="frameSlider" min="0" max="{{ n_frames - 1 if n_frames else 0 }}" value="0"{% if not n_frames %} disabled{% endif %}>
+    </label>
+    <span id="frameInfo" class="muted"></span>
+  </div>
+  <div id="frameBody" class="frame-body muted">loading…</div>
+</div>
+
+<div class="panel">
+  <h2>active pairs per frame{% if activity | length < n_frames %} <span class="muted">· {{ activity | length }} buckets, max per bucket</span>{% endif %}</h2>
+  {% if activity %}
+  {% set act_top = activity | max %}
+  <div class="bars big">{% for c in activity %}<span style="height: {{ (c / act_top * 100) | round(1) if act_top else 0 }}%" title="{{ c }} active pairs"></span>{% endfor %}</div>
+  <div class="bars-axis"><span>frame 0</span><span>frame {{ n_frames - 1 }}</span></div>
+  {% else %}
+  <p class="muted">no frames in this h5</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>occupancy distribution · {{ meta.n_pairs }} pairs</h2>
+  {% if meta.n_pairs and n_frames %}
+  {% set occ_top = meta.occupancy.hist | max %}
+  <div class="bars big">{% for c in meta.occupancy.hist %}<span style="height: {{ (c / occ_top * 100) | round(1) if occ_top else 0 }}%" title="{{ c }} pairs"></span>{% endfor %}</div>
+  <div class="bars-axis"><span>0%</span><span>50%</span><span>100%</span></div>
+  {% else %}
+  <p class="muted">{{ "no pairs in this h5" if not meta.n_pairs else "no frames in this h5" }}</p>
+  {% endif %}
+</div>
+
+{% if stats %}
+<div class="panel">
+  <h2>metric distributions · active frames only</h2>
+  <table class="stats-table">
+    <thead><tr><th>metric</th><th>unit</th><th>dtype</th><th>count</th><th>min</th><th>mean</th><th>max</th><th>std</th><th>distribution</th></tr></thead>
+    <tbody>
+    {% for s in stats %}
+    <tr>
+      <td class="mono">{{ s.name }}</td>
+      <td class="mono">{{ s.unit or "—" }}</td>
+      <td class="mono">{{ s.dtype }}</td>
+      <td class="num">{{ s.count }}</td>
+      <td class="num">{{ "%.3f" | format(s.min) if s.min is not none else "—" }}</td>
+      <td class="num">{{ "%.3f" | format(s.mean) if s.mean is not none else "—" }}</td>
+      <td class="num">{{ "%.3f" | format(s.max) if s.max is not none else "—" }}</td>
+      <td class="num">{{ "%.3f" | format(s.std) if s.std is not none else "—" }}</td>
+      <td class="hist-cell">
+        {% if s.count %}
+        {% set top = s.hist | max %}
+        <div class="bars">{% for c in s.hist %}<span style="height: {{ (c / top * 100) | round(1) if top else 0 }}%" title="{{ c }} values"></span>{% endfor %}</div>
+        {% if s.edges %}<div class="bars-axis"><span>{{ s.edges[0] }}</span><span>{{ s.edges[-1] }}</span></div>{% endif %}
+        {% else %}
+        <span class="muted">no active frames</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if string_stats %}
+<div class="panel">
+  <h2>string metrics · active frames only</h2>
+  {% for s in string_stats %}
+  <div class="string-stat">
+    <div class="mono">{{ s.name }} <span class="muted">· {{ s.count }} values</span></div>
+    <div class="chips left">
+      {% for item in s.top %}<span class="chip static">{{ item.value }} <span class="muted">×{{ item.count }}</span></span>{% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script id="matrixConfig" type="application/json">{{ {"url": "/api/matrix/" ~ (type | urlencode), "type": type, "search": search, "min_occupancy": min_occupancy, "sort_by": sort_by, "sort_dir": sort_dir, "n_frames": n_frames} | tojson }}</script>
 {% endblock %}
+
+{% block scripts %}<script src="/static/matrix.js"></script>{% endblock %}
