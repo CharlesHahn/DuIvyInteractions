@@ -4,8 +4,11 @@
 import csv
 import io
 import math
+import secrets
+import threading
+import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, HTTPException, Request
@@ -24,44 +27,191 @@ from ..visualizers import (
     metric_stats, overview, pair_drilldown, pair_frames, pair_summary,
     parse_datasource, string_stats, type_summary,
 )
+from .fsbrowse import H5_SUFFIX, confine, list_directory
 from .picker import pick_directory
 
 _WEB_DIR = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 FRAME_LIMIT_MAX = 2000  # 帧检查器单次最多返回的活跃对数
+TOKEN_COOKIE = "dii_token"
+SERVER_BROWSE_HINT = ("native picker unavailable on this host; "
+                      "use the server folder browser")
+AUTH_PAGE = (
+    "<!doctype html><html><head><meta charset=\"utf-8\">"
+    "<title>token required</title></head><body>"
+    "<h1>token required</h1>"
+    "<p>append ?token=... to the URL to open this page.</p>"
+    "</body></html>"
+)
+AUTH_FAIL_LIMIT = 20  # 单个来源在窗口内允许的 token 失败次数
+AUTH_FAIL_WINDOW = 60.0  # 失败计数的滑动窗口（秒）
+TOO_MANY_FAILURES = "too many failed attempts"
+FORBIDDEN_HOST = "forbidden host"
+UNSUPPORTED_PATH = "unsupported path (expect a directory or .h5 file)"
+# base.html / index.html 存在内联脚本且不在本次授权范围内，故允许 inline
+# script；若将来把内联脚本外置，可收紧为 script-src 'self'。
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'"),
+}
+_AUTH_FAILURES: Dict[str, List[float]] = {}
+_AUTH_LOCK = threading.Lock()
 
 
-def create_app() -> FastAPI:
+def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
+               allowed_hosts: Optional[List[str]] = None) -> FastAPI:
     """创建 FastAPI 应用（数据源状态 = 服务端内存，单用户）。"""
     state: Dict[str, Any] = {"source": None}
     app = FastAPI(title="DII Web", docs_url=None, redoc_url=None,
                   openapi_url=None)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
-    _register_pages(app, state)
-    _register_api(app, state)
+    if token:
+        _install_token_guard(app, token)
+    if allowed_hosts:
+        _install_host_guard(app, allowed_hosts)
+    _install_security_headers(app)
+    _register_pages(app, state, browse_mode, root)
+    _register_api(app, state, browse_mode, root)
     return app
 
 
-def _register_pages(app: FastAPI, state: Dict[str, Any]) -> None:
+def _install_token_guard(app: FastAPI, token: str) -> None:
+    """安装 access token 校验中间件（query 或 cookie 通过，query 通过后写 cookie）。"""
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next: Callable) -> Response:
+        client = _client_host(request)
+        if _auth_blocked(client):
+            return Response(TOO_MANY_FAILURES, media_type="text/plain",
+                            status_code=429)
+        query_token = request.query_params.get("token")
+        cookie_token = request.cookies.get(TOKEN_COOKIE)
+        if not (_token_ok(token, query_token) or _token_ok(token, cookie_token)):
+            _record_auth_failure(client)
+            return _unauthorized(request)
+        _clear_auth_failures(client)
+        response = await call_next(request)
+        if _token_ok(token, query_token):
+            response.set_cookie(TOKEN_COOKIE, token, httponly=True,
+                                samesite="lax", path="/")
+        return response
+
+
+def _install_host_guard(app: FastAPI, allowed_hosts: List[str]) -> None:
+    """安装 Host 头校验中间件（防 DNS rebinding）。"""
+    allowed = frozenset(host.lower() for host in allowed_hosts)
+
+    @app.middleware("http")
+    async def host_guard(request: Request, call_next: Callable) -> Response:
+        host = _host_name(request.headers.get("host", ""))
+        if host in allowed:
+            return await call_next(request)
+        return Response(FORBIDDEN_HOST, media_type="text/plain", status_code=403)
+
+
+def _install_security_headers(app: FastAPI) -> None:
+    """安装安全响应头中间件（不覆盖响应已有的同名头）。"""
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next: Callable) -> Response:
+        response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        return response
+
+
+def _host_name(value: str) -> str:
+    """提取 Host 头中的主机名（去掉端口与 IPv6 方括号）。"""
+    host = (value or "").strip().lower()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[1:end] if end > 0 else host
+    if host.count(":") == 1:
+        name, _, port = host.partition(":")
+        return name if port.isdigit() else host
+    return host
+
+
+def _client_host(request: Request) -> str:
+    """客户端来源地址（缺失时为空串）。"""
+    return request.client.host if request.client else ""
+
+
+def _auth_blocked(client: str) -> bool:
+    """来源是否已达到失败次数上限（同时清理过期记录）。"""
+    with _AUTH_LOCK:
+        failures = _recent_failures(client)
+        if failures:
+            _AUTH_FAILURES[client] = failures
+        else:
+            _AUTH_FAILURES.pop(client, None)
+        return len(failures) >= AUTH_FAIL_LIMIT
+
+
+def _record_auth_failure(client: str) -> None:
+    """记录一次 token 失败（窗口内最多保留 AUTH_FAIL_LIMIT 条）。"""
+    with _AUTH_LOCK:
+        failures = _recent_failures(client)
+        failures.append(time.monotonic())
+        _AUTH_FAILURES[client] = failures[-AUTH_FAIL_LIMIT:]
+
+
+def _recent_failures(client: str) -> List[float]:
+    """窗口内的失败时间戳（调用方需持有 _AUTH_LOCK）。"""
+    cutoff = time.monotonic() - AUTH_FAIL_WINDOW
+    return [stamp for stamp in _AUTH_FAILURES.get(client, ()) if stamp > cutoff]
+
+
+def _clear_auth_failures(client: str) -> None:
+    """清空来源的失败计数。"""
+    with _AUTH_LOCK:
+        _AUTH_FAILURES.pop(client, None)
+
+
+def _token_ok(token: str, supplied: Optional[str]) -> bool:
+    """判断请求携带的 token 是否与配置一致。"""
+    if not (token and supplied):
+        return False
+    return secrets.compare_digest(token.encode("utf-8"), supplied.encode("utf-8"))
+
+
+def _unauthorized(request: Request) -> Response:
+    """未携带有效 token 时的响应选择（API JSON / 下载纯文本 / 页面 HTML）。"""
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": "token required"}, status_code=401)
+    if request.url.path.startswith("/download/"):
+        return Response("token required", media_type="text/plain",
+                        status_code=401)
+    return HTMLResponse(AUTH_PAGE, status_code=401)
+
+
+def _register_pages(app: FastAPI, state: Dict[str, Any], browse_mode: str,
+                    root: str) -> None:
     """页面路由 + HTML 错误页。"""
-    _register_home(app, state)
+    _register_home(app, state, browse_mode, root)
     _register_detail(app, state)
     _register_error_page(app, state)
 
 
-def _register_home(app: FastAPI, state: Dict[str, Any]) -> None:
+def _register_home(app: FastAPI, state: Dict[str, Any], browse_mode: str,
+                   root: str) -> None:
     """总览与数据源选择。"""
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request, error: str = "", warn: str = "") -> Response:
-        return _render_index(request, state, error, warn)
+        return _render_index(request, state, error, warn, browse_mode)
 
     @app.post("/select")
     async def select(request: Request) -> Response:
         body = await request.body()
         return await run_in_threadpool(_select, state,
-                                       _form_value(body, "path"))
+                                       _form_value(body, "path"), root)
 
 
 def _register_detail(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -136,13 +286,15 @@ def _error_page(request: Request, state: Dict[str, Any], status: int,
         status_code=status)
 
 
-def _register_api(app: FastAPI, state: Dict[str, Any]) -> None:
+def _register_api(app: FastAPI, state: Dict[str, Any],
+                  browse_mode: str, root: str) -> None:
     """JSON 数据接口。"""
     _register_matrix_api(app, state)
     _register_cell_api(app, state)
     _register_pair_api(app, state)
     _register_csv_api(app, state)
-    _register_pick_api(app)
+    _register_list_api(app, browse_mode, root)
+    _register_pick_api(app, browse_mode)
 
 
 def _register_matrix_api(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -200,11 +352,25 @@ def _register_csv_api(app: FastAPI, state: Dict[str, Any]) -> None:
                                  f"filename*=UTF-8''{filename}"})
 
 
-def _register_pick_api(app: FastAPI) -> None:
-    """原生目录选择框。"""
+def _register_list_api(app: FastAPI, browse_mode: str, root: str) -> None:
+    """服务端目录浏览（仅 server 模式启用）。"""
+
+    @app.get("/api/list", response_model=None)
+    def api_list(path: str = "") -> dict:
+        if browse_mode != "server":
+            raise HTTPException(status_code=404,
+                                detail="server browse disabled")
+        return _guard(lambda: list_directory(path, root=root))
+
+
+def _register_pick_api(app: FastAPI, browse_mode: str) -> None:
+    """原生目录选择框（仅 picker 模式可用）。"""
 
     @app.post("/api/pick", response_model=None)
     def pick() -> Union[Dict[str, Any], JSONResponse]:
+        if browse_mode != "picker":
+            return JSONResponse({"path": "", "error": SERVER_BROWSE_HINT},
+                                status_code=400)
         try:
             return {"path": pick_directory()}
         except (RuntimeError, ValueError, OSError) as e:
@@ -252,23 +418,43 @@ def _form_value(body: bytes, key: str) -> str:
     return values.get(key, [""])[0]
 
 
-def _select(state: Dict[str, Any], path: str) -> RedirectResponse:
+def _select(state: Dict[str, Any], path: str, root: str = "") -> RedirectResponse:
     """解析数据源并跳回总览；失败或跳过文件时带回提示（不静默）。"""
     if not path.strip():
-        return RedirectResponse(f"/?error={quote('no path provided')}",
-                                status_code=303)
-    expected = _source_files(path)
+        return _select_error("no path provided")
     try:
-        items = parse_datasource(path)
+        target = _select_target(path, root)
     except ValueError as e:
-        return RedirectResponse(f"/?error={quote(str(e))}", status_code=303)
+        return _select_error(str(e))
+    try:
+        items = parse_datasource(str(target))
+    except ValueError as e:
+        return _select_error(str(e))
     if not items:
-        return RedirectResponse(f"/?error={quote(f'no usable .h5 found: {path}')}",
-                                status_code=303)
+        return _select_error(f"no usable .h5 found: {path}")
     state["source"] = (path, items)
     add_recent(path)
     loaded = len({h5 for _, h5, _ in items})
-    return _loaded_redirect(expected, loaded)
+    return _loaded_redirect(_source_files(str(target)), loaded)
+
+
+def _select_target(path: str, root: str) -> Path:
+    """校验数据源路径：必须在 root 内，且为目录或 *.h5 文件。"""
+    target = confine(root, path)
+    if not _selectable(target):
+        raise ValueError(UNSUPPORTED_PATH)
+    return target
+
+
+def _selectable(target: Path) -> bool:
+    """判断目标是否为可载入的数据源（目录或 *.h5 文件）。"""
+    return target.is_dir() or (target.is_file()
+                               and target.suffix.lower() == H5_SUFFIX)
+
+
+def _select_error(message: str) -> RedirectResponse:
+    """选择失败时跳回总览并带回错误提示。"""
+    return RedirectResponse(f"/?error={quote(message)}", status_code=303)
 
 
 def _loaded_redirect(expected: int, loaded: int) -> RedirectResponse:
@@ -319,12 +505,13 @@ def _find_interaction(items: Any, name: str) -> Tuple[str, Interaction]:
 
 
 def _render_index(request: Request, state: Dict[str, Any], error: str,
-                  warn: str) -> HTMLResponse:
+                  warn: str, browse_mode: str) -> HTMLResponse:
     """总览页：唯一数据源入口 + 类型卡片。"""
     path, items = _source(state)
     return TEMPLATES.TemplateResponse(request, "index.html", {
         "title": "overview", "cards": overview(items),
         "recent": load_recent(), "error": error, "warning": warn,
+        "browse_mode": browse_mode,
         **_nav_source(path, items),
     })
 

@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block main %}
+{# 与 figures.PT_COLORS 保持一致 #}
+{% set pt_colors = {"P": "#3c5488", "T": "#e64b35", "N": "#8491b4"} %}
+{% set pt_stats = string_stats | selectattr("name", "equalto", "pistacking_type") | list %}
+{% set pt_seen = (pt_stats[0].top if pt_stats else []) | map(attribute="value") | list %}
+{% set legend_types = (["P", "T", "N"] | select("in", pt_seen) | list) or ["P", "T"] %}
+{% set has_pt = pt_stats | length > 0 %}
 <div class="breadcrumb"><a href="/">overview</a> / <span>{{ type }}</span></div>
 
 <div class="section-head">
@@ -16,17 +22,19 @@
   <h2>metadata</h2>
   <div class="meta-grid">
     <div><span class="k">h5 file</span><span class="v mono" title="{{ meta.h5_path }}">{{ meta.h5_path }}</span></div>
-    <div><span class="k">interaction type</span><span class="v mono">{{ meta.type }}</span></div>
-    <div><span class="k">pairs</span><span class="v">{{ meta.n_pairs }}</span></div>
-    <div><span class="k">frames</span><span class="v">{{ meta.n_frames }}</span></div>
-    <div><span class="k">time range (ps)</span><span class="v">{{ meta.time_start if meta.time_start is not none else "—" }} → {{ meta.time_end if meta.time_end is not none else "—" }}</span></div>
-    <div><span class="k">metrics</span><span class="v mono">{{ meta.metrics | join(", ") }}</span></div>
-    <div><span class="k">flags</span><span class="v mono">{{ meta.flags | join(", ") if meta.flags else "none" }}</span></div>
+    <div><span class="k">interaction type</span><span class="v mono" title="{{ meta.type }}">{{ meta.type }}</span></div>
+    <div><span class="k">pairs</span><span class="v" title="{{ meta.n_pairs }}">{{ meta.n_pairs }}</span></div>
+    <div><span class="k">frames</span><span class="v" title="{{ meta.n_frames }}">{{ meta.n_frames }}</span></div>
+    {% set ts = meta.time_start if meta.time_start is not none else "—" %}
+    {% set te = meta.time_end if meta.time_end is not none else "—" %}
+    <div><span class="k">time range (ps)</span><span class="v" title="{{ ts }} → {{ te }}">{{ ts }} → {{ te }}</span></div>
+    <div><span class="k">metrics</span><span class="v mono" title="{{ meta.metrics | join(', ') }}">{{ meta.metrics | join(", ") }}</span></div>
+    <div><span class="k">flags</span><span class="v mono" title="{{ meta.flags | join(', ') if meta.flags else 'none' }}">{{ meta.flags | join(", ") if meta.flags else "none" }}</span></div>
     {% if meta.file %}
-    <div><span class="k">file size</span><span class="v">{{ meta.file.size_kb }} KB</span></div>
-    <div><span class="k">modified</span><span class="v mono">{{ meta.file.mtime }}</span></div>
-    <div><span class="k">format version</span><span class="v mono">{{ meta.file.format_version or "—" }}</span></div>
-    <div><span class="k">interactions in file</span><span class="v">{{ meta.file.n_interactions }}</span></div>
+    <div><span class="k">file size</span><span class="v" title="{{ meta.file.size_kb }} KB">{{ meta.file.size_kb }} KB</span></div>
+    <div><span class="k">modified</span><span class="v mono" title="{{ meta.file.mtime }}">{{ meta.file.mtime }}</span></div>
+    <div><span class="k">format version</span><span class="v mono" title="{{ meta.file.format_version or '—' }}">{{ meta.file.format_version or "—" }}</span></div>
+    <div><span class="k">interactions in file</span><span class="v" title="{{ meta.file.n_interactions }}">{{ meta.file.n_interactions }}</span></div>
     {% endif %}
   </div>
 </div>
@@ -36,6 +44,12 @@
     <span class="muted">pairs × frames — hover a cell for its metrics, click a row to drill down</span>
     <span id="matrixInfo" class="muted"></span>
   </div>
+  {% if has_pt %}
+  <div class="pt-legend">
+    <span>pistacking type</span>
+    {% for t in legend_types %}<span class="pt-legend-item"><span class="pt-dot" style="background: {{ pt_colors[t] }}"></span>{{ t }}</span>{% endfor %}
+  </div>
+  {% endif %}
   <div class="frame-controls">
     <label class="field">matrix window
       <input type="number" id="viewStart" min="0" max="{{ n_frames - 1 if n_frames else 0 }}" value="0"{% if not n_frames %} disabled{% endif %}>
@@ -132,7 +146,7 @@
   <h2>occupancy distribution · {{ meta.n_pairs }} pairs</h2>
   {% if meta.n_pairs and n_frames %}
   {% set occ_top = meta.occupancy.hist | max %}
-  <div class="bars big">{% for c in meta.occupancy.hist %}<span style="height: {{ (c / occ_top * 100) | round(1) if occ_top else 0 }}%" title="{{ c }} pairs"></span>{% endfor %}</div>
+  <div class="bars big bars-occupancy">{% for c in meta.occupancy.hist %}<span style="height: {{ (c / occ_top * 100) | round(1) if occ_top else 0 }}%" title="{{ c }} pairs"></span>{% endfor %}</div>
   <div class="bars-axis"><span>0%</span><span>50%</span><span>100%</span></div>
   {% else %}
   <p class="muted">{{ "no pairs in this h5" if not meta.n_pairs else "no frames in this h5" }}</p>
@@ -178,14 +192,16 @@
   <div class="string-stat">
     <div class="mono">{{ s.name }} <span class="muted">· {{ s.count }} values</span></div>
     <div class="chips left">
-      {% for item in s.top %}<span class="chip static">{{ item.value }} <span class="muted">×{{ item.count }}</span></span>{% endfor %}
+      {% for item in s.top %}<span class="chip static">{% if s.name == "pistacking_type" %}<span class="pt-dot" style="background: {{ pt_colors.get(item.value, pt_colors["N"]) }}"></span>{% endif %}{{ item.value }} <span class="muted">×{{ item.count }}</span></span>{% endfor %}
     </div>
   </div>
   {% endfor %}
 </div>
 {% endif %}
 
-<script id="matrixConfig" type="application/json">{{ {"url": "/api/matrix/" ~ (type | urlencode), "type": type, "search": search, "min_occupancy": min_occupancy, "sort_by": sort_by, "sort_dir": sort_dir, "n_frames": n_frames} | tojson }}</script>
+{% set matrix_cfg = {"url": "/api/matrix/" ~ (type | urlencode), "type": type, "search": search, "min_occupancy": min_occupancy, "sort_by": sort_by, "sort_dir": sort_dir, "n_frames": n_frames} %}
+{% if has_pt %}{% set _ = matrix_cfg.update({"pt_colors": pt_colors}) %}{% endif %}
+<script id="matrixConfig" type="application/json">{{ matrix_cfg | tojson }}</script>
 {% endblock %}
 
 {% block scripts %}<script src="/static/matrix.js"></script>{% endblock %}

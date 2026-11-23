@@ -29,6 +29,8 @@ ACTIVITY_BUCKETS = 120  # 每帧活跃数曲线的最大柱数
 TABLE_PAGE_SIZE = 50    # 聚合表分页大小
 SUMMARY_DIGITS = 4      # CSV 汇总数值小数位
 BYTES_PER_KB = 1024
+PT_METRIC = "pistacking_type"  # π-堆积类型指标名
+PT_TYPES = ("P", "T", "N")     # π-堆积类型取值（并列时按此顺序优先）
 METRIC_UNITS = {
     "distance": "Å", "offset": "Å", "dist_dw": "Å", "dist_wa": "Å",
     "dist_h_ow": "Å", "dist_d_ow": "Å", "dist_hw_a": "Å", "dist_ow_a": "Å",
@@ -260,12 +262,40 @@ def pair_drilldown(interaction: Interaction, idx: int) -> Dict:
     times = _times(interaction)
     edges = _bucket_edges(len(times)) if len(times) > MAX_SERIES_POINTS else None
     xs = _bucket_times(times, edges) if edges is not None else times
-    return {"idx": idx,
+    data = {"idx": idx,
             "pair_label": get_exporter(interaction).get_pair_label(interaction, idx),
             "groups": _group_meta(interaction, idx), "times": xs,
             "downsampled": edges is not None,
             "existence": _existence(interaction, idx, edges),
             "series": _series(interaction, idx, xs, edges)}
+    if PT_METRIC in interaction.metrics:
+        data["types"] = _types(interaction, idx, edges)
+    return data
+
+
+def _types(interaction: Interaction, idx: int,
+           edges: Optional[np.ndarray]) -> Dict:
+    """π-堆积类型序列（超长时取活跃帧桶内众数），与 times 等长。"""
+    values = np.asarray(interaction.metrics[PT_METRIC][idx]).astype(str)
+    if edges is None:
+        return {"name": PT_METRIC, "values": values.tolist()}
+    existence = np.asarray(interaction.existence[idx], dtype=bool)
+    return {"name": PT_METRIC, "values": [
+        _bucket_mode(values[start:end], existence[start:end])
+        for start, end in zip(edges[:-1], edges[1:])]}
+
+
+def _bucket_mode(values: np.ndarray, active: np.ndarray) -> str:
+    """活跃帧上的众数（并列时按 PT_TYPES 顺序优先），无活跃帧返回空串。"""
+    present = np.asarray(values)[np.asarray(active, dtype=bool)].astype(str)
+    if present.size == 0:
+        return ""
+    uniq, counts = np.unique(present, return_counts=True)
+    tied = set(uniq[counts == counts.max()].tolist())
+    for name in PT_TYPES:
+        if name in tied:
+            return name
+    return str(uniq[int(np.argmax(counts))])
 
 
 def _bucket_edges(n_frames: int) -> np.ndarray:
@@ -441,9 +471,26 @@ def _matrix_rows(interaction: Interaction, search: str,
             continue
         if float(occ[idx]) < min_occupancy:
             continue
-        rows.append({"idx": idx, "label": label, "occupancy": float(occ[idx]),
-                     "runs": runs_from_mask(interaction.existence[idx])})
+        rows.append(_matrix_row(interaction, idx, label, float(occ[idx])))
     return rows
+
+
+def _matrix_row(interaction: Interaction, idx: int, label: str,
+                occupancy: float) -> Dict:
+    """矩阵单行：idx/label/occupancy/runs；有 π-堆积类型时附加 typed。"""
+    row: Dict = {"idx": idx, "label": label, "occupancy": occupancy,
+                 "runs": runs_from_mask(interaction.existence[idx])}
+    if PT_METRIC in interaction.metrics:
+        row["typed"] = _typed_runs(interaction, idx)
+    return row
+
+
+def _typed_runs(interaction: Interaction, idx: int) -> Dict[str, List[List[int]]]:
+    """该行 existence 区段按帧上类型切分（end 为开区间）。"""
+    exists = np.asarray(interaction.existence[idx], dtype=bool)
+    values = np.asarray(interaction.metrics[PT_METRIC][idx]).astype(str)
+    names = list(PT_TYPES) + [v for v in np.unique(values) if v not in PT_TYPES]
+    return {name: runs_from_mask(exists & (values == name)) for name in names}
 
 
 def _sort_matrix_rows(rows: List[Dict], sort_by: str, sort_dir: str) -> List[Dict]:

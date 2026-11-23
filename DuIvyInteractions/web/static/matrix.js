@@ -26,7 +26,7 @@
   var AXIS_H = 22;       // 底部时间轴高
   var OCC_W = 46;        // 标签列内占有率条宽
   var PAD = 8;
-  var ACTIVE = "79,70,229";
+  var ACTIVE = "60,84,136";      // #3c5488 的 RGB 分量（矩阵活跃块，非 π-堆积类型）
   var CACHE_LIMIT = 2000;
   var MIN_COLUMN_WIDTH = 1e-6;  // 防止 0 帧时除零
   var ALPHA_MIN = 0.3, ALPHA_SPAN = 0.7;
@@ -38,12 +38,15 @@
   var COLOR_LABEL = "#475569";
   var COLOR_MUTED = "#7b8794";
   var COLOR_BAR_BG = "#eceef3";
-  var COLOR_BAR_FG = "#94a3b8";
+  var COLOR_BAR_FG = "#8491b4";  // 行内 occupancy 小条
   var COLOR_AXIS_BG = "#f8fafc";
   var COLOR_AXIS_LINE = "#e5e7eb";
   var COLOR_HOVER_ROW = "rgba(15,23,42,0.06)";
   var COLOR_HOVER_COL = "rgba(15,23,42,0.07)";
   var COLOR_FRAME_LINE = "rgba(15,23,42,0.55)";
+  // π-堆积类型配色：与 figures.PT_COLORS 保持一致
+  var PT_COLORS = {P: "#3c5488", T: "#e64b35", N: "#8491b4"};
+  var ptColors = cfg.pt_colors || PT_COLORS;
   var LABEL_FONT = "11.5px ui-monospace, Consolas, monospace";
   var AXIS_FONT = "10.5px ui-monospace, Consolas, monospace";
   var EMPTY_FONT = "13px system-ui, sans-serif";
@@ -146,8 +149,18 @@
 
   function drawRuns(row, y, colW) {
     var alpha = ALPHA_MIN + ALPHA_SPAN * row.occupancy;
-    ctx.fillStyle = "rgba(" + ACTIVE + "," + alpha.toFixed(3) + ")";
-    row.runs.forEach(function (run) {
+    if (!row.typed) {
+      drawSegments(row.runs, y, colW, "rgba(" + ACTIVE + "," + alpha.toFixed(3) + ")");
+      return;
+    }
+    Object.keys(row.typed).forEach(function (type) {
+      drawSegments(row.typed[type], y, colW, typeFill(type, alpha));
+    });
+  }
+
+  function drawSegments(runs, y, colW, fill) {
+    ctx.fillStyle = fill;
+    runs.forEach(function (run) {
       var start = Math.max(run[0], viewStart);
       var end = Math.min(run[1], viewEnd);
       if (end <= start) return;
@@ -155,6 +168,13 @@
       var width = Math.max(MIN_RUN_WIDTH, (end - start) * colW);
       ctx.fillRect(x, y + 1, width, ROW_H - 2);
     });
+  }
+
+  function typeFill(type, alpha) {
+    var hex = ptColors[type] || PT_COLORS.N;
+    var value = parseInt(hex.slice(1), 16);
+    var rgb = [value >> 16 & 255, value >> 8 & 255, value & 255];
+    return "rgba(" + rgb.join(",") + "," + alpha.toFixed(3) + ")";
   }
 
   function drawOverlays(range, colW) {

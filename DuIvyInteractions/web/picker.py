@@ -22,6 +22,18 @@ sys.stdout.write(path or "")
 """
 
 
+def picker_available() -> bool:
+    """判断当前主机是否能弹出原生目录对话框。"""
+    try:
+        import tkinter  # noqa: F401
+        if sys.platform.startswith("linux"):
+            return bool(os.environ.get("DISPLAY")
+                        or os.environ.get("WAYLAND_DISPLAY"))
+        return True
+    except Exception:
+        return False
+
+
 def pick_directory() -> str:
     """弹原生目录对话框并返回所选路径；用户取消返回空串。"""
     proc = _run_dialog()
