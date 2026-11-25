@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""3D 结构页 UI 测试：浏览按钮、水/序列开关、服务端文件弹窗与静态资源。
+"""3D 结构页 UI 测试：Mol* 原生轨迹、零重建换帧、棍棒基团与图例、服务端文件弹窗。
 
 不依赖浏览器：TestClient 断言模板 DOM，另直接读取静态资源文本校验关键 API 字符串。
 """
@@ -95,6 +95,10 @@ def _function_body(text: str, name: str) -> str:
     return match.group(0)
 
 
+def _structure_js() -> str:
+    return STRUCTURE_JS.read_text(encoding="utf-8")
+
+
 def _render_template(browse_mode: str) -> str:
     from DuIvyInteractions.web.app import TEMPLATES
 
@@ -120,21 +124,41 @@ class TestStructurePageDom:
             assert 'type="button"' in tag
             assert 'data-browse="picker"' in tag
 
-    def test_page_has_water_and_sequence_toggles(self, client):
+    def test_page_has_no_self_made_toggles(self, client):
+        """开关全部用 Mol* 原生按钮/原生 Layout 多选，页面不自造控件。"""
         html = _page(client)
-        assert 'id="showWater"' in html
-        assert 'id="showSequence"' in html
-        assert "structure-toolbar" in html
-        assert "checked" not in _tag(html, "input", "showWater")
-        assert "checked" in _tag(html, "input", "showSequence")
+        for element_id in ("showWater", "showSequence", "toggleControls"):
+            assert 'id="%s"' % element_id not in html
+        assert "show water" not in html
+        assert "structure-toolbar" not in html
+        for element_id in ("molstarViewer", "existenceBar", "groupLegend",
+                           "frameLabel", "structureStatus"):
+            assert 'id="%s"' % element_id in html
 
     def test_page_keeps_viewer_dom_ids(self, client):
         html = _page(client)
-        for element_id in ("molstarViewer", "frameSlider", "frameLabel",
-                           "existenceBar", "structureStatus", "structureConfig",
+        for element_id in ("molstarViewer", "frameLabel", "existenceBar",
+                           "structureStatus", "structureConfig",
                            "structureForm", "topologyInput", "trajectoryInput",
                            "openStructure"):
             assert 'id="%s"' % element_id in html
+
+    def test_page_has_no_range_slider(self, client):
+        """进度条已并入相互作用向量条：页面不再有 range 输入。"""
+        html = _page(client)
+        assert 'type="range"' not in html
+        assert 'id="frameSlider"' not in html
+
+    def test_existence_bar_is_the_frame_slider(self, client):
+        html = _page(client)
+        bar = _tag(html, "div", "existenceBar")
+        assert "bars" in bar and "structure-existence" in bar
+        assert 'role="slider"' in bar
+        assert 'tabindex="0"' in bar
+        assert 'aria-valuemin="0"' in bar
+        assert 'aria-valuemax="' in bar
+        assert 'aria-valuenow="0"' in bar
+        assert '<span class="on"' in html
 
     def test_page_links_viewer_assets_in_order(self, client):
         html = _page(client)
@@ -147,6 +171,15 @@ class TestStructurePageDom:
         html = _page(client)
         assert "http://" not in html
         assert "https://" not in html
+
+    def test_page_has_residue_number_hint(self, client):
+        html = _page(client)
+        assert "标签编号同时给出 h5 表格编号与 PDB auth 编号" in html
+        assert "TYR50 (PDB 51)" in html
+
+    def test_page_states_water_is_not_shown(self, client):
+        html = _page(client)
+        assert "水分子不显示" in html
 
 
 # ============================================================
@@ -185,40 +218,369 @@ class TestServerFilePicker:
 
 
 # ============================================================
-# 静态资源
+# 静态资源（原生轨迹 / 零重建 / 棍棒基团）
 # ============================================================
 
 
-class TestStaticAssets:
-    def test_filepick_script_is_served(self, client):
-        response = client.get("/static/filepick.js")
-        assert response.status_code == 200
-        assert "DiiFilePick" in response.text
-
-    def test_structure_script_keeps_required_apis(self):
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        for token in ("focusLoci", "customText", "solvent", "/api/pick",
-                      "layoutShowControls", "layoutShowSequence",
-                      "involves_water", "contact_label", "DiiFilePick"):
+class TestNativeTrajectoryScript:
+    def test_trajectory_loaded_once_by_native_api(self):
+        text = _structure_js()
+        for token in ("loadTrajectory(", "model-data", "coordinates-url",
+                      "isBinary: true", "frameIndex"):
             assert token in text, token
-        assert "&solvent=" in text
+        call = _function_body(text, "loadTrajectoryOnce")
+        for token in ("MODEL_KIND", "coordinates-url", "TRAJECTORY_URL",
+                      "trajectoryFormat()"):
+            assert token in call, token
+        assert 'MODEL_KIND = "model-data"' in text
+
+    def test_topology_pdb_uses_model_data_branch(self):
+        """PDB 不是拓扑格式（dataFormats 只对 psf/prmtop/top 给 .topology），
+        必须走 model-data 分支，否则 loadTrajectory 内部读 r.ref 会抛 TypeError。"""
+        text = _structure_js()
+        assert text.count("topology-data") == 0
+        assert text.count("model-data") >= 1
+        assert text.count('kind: MODEL_KIND') == 1
+        assert 'format: TOPOLOGY_FORMAT' in _function_body(
+            text, "loadTrajectoryOnce")
+
+    def test_load_failure_message_carries_context(self):
+        body = _function_body(_structure_js(), "loadFailureText")
+        for token in ("MODEL_KIND", "TOPOLOGY_FORMAT", "trajectoryFormat()",
+                      "trajectory load failed"):
+            assert token in body, token
+
+    def test_model_ref_lookup_has_three_levels(self):
+        """换帧目标定位：hierarchy model 条目 → preset.model → 扫变换名。"""
+        text = _structure_js()
+        body = _function_body(text, "findModelRef")
+        assert "structureEntry()" in body
+        assert "preset.model" in body
+        assert "scanModelRef()" in body
+        scan = _function_body(text, "scanModelRef")
+        assert "MODEL_TRANSFORM_NAME" in scan
+        assert 'MODEL_TRANSFORM_NAME = "model-from-trajectory"' in text
+
+    def test_script_never_rebuilds_structure(self):
+        assert _structure_js().count("loadStructureFromData") == 0
+
+    def test_frame_path_only_moves_model_index(self):
+        text = _structure_js()
+        assert "updateTransform" in text
+        assert "MODEL_INDEX_PARAM = \"modelIndex\"" in text
+        for name in ("selectFrame", "applyMolstarFrame", "pollFrame"):
+            body = _function_body(text, name)
+            assert "loadStructureFromData" not in body, name
+            assert "loadTrajectory" not in body, name
+        apply_body = _function_body(text, "applyMolstarFrame")
+        assert "params[MODEL_INDEX_PARAM] = frameIndex" in apply_body
+        assert "updateTransform" in apply_body
+
+    def test_camera_is_focused_only_once(self):
+        text = _structure_js()
+        assert "function focusInitially(" in text
+        assert text.count("managers.camera") == 1
+        body = _function_body(text, "focusInitially")
+        for token in ("focusFromResidues(", "focusFromEachResidue(",
+                      "focusWholeStructure()", "lockCamera()"):
+            assert token in body, token
+        assert "updateTransform" not in body
+        assert "canvas.setProps({ camera: { manualReset: true } })" in text
+
+    def test_focus_has_three_level_fallback(self):
+        """聚焦回退：两端并集 → 两端各自合并 → 主结构整体，路径进状态栏。"""
+        text = _structure_js()
+        assert 'focusPath = path || "none"' in text
+        apply_body = _function_body(text, "applyFocusLoci")
+        assert "focusLoci(" in apply_body
+        assert "isLociEmpty(" in apply_body
+        assert '"residues"' in _function_body(text, "focusFromResidues")
+        assert '"residues-each"' in _function_body(text, "focusFromEachResidue")
+        assert '"structure"' in _function_body(text, "focusWholeStructure")
+        assert '"focus: " + focusPath' in _function_body(text, "statusText")
+
+    def test_loci_are_remapped_to_root_structure(self):
+        """测量/相机必须用主结构上的 Loci（组件子结构的 Loci 先 remap）。"""
+        text = _structure_js()
+        to_root = _function_body(text, "toRootLoci")
+        assert "rootStructure()" in to_root
+        assert "Loci.remap(" in to_root
+        assert "rootLociOf(" in _function_body(text, "buildContactMeasurement")
+        assert "rootLociOf(" in _function_body(text, "focusFromResidues")
+        assert "wholeStructureLoci(componentStructure" not in text
+
+    def test_structure_cell_is_resolved_by_ref(self):
+        """帧更新会换掉 structure cell 对象，主结构必须按 ref 实时取。"""
+        text = _structure_js()
+        assert "var structureRef = null;" in text
+        body = _function_body(text, "structureCell")
+        assert "cells.get(structureRef)" in body
+        assert "tryCreateComponent(structureRef" in text
+        assert "tryCreateComponentStatic(structureRef" in text
+
+    def test_contact_builds_new_measurement_before_removing_old(self):
+        text = _structure_js()
+        update = _function_body(text, "updateContact")
+        build_at = update.index("buildContactMeasurement(")
+        install_at = update.index("installMeasurement(")
+        assert build_at < install_at
+        assert "removeMeasurement()" in _function_body(text, "installMeasurement")
+        active_path = update[update.index("contactAt("):build_at]
+        assert "removeMeasurement" not in active_path
+        assert 'contactState = "failed"' in text
+        assert 'contactState = "ok"' in text
+        assert '"contact: " + contactState' in _function_body(text, "statusText")
+
+    def test_script_uses_expression_loci_and_sticks(self):
+        text = _structure_js()
+        for token in ("fromExpression", "ball-and-stick", "sizeFactor",
+                      "sizeAspectRatio", "GROUP_COLORS",
+                      "tryCreateComponentStatic", "addRepresentation"):
+            assert token in text, token
+        assert "STICK_SIZE = 0.16" in text
+        assert "GROUP_STICK_SIZE = 0.18" in text
+        assert "STICK_ASPECT = 1.0" in text
+        assert "LIGAND_SIZE = 0.28" in text
+
+    def test_mixed_layers_exclude_interaction_residues(self):
+        """主干层不叠加：骨架/配体层都排除相互作用残基（它们改用棍棒显示）。"""
+        text = _structure_js()
+        body = _function_body(text, "polymerExpression")
+        assert "POLYMER_EXPRESSION + \" and not (\"" in body
+        assert "residueSelectorUnion(residues)" in body
+        lig = _function_body(text, "ligandExpression")
+        assert "NON_POLYMER_EXPRESSION" in lig
+        assert "and not (" in lig
+        assert "residueSelectorUnion(residues)" in lig
+
+    def test_residue_sticks_are_complementary_partitions(self):
+        """相互作用残基拆成互补两块：其余原子（灰）+ 定义基团原子（组色）。"""
+        text = _structure_js()
+        residue = _function_body(text, "buildResidueLayer")
+        assert "groupUnionExpression(residue)" in residue
+        assert "buildResidueRest(" in residue
+        assert "TAG_RESIDUE_ATOMS" in residue
+        rest = _function_body(text, "buildResidueRest")
+        assert "residueSelector(residue)" in rest
+        assert '") and not ("' in rest
+        assert "TAG_RESIDUE_REST" in rest
+        assert "STICK_COLOR" in rest
+        selector = _function_body(text, "residueSelector")
+        assert "residue_selector" in selector
+        union = _function_body(text, "residueSelectorUnion")
+        assert '") or ("' not in union
+        assert '" or "' in union
+        assert "STICK_SIZE = 0.16" in text and "GROUP_STICK_SIZE = 0.18" in text
+        assert "组色 = 定义基团原子；灰色 = 同残基其余原子" in text
+
+    def test_script_uses_backend_expression_payload(self):
+        text = _structure_js()
+        for token in ("residues", "contacts", "/api/structure/interactions",
+                      "/api/structure/contact", "/api/structure/topology",
+                      "/api/structure/trajectory", "existence"):
+            assert token in text, token
+        assert "groupAtomExpression" in text
+        assert "groupUnionExpression" in text
+        assert "EXPRESSION_LANGUAGE = \"pymol\"" in text
+
+    def test_topology_request_carries_type_and_idx(self):
+        """拓扑 PDB 按该对原子打 B-factor 标记，请求必须带 type/idx。"""
+        body = _function_body(_structure_js(), "topologyUrl")
+        assert "type=" in body and "idx=" in body
+        assert "TOPOLOGY_URL" in body
+        assert "encodeURIComponent(cfg.type)" in body
+
+    def test_expression_strings_are_passed_through_unchanged(self):
+        """表达式原样交给 Mol* 解析：脚本里不得出现按空格/关键字改写表达式的代码。"""
+        text = _structure_js()
+        assert 'params: { language: EXPRESSION_LANGUAGE, expression: expression }' in text
+        assert "groupUnionExpression(residue)" in _function_body(
+            text, "buildResidueLayer")
+        assert '") and not ("' in _function_body(text, "buildResidueRest")
+        assert "residueSelector(residue)" in _function_body(
+            text, "buildResidueRest")
+        assert "POLYMER_EXPRESSION" in _function_body(text, "polymerExpression")
+        for token in ("split(\" and", "replace(/chain", "parseExpression",
+                      "resi \""):
+            assert token not in text, token
+
+    def test_water_residues_skip_rest_partition(self):
+        """水残基选择器不唯一（resSeq 截断）：跳过"其余原子"层与排除列表。"""
+        text = _structure_js()
+        assert "is_water" in text
+        helper = _function_body(text, "isWaterResidue")
+        assert "is_water" in helper
+        assert "isWaterResidue(" in _function_body(text, "buildResidueRest")
+        assert "isWaterResidue(" in _function_body(text, "residueSelectorUnion")
+
+    def test_script_polls_native_trajectory_controls(self):
+        text = _structure_js()
+        assert "viewportShowTrajectoryControls: true" in text
+        assert "FRAME_POLL_MS = 150" in text
+        assert "TrajectoryInfo" in text
+        assert "setInterval(pollFrame, FRAME_POLL_MS)" in text
+
+    def test_script_drops_old_water_and_overlay_paths(self):
+        text = _structure_js()
+        for token in ("showWater", "contact_pdb", "highlights", "solvent",
+                      "loadStructureCell", "renderPayload", "clearGroups",
+                      "involves_water", "contact_label"):
+            assert token not in text, token
+
+    def test_existence_bar_and_slider_are_driven_by_payload(self):
+        text = _structure_js()
+        assert "function renderExistence(" in text
+        assert "function highlightFrame(" in text
+        assert "function updateFrameRange(" in text
+        assert 'className = values[i] ? "on" : ""' in text
+        assert 'aria-valuenow' in text
+        assert '" active"' in text
+
+    def test_existence_bar_handles_pointer_and_keyboard(self):
+        """向量条即进度条：指针拖动/点选 + 方向键/Home/End 换帧。"""
+        text = _structure_js()
+        assert "frameSlider" not in text
+        for token in ("pointerdown", "pointermove", "pointerup",
+                      "pointercancel", "setPointerCapture",
+                      "releasePointerCapture", "frameFromPointer",
+                      "ArrowLeft", "ArrowRight", "Home", "End"):
+            assert token in text, token
+        pointer = _function_body(text, "frameFromPointer")
+        assert "getBoundingClientRect()" in pointer
+        assert "Math.floor" in pointer
+        assert "clampFrame(" in pointer
+        down = _function_body(text, "onPointerDown")
+        assert "requestFrame(frameFromPointer(event))" in down
+        assert "setPointerCapture" in down
+
+    def test_group_legend_note_is_rendered(self):
+        text = _structure_js()
+        assert "structure-group-note" in text
+        assert "组色 = 定义基团原子" in text
+        body = _function_body(text, "renderLegend")
+        assert "legendItem(" in body
+        assert "legendNote()" in body
 
     def test_frontend_scripts_avoid_innerhtml(self):
         for path in (STRUCTURE_JS, FILEPICK_JS):
             assert "innerHTML" not in path.read_text(encoding="utf-8")
 
-    def test_css_has_filepick_and_toolbar_rules(self):
-        text = APP_CSS.read_text(encoding="utf-8")
-        assert ".filepick-modal" in text
-        assert ".filepick-row" in text
-        assert ".structure-toolbar" in text
-        assert ".structure-toggle" in text
+    def test_filepick_script_is_served(self, client):
+        response = client.get("/static/filepick.js")
+        assert response.status_code == 200
+        assert "DiiFilePick" in response.text
 
     def test_structure_script_keeps_viewer_unexpanded(self):
         """静态检查：不启用 Mol* 展开态（展开态 fixed 定位会盖住页内工具栏/滑块）。"""
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
+        text = _structure_js()
         assert "layoutIsExpanded: false" in text
         assert "layoutIsExpanded: true" not in text
+
+    def test_left_panel_collapsed_to_icon_strip(self):
+        """左侧导航默认收起为图标条：viewer 选项 collapseLeftPanel 必须为 true。"""
+        text = _structure_js()
+        assert "layoutShowLeftPanel: true" in text
+        assert "collapseLeftPanel: true" in text
+        assert "collapseLeftPanel: false" not in text
+
+    def test_viewer_uses_native_molstar_controls(self):
+        """开关全部用原生：Toggle Controls Panel + Settings（Layout 多选里才有 Sequence）。"""
+        text = _structure_js()
+        assert "layoutShowControls: true" in text
+        assert "layoutShowLeftPanel: true" in text
+        assert "layoutShowSequence: true" in text
+        assert "collapseLeftPanel: true" in text
+        assert "collapseRightPanel: false" in text
+        assert "viewportShowControls: true" in text
+        assert "viewportShowSettings: true" in text
+        assert "viewportShowTrajectoryControls: true" in text
+
+    def test_script_has_no_self_made_toggle_logic(self):
+        """自造的 controls/sequence 开关逻辑必须全部删除，不主动改 Mol* tab。"""
+        text = _structure_js()
+        for token in ("toggleControls", "showSequence", "applySequence",
+                      "toggleSequenceClass", "copyShallow", "leftPanelTabName",
+                      "NO_SEQUENCE_CLASS", "regionState"):
+            assert token not in text, token
+
+    def test_no_left_panel_tab_hack(self):
+        """不再主动改左侧 tab（图标条与内容区交给 Mol* 自己的 collapsed 语义）。"""
+        assert "leftPanelTabName" not in _structure_js()
+
+    def test_css_does_not_hide_left_panel_content(self):
+        text = APP_CSS.read_text(encoding="utf-8")
+        assert ".msp-layout-collapse-left .msp-layout-left" in text
+        assert ".msp-left-panel-controls .msp-scrollable-container" not in text
+        assert ".msp-left-panel-controls-buttons" not in text
+
+    def test_polymer_expression_uses_real_macro(self):
+        """polymer/organic/inorganic 不是可靠宏；用 protein / not (protein or water or nucleic)。"""
+        text = _structure_js()
+        assert 'POLYMER_EXPRESSION = "protein"' in text
+        assert 'POLYMER_EXPRESSION = "polymer"' not in text
+        assert 'NON_POLYMER_EXPRESSION = "not (protein or water or nucleic)"' in text
+        assert "organic or inorganic" not in text
+        poly = _function_body(text, "polymerExpression")
+        assert 'POLYMER_EXPRESSION + " and not ("' in poly
+        lig = _function_body(text, "ligandExpression")
+        assert "NON_POLYMER_EXPRESSION" in lig
+        assert "and not (" in lig
+
+    def test_empty_component_falls_back(self):
+        """构建成功但为空的组件按失败处理，骨架回退 static polymer、配体回退 static ligand。"""
+        text = _structure_js()
+        assert "componentElementCount" in text
+        assert "elementCount" in text
+        assert "[dii] empty component" in text
+        guard = _function_body(text, "buildScriptComponent")
+        assert "componentElementCount(" in guard
+        assert "ok: false" in guard
+        polymer = _function_body(text, "buildPolymerLayer")
+        assert "buildStaticLayer(POLYMER_KEYWORD" in polymer
+        plain = _function_body(text, "buildPlainLigandLayer")
+        assert "STATIC_LIGAND" in plain
+
+    def test_script_keeps_sequence_toggle_and_structure_form(self):
+        text = _structure_js()
+        for token in ("structureForm", "/api/pick",
+                      "DiiFilePick", "openStructure"):
+            assert token in text, token
+
+
+# ============================================================
+# 基团图例 / 组色 / CSS
+# ============================================================
+
+
+class TestGroupLegendAndCss:
+    def test_page_has_group_legend_container(self, client):
+        html = _page(client)
+        assert 'id="groupLegend"' in html
+        assert "structure-groups" in html
+        legend_at = html.index('id="groupLegend"')
+        status_at = html.index('id="structureStatus"')
+        assert legend_at < status_at
+
+    def test_structure_script_group_palette_is_npg(self):
+        text = _structure_js()
+        match = re.search(r"GROUP_COLORS\s*=\s*\[([^\]]*)\]", text)
+        assert match, "missing GROUP_COLORS array"
+        assert re.findall(r"#[0-9a-fA-F]{6}", match.group(1)) == [
+            "#e64b35", "#3c5488", "#00a087", "#4dbbd5"]
+
+    def test_structure_script_residue_stick_color(self):
+        text = _structure_js()
+        assert 'STICK_COLOR = "#8491b4"' in text
+
+    def test_css_has_group_legend_rules(self):
+        text = APP_CSS.read_text(encoding="utf-8")
+        assert ".structure-groups" in text
+        assert ".structure-group-dot" in text
+        assert "width: 8px" in text
+        assert ".structure-group-note" in text
+        assert ".structure-existence span.active" in text
+        assert "cursor: grab" in text
+        assert "touch-action: none" in text
 
     def test_css_viewer_container_rule_takes_effect(self):
         """静态检查：末尾 .structure-viewer 规则把 viewer 约束为容器内 620px。"""
@@ -229,105 +591,9 @@ class TestStaticAssets:
         assert "height: 620px" in final_rule
         assert "position: relative" in final_rule
 
-
-# ============================================================
-# 相互作用两端基团球棍标注 + 图例
-# ============================================================
-
-
-class TestGroupAnnotations:
-    def test_page_has_group_legend_container(self, client):
-        html = _page(client)
-        assert 'id="groupLegend"' in html
-        assert "structure-groups" in html
-        legend_at = html.index('id="groupLegend"')
-        status_at = html.index('id="structureStatus"')
-        assert legend_at < status_at
-
-    def test_structure_script_keeps_group_overlay_apis(self):
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        for token in ("GROUP_COLORS", "ball-and-stick", "addRepresentation",
-                      "StructureElement.Bundle.fromLoci", "payload.groups"):
-            assert token in text, token
-
-    def test_structure_script_group_palette_is_npg(self):
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        match = re.search(r"GROUP_COLORS\s*=\s*\[([^\]]*)\]", text)
-        assert match, "missing GROUP_COLORS array"
-        assert re.findall(r"#[0-9a-fA-F]{6}", match.group(1)) == [
-            "#e64b35", "#3c5488", "#00a087"]
-
-    def test_structure_script_clears_group_reprs_per_frame(self):
-        """静态检查：换帧时复用 state.data.build().delete 清除基团表示。"""
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        assert "groupReprs" in text
-        assert "function clearGroups(" in text
-        assert "clearGroups()" in text
-
-    def test_group_component_uses_awaited_structure_selector(self):
-        """tryCreateComponent 首参必须是 cell/selector，且是 await 过的 selector。"""
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        assert "function structureSelector(" in text
-        assert "structureRef(" not in text
-        match = re.search(r"tryCreateComponent\(\s*([A-Za-z0-9_$.]+)", text)
-        assert match, "missing tryCreateComponent call"
-        first_arg = match.group(1)
-        assert first_arg != "structureRef"
-        assert not first_arg.endswith(".ref"), first_arg
-        assert re.search(r"groupComponent\([^)]*\)\s*\.then\(", text, re.S), \
-            "groupComponent 返回的 selector 必须先 await 再传给 addRepresentation"
-        assert 'console.warn("[dii] group component failed"' in text
-
-    def test_css_has_group_legend_rules(self):
+    def test_css_has_filepick_rules_without_self_made_toggles(self):
         text = APP_CSS.read_text(encoding="utf-8")
-        assert ".structure-groups" in text
-        assert ".structure-group-dot" in text
-        assert "width: 8px" in text
-
-
-# ============================================================
-# 高亮小结构路径（一组一 PDB + 接触对 PDB）
-# ============================================================
-
-
-class TestHighlightStructures:
-    def test_structure_script_uses_highlight_payload_fields(self):
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        for token in ("payload.highlights", "contact_pdb", "contact_label"):
-            assert token in text, token
-
-    def test_each_highlight_loads_its_own_structure(self):
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        assert "loadStructureFromData" in _function_body(text, "loadStructureCell")
-        assert "loadStructureCell(pdb)" in _function_body(text, "highlightStep")
-        runner = _function_body(text, "addHighlightReprs")
-        assert "highlightStep(" in runner
-        assert "for (" in runner
-
-    def test_highlight_path_avoids_main_structure_atom_indices(self):
-        """新高亮路径不得使用主结构的原子序号（unitOf），它只留在回退分支。"""
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        for name in ("wholeStructureLoci", "highlightStep", "addHighlightReprs",
-                     "addContactPdb", "structureAtomEntries"):
-            assert "unitOf" not in _function_body(text, name), name
-        assert "unitOf" in _function_body(text, "groupLoci")
-
-    def test_structure_script_has_default_repr_cleanup(self):
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        body = _function_body(text, "clearDefaultReprs")
-        for token in ("components", "representations", "builder.delete",
-                      "canUndo: false"):
-            assert token in body, token
-        assert "default representation cleanup failed" in body
-
-    def test_highlight_cleans_default_reprs_before_adding(self):
-        """新球棍表示必须先删掉小结构自带的默认表示（否则双重渲染）。"""
-        text = STRUCTURE_JS.read_text(encoding="utf-8")
-        step = _function_body(text, "highlightStep")
-        assert step.index("clearDefaultReprs(") < step.index("addGroupRepr(")
-        assert "clearDefaultReprs(" in _function_body(text, "addContactPdb")
-
-    def test_page_has_residue_number_hint(self, client):
-        html = _page(client)
-        assert "标签编号同时给出 h5 表格编号与 PDB auth 编号" in html
-        assert "TYR50 (PDB 51)" in html
+        assert ".filepick-modal" in text
+        assert ".filepick-row" in text
+        assert ".structure-toolbar" not in text
+        assert ".structure-toggle" not in text

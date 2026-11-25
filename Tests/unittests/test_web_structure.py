@@ -4,7 +4,9 @@
 不依赖真实轨迹：用 tmp_path 构造最小 PDB 与 h5。
 """
 
+import collections
 import io
+import re
 from pathlib import Path
 
 import MDAnalysis as mda
@@ -14,9 +16,10 @@ import pytest
 from DuIvyInteractions.core.datas import AtomData, Group, Interaction
 from DuIvyInteractions.io.h5 import save_interactions
 from DuIvyInteractions.visualizers.structure import (
-    FRAME_CACHE_SIZE, SAMPLE_ATOMS, STRUCTURE_CACHE_SIZE, WATER_RESIDUES,
-    alignment_errors, closest_contact, contact_label, frame_pdb, frame_view,
-    group_atoms, group_label, involves_water, load_universe,
+    CONTACT_FRAME_LIMIT, SAMPLE_ATOMS, STRUCTURE_CACHE_SIZE, WATER_RESIDUES,
+    alignment_errors, closest_contact, contact_label, frame_contact,
+    frame_contacts, group_atoms, group_label, interaction_expressions,
+    involves_water, load_universe, residue_chains, topology_pdb,
 )
 from DuIvyInteractions.web.picker import FILE_TYPES, pick_file
 
@@ -32,24 +35,66 @@ WATER_ATOMS = [("OW", (9.0, 9.0, 9.0), "O", "SOL", 2),
                ("H1", (0.0, 0.0, 1.0), "H", "ALA", 1),
                ("O1", (0.0, 0.0, 2.8), "O", "ALA", 1),
                ("O2", (0.0, 0.0, 4.0), "O", "ALA", 1)]
+# 水桥三组：SOL2 在前（组 1 的原子索引 0/1）、ALA1 居中（组 0 的 2/3）、LYS3 在后
+BRIDGE_ATOMS = [("OW", (9.0, 9.0, 9.0), "O", "SOL", 2),
+                ("HW1", (9.4, 9.0, 9.0), "H", "SOL", 2),
+                ("N1", (0.0, 0.0, 0.0), "N", "ALA", 1),
+                ("H1", (0.0, 0.0, 1.0), "H", "ALA", 1),
+                ("O1", (0.0, 0.0, 2.8), "O", "LYS", 3),
+                ("O2", (0.0, 0.0, 4.0), "O", "LYS", 3)]
+# 蛋白 / 多原子配体 / 水 / 单原子金属离子 / 单原子卤素离子
+MIXED_ATOMS = [("N1", (0.0, 0.0, 0.0), "N", "ALA", 1),
+               ("CA", (0.0, 0.0, 1.0), "C", "ALA", 1),
+               ("C1", (1.0, 0.0, 0.0), "C", "MOL", 5),
+               ("C2", (2.0, 0.0, 0.0), "C", "MOL", 5),
+               ("OW", (3.0, 0.0, 0.0), "O", "SOL", 7),
+               ("HW1", (3.4, 0.0, 0.0), "H", "SOL", 7),
+               ("HW2", (3.0, 0.4, 0.0), "H", "SOL", 7),
+               ("NA", (4.0, 0.0, 0.0), "NA", "NA", 9),
+               ("CL", (5.0, 0.0, 0.0), "CL", "CL", 10)]
+# 两个 segment（PDB chainID 列不同），各 1 残基且 resid 相同 → chain 字母必须不同
+SEGMENT_ATOMS = [("N1", (0.0, 0.0, 0.0), "N", "ALA", 51, "A"),
+                 ("N1", (1.0, 0.0, 0.0), "N", "GLY", 51, "B")]
 # h5 的 residue_id 是 0 基索引，universe 的 resid 是 1 基 auth 编号（差 1）。
-NUMBERED_ATOMS = [("CZ", (0.0, 0.0, 0.0), "C", "TYR", 51),
-                  ("CE1", (4.0, 0.0, 2.0), "C", "TYR", 51),
-                  ("N16", (0.0, 0.0, 1.2), "N", "MOL", 143),
-                  ("N17", (0.0, 0.0, 5.0), "N", "MOL", 143)]
+# 蛋白段与配体段分属两个 segment（PDB chainID A / B）。
+NUMBERED_ATOMS = [("CZ", (0.0, 0.0, 0.0), "C", "TYR", 51, "A"),
+                  ("CE1", (4.0, 0.0, 2.0), "C", "TYR", 51, "A"),
+                  ("N16", (0.0, 0.0, 1.2), "N", "MOL", 143, "B"),
+                  ("N17", (0.0, 0.0, 5.0), "N", "MOL", 143, "B")]
+D927_DIR = Path(__file__).resolve().parents[1] / "test_MD_case_amber"
+D927_TOPOLOGY = D927_DIR / "md.tpr"
+D927_TRAJECTORY = D927_DIR / "md1ns.xtc"
+PDB_LINE_WIDTH = 78
+
+
+def _cryst1(box) -> str:
+    return ("CRYST1%9.3f%9.3f%9.3f  90.00  90.00  90.00 P 1           1"
+            % box)
+
+
+def _pdb_atom_lines(atoms) -> list:
+    return [f"ATOM  {serial:5d} {name:>4s} ALA A   1    "
+            f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00          {element:>2s}"
+            for serial, (name, (x, y, z), element)
+            in enumerate(atoms, start=1)]
+
+
+def _chain_atom_lines(atoms) -> list:
+    """atoms: (name, xyz, element, resname, resid, chain) → ATOM 行。"""
+    return [f"ATOM  {serial:5d} {name:>4s} {resname:>3s} {chain}{resid:4d}    "
+            f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00          {element:>2s}"
+            for serial, (name, (x, y, z), element, resname, resid, chain)
+            in enumerate(atoms, start=1)]
+
+
+def _residue_atom_lines(atoms) -> list:
+    """(name, xyz, element, resname, resid) → chain A 的 ATOM 行。"""
+    return _chain_atom_lines([tuple(atom) + ("A",) for atom in atoms])
 
 
 def _pdb_text(atoms, box=BOX) -> str:
-    lines = []
-    if box:
-        lines.append("CRYST1%9.3f%9.3f%9.3f  90.00  90.00  90.00 P 1           1"
-                     % box)
-    for serial, (name, (x, y, z), element) in enumerate(atoms, start=1):
-        lines.append(
-            f"ATOM  {serial:5d} {name:>4s} ALA A   1    "
-            f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00          {element:>2s}")
-    lines.append("END")
-    return "\n".join(lines) + "\n"
+    lines = [_cryst1(box)] if box else []
+    return "\n".join(lines + _pdb_atom_lines(atoms) + ["END"]) + "\n"
 
 
 def _write_pdb(path: Path, atoms=None, box=BOX) -> Path:
@@ -57,22 +102,36 @@ def _write_pdb(path: Path, atoms=None, box=BOX) -> Path:
     return path
 
 
+def _chain_pdb_text(atoms, box=BOX) -> str:
+    lines = [_cryst1(box)] if box else []
+    return "\n".join(lines + _chain_atom_lines(atoms) + ["END"]) + "\n"
+
+
+def _write_chain_pdb(path: Path, atoms, box=BOX) -> Path:
+    path.write_text(_chain_pdb_text(atoms, box), encoding="utf-8")
+    return path
+
+
 def _water_pdb_text(atoms, box=BOX) -> str:
-    lines = []
-    if box:
-        lines.append("CRYST1%9.3f%9.3f%9.3f  90.00  90.00  90.00 P 1           1"
-                     % box)
-    for serial, (name, (x, y, z), element, resname, resid) in enumerate(
-            atoms, start=1):
-        lines.append(
-            f"ATOM  {serial:5d} {name:>4s} {resname:>3s} A{resid:4d}    "
-            f"{x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00          {element:>2s}")
-    lines.append("END")
-    return "\n".join(lines) + "\n"
+    lines = [_cryst1(box)] if box else []
+    return "\n".join(lines + _residue_atom_lines(atoms) + ["END"]) + "\n"
 
 
-def _write_water_pdb(path: Path, atoms=None) -> Path:
-    path.write_text(_water_pdb_text(atoms or WATER_ATOMS), encoding="utf-8")
+def _write_water_pdb(path: Path, atoms=None, box=BOX) -> Path:
+    path.write_text(_water_pdb_text(atoms or WATER_ATOMS, box),
+                    encoding="utf-8")
+    return path
+
+
+def _write_multi_pdb(path: Path, atoms=None, frames: int = 2,
+                     box=BOX) -> Path:
+    head = [_cryst1(box)] if box else []
+    body = _pdb_atom_lines(atoms or ATOMS)
+    models = []
+    for frame in range(frames):
+        models += [f"MODEL     {frame + 1:4d}"] + body + ["ENDMDL"]
+    path.write_text("\n".join(head + models + ["END"]) + "\n",
+                    encoding="utf-8")
     return path
 
 
@@ -97,6 +156,19 @@ def _single(interaction_type: str, groups) -> Interaction:
                        existence=existence,
                        metrics={"distance": np.full((1, 1), 3.0)},
                        times=np.zeros(1))
+
+
+def _framed(active) -> Interaction:
+    """多帧的单对相互作用（existence 按 active 序列）。"""
+    frames = len(active)
+    groups = [(_group(0, "H_donor", [_atom(0, "N1", "N"),
+                                     _atom(1, "H1", "H")]),
+               _group(1, "H_acceptor", [_atom(2, "O1", "O"),
+                                        _atom(3, "O2", "O")]))]
+    return Interaction(interaction_type="hydrogen_bond", groups=groups,
+                       existence=np.array([list(active)], dtype=bool),
+                       metrics={"distance": np.full((1, frames), 3.0)},
+                       times=np.zeros(frames))
 
 
 def _protein_interaction() -> Interaction:
@@ -137,6 +209,25 @@ def _interaction(active: bool = True) -> Interaction:
                        existence=existence,
                        metrics={"distance": np.full((1, 1), 3.0)},
                        times=np.zeros(1))
+
+
+def _segment_interaction() -> Interaction:
+    """两 segment 各 1 残基、resid 同为 51（SEGMENT_ATOMS 顺序）。"""
+    groups = [(_group(0, "aromatic_ring", [_atom(0, "N1", "N")], "ALA", 51),
+               _group(1, "aromatic_ring", [_atom(1, "N1", "N")], "GLY", 51))]
+    return _single("pi_stacking", groups)
+
+
+def _residue_selectors(universe, residues) -> list:
+    """用真实残基构造最小 interaction，读回各组的 residue_selector。"""
+    groups = tuple(_group(index, "aromatic_ring",
+                          [_atom(int(res.atoms[0].index),
+                                 str(res.atoms[0].name))],
+                          str(res.resname), int(res.resid) - 1)
+                   for index, res in enumerate(residues))
+    rows = interaction_expressions(_single("pi_stacking", [groups]),
+                                   0, universe)["residues"]
+    return [row["residue_selector"] for row in rows]
 
 
 @pytest.fixture(autouse=True)
@@ -186,6 +277,24 @@ def _atom_lines(text: str):
     return [line for line in text.splitlines() if line.startswith("ATOM")]
 
 
+def _chain_rows(text: str) -> dict:
+    """(resname, resSeq) → chainID（拓扑 PDB 的行列解析）。"""
+    return {(line[17:20].strip(), int(line[22:26])): line[21]
+            for line in _atom_lines(text)}
+
+
+def _b_factor_rows(text: str) -> list:
+    """(原子名, B-factor) 列表（按行序，B-factor 取 61-66 列）。"""
+    return [(line[12:16].strip(), float(line[60:66]))
+            for line in _atom_lines(text)]
+
+
+def _b_band(expression: str) -> tuple:
+    """从 'b > 99.75 and b < 100.25' 取 (下界, 上界)。"""
+    low, high = re.findall(r"-?\d+\.\d+", expression)
+    return float(low), float(high)
+
+
 @pytest.fixture
 def water_pdb(tmp_path):
     return _write_water_pdb(tmp_path / "water.pdb")
@@ -219,8 +328,18 @@ def water_bridge_client(tmp_path):
 
 
 @pytest.fixture
+def bridge_pdb(tmp_path):
+    return _write_water_pdb(tmp_path / "bridge.pdb", BRIDGE_ATOMS)
+
+
+@pytest.fixture
+def bridge_universe(bridge_pdb):
+    return load_universe(str(bridge_pdb), str(bridge_pdb))
+
+
+@pytest.fixture
 def numbered_pdb(tmp_path):
-    return _write_water_pdb(tmp_path / "numbered.pdb", NUMBERED_ATOMS)
+    return _write_chain_pdb(tmp_path / "numbered.pdb", NUMBERED_ATOMS)
 
 
 @pytest.fixture
@@ -239,6 +358,47 @@ def numbered_client(tmp_path):
     return client
 
 
+@pytest.fixture
+def mixed_pdb(tmp_path):
+    return _write_water_pdb(tmp_path / "mixed.pdb", MIXED_ATOMS)
+
+
+@pytest.fixture
+def mixed_universe(mixed_pdb):
+    return load_universe(str(mixed_pdb), str(mixed_pdb))
+
+
+@pytest.fixture
+def multi_pdb(tmp_path):
+    return _write_multi_pdb(tmp_path / "multi.pdb", frames=2)
+
+
+@pytest.fixture
+def multi_universe(multi_pdb):
+    return load_universe(str(multi_pdb), str(multi_pdb))
+
+
+@pytest.fixture
+def segment_pdb(tmp_path):
+    return _write_chain_pdb(tmp_path / "segments.pdb", SEGMENT_ATOMS)
+
+
+@pytest.fixture
+def segment_universe(segment_pdb):
+    return load_universe(str(segment_pdb), str(segment_pdb))
+
+
+@pytest.fixture(scope="module")
+def d927_universe():
+    """真实 KRAS-RBD D927 体系（8 个 segment），只做冒烟级断言。"""
+    return load_universe(str(D927_TOPOLOGY), str(D927_TRAJECTORY))
+
+
+@pytest.fixture(scope="module")
+def d927_topology_text(d927_universe):
+    return topology_pdb(d927_universe)
+
+
 # ============================================================
 # structure 纯函数层
 # ============================================================
@@ -247,8 +407,14 @@ class TestConstants:
 
     def test_cache_and_sample_sizes(self):
         assert STRUCTURE_CACHE_SIZE == 2
-        assert FRAME_CACHE_SIZE == 8
         assert SAMPLE_ATOMS == 5
+
+    def test_contact_frame_limit(self):
+        assert CONTACT_FRAME_LIMIT == 5000
+
+    def test_water_residue_constant_covers_common_names(self):
+        assert {"SOL", "HOH", "WAT", "TIP3", "TIP4", "HO4", "HO5",
+                "H2O"} <= WATER_RESIDUES
 
 
 class TestLoadUniverse:
@@ -257,6 +423,11 @@ class TestLoadUniverse:
         universe = load_universe(str(pdb_file), str(pdb_file))
         assert universe.atoms.n_atoms == len(ATOMS)
         assert len(universe.trajectory) == 1
+
+    def test_multi_model_pdb_keeps_every_frame(self, multi_pdb):
+        universe = load_universe(str(multi_pdb), str(multi_pdb))
+        assert universe.atoms.n_atoms == len(ATOMS)
+        assert len(universe.trajectory) == 2
 
     def test_bad_file_raises_value_error(self, tmp_path):
         bad = tmp_path / "bad.txt"
@@ -267,43 +438,6 @@ class TestLoadUniverse:
     def test_missing_file_raises_value_error(self, tmp_path):
         with pytest.raises(ValueError, match="cannot open structure"):
             load_universe(str(tmp_path / "nope.tpr"), str(tmp_path / "nope.xtc"))
-
-
-class TestFramePdb:
-
-    def test_atom_count_and_order(self, universe):
-        text = frame_pdb(universe, 0)
-        names = [line[12:16].strip() for line in text.splitlines()
-                 if line.startswith("ATOM")]
-        assert len(names) == universe.atoms.n_atoms
-        assert names == list(universe.atoms.names)
-
-    def test_out_of_range_raises(self, universe):
-        with pytest.raises(ValueError, match="frame out of range: 1"):
-            frame_pdb(universe, 1)
-
-    def test_box_wraps_coordinates(self, tmp_path):
-        path = _write_pdb(tmp_path / "wrapped.pdb",
-                          [("C1", (12.0, 2.0, 3.0), "C")])
-        universe = load_universe(str(path), str(path))
-        line = next(line for line in frame_pdb(universe, 0).splitlines()
-                    if line.startswith("ATOM"))
-        assert float(line[30:38]) == pytest.approx(2.0)
-        assert float(line[38:46]) == pytest.approx(2.0)
-
-    def test_without_box_keeps_coordinates(self, tmp_path):
-        path = _write_pdb(tmp_path / "nobox.pdb",
-                          [("C1", (12.0, 2.0, 3.0), "C")], box=None)
-        universe = load_universe(str(path), str(path))
-        assert universe.dimensions is None
-        line = next(line for line in frame_pdb(universe, 0).splitlines()
-                    if line.startswith("ATOM"))
-        assert float(line[30:38]) == pytest.approx(12.0)
-
-    def test_original_universe_is_not_modified(self, universe):
-        before = universe.atoms.positions.copy()
-        frame_pdb(universe, 0)
-        assert np.array_equal(universe.atoms.positions, before)
 
 
 class TestAlignmentErrors:
@@ -363,6 +497,299 @@ class TestClosestContact:
         assert closest_contact(universe, [0], [1, 2]) == (0, 1)
 
 
+class TestTopologyPdb:
+    """第 0 帧全原子拓扑 PDB：行数/chain 规则/auth 编号/列宽。"""
+
+    def test_one_atom_line_per_atom(self, universe):
+        text = topology_pdb(universe)
+        lines = _atom_lines(text)
+        assert len(lines) == universe.atoms.n_atoms
+        assert [line[12:16].strip() for line in lines] == list(
+            universe.atoms.names)
+
+    def test_atom_lines_keep_fixed_width(self, mixed_universe):
+        widths = {len(line) for line in _atom_lines(
+            topology_pdb(mixed_universe))}
+        assert widths == {PDB_LINE_WIDTH}
+
+    def test_chain_rules_for_protein_water_and_ions(self, mixed_universe):
+        rows = _chain_rows(topology_pdb(mixed_universe))
+        assert rows[("ALA", 1)] == "A"
+        assert rows[("MOL", 5)] == "A"  # 同一 segment → 同一 chain 字母
+        assert rows[("SOL", 7)] == "W"
+        assert rows[("NA", 9)] == "I"
+        assert rows[("CL", 10)] == "I"
+
+    def test_segments_get_distinct_chain_letters(self, segment_universe):
+        rows = _chain_rows(topology_pdb(segment_universe))
+        assert rows[("ALA", 51)] == "A"
+        assert rows[("GLY", 51)] == "B"
+        rows = interaction_expressions(_segment_interaction(), 0,
+                                       segment_universe)["residues"]
+        selectors = [row["residue_selector"] for row in rows]
+        assert selectors == ["chain A and resi 51", "chain B and resi 51"]
+
+    def test_too_many_segments_raise_value_error(self):
+        universe = mda.Universe.empty(
+            25, n_residues=25, n_segments=25,
+            atom_resindex=np.arange(25), residue_segindex=np.arange(25))
+        universe.add_TopologyAttr("resnames", ["ALA"] * 25)
+        with pytest.raises(ValueError,
+                           match="too many segments for chain letters"):
+            residue_chains(universe)
+
+    def test_resseq_is_auth_numbering(self, numbered_universe):
+        lines = _atom_lines(topology_pdb(numbered_universe))
+        assert {int(line[22:26]) for line in lines
+                if line[17:20].strip() == "TYR"} == {51}
+        assert {int(line[22:26]) for line in lines
+                if line[17:20].strip() == "MOL"} == {143}
+
+    def test_no_conect_and_ends_with_end(self, universe):
+        text = topology_pdb(universe)
+        assert "CONECT" not in text
+        assert text.rstrip().endswith("END")
+
+    def test_coordinates_are_wrapped_for_the_box(self, tmp_path):
+        path = _write_pdb(tmp_path / "wrapped.pdb",
+                          [("C1", (12.0, 2.0, 3.0), "C")])
+        universe = load_universe(str(path), str(path))
+        line = _atom_lines(topology_pdb(universe))[0]
+        assert float(line[30:38]) == pytest.approx(2.0)
+        assert float(line[38:46]) == pytest.approx(2.0)
+
+    def test_without_box_keeps_coordinates(self, tmp_path):
+        path = _write_pdb(tmp_path / "nobox.pdb",
+                          [("C1", (12.0, 2.0, 3.0), "C")], box=None)
+        universe = load_universe(str(path), str(path))
+        line = _atom_lines(topology_pdb(universe))[0]
+        assert float(line[30:38]) == pytest.approx(12.0)
+
+    def test_topology_is_parseable_with_assigned_chains(self, mixed_universe):
+        text = topology_pdb(mixed_universe)
+        parsed = mda.Universe(io.StringIO(text), format="PDB")
+        assert parsed.atoms.n_atoms == mixed_universe.atoms.n_atoms
+        assert sorted(set(parsed.atoms.chainIDs)) == ["A", "I", "W"]
+
+    def test_tagged_atoms_get_unique_b_factors(self, numbered_universe):
+        interaction = _numbered_interaction()
+        rows = _b_factor_rows(topology_pdb(numbered_universe, interaction, 0))
+        tagged = [value for _, value in rows if value != 0.0]
+        assert len(tagged) == len(
+            [atom for group in interaction.groups[0] for atom in group.atoms])
+        assert tagged == [100.0, 101.0, 102.0, 103.0]
+
+    def test_untagged_atoms_keep_zero_b_factor(self, water_universe):
+        rows = dict(_b_factor_rows(
+            topology_pdb(water_universe, _protein_interaction(), 0)))
+        assert rows["OW"] == 0.0 and rows["HW1"] == 0.0
+        assert [rows[name] for name in ("N1", "H1", "O1", "O2")] == [
+            100.0, 101.0, 102.0, 103.0]
+
+    def test_tag_order_matches_expression_order(self, numbered_universe):
+        interaction = _numbered_interaction()
+        tagged = [name for name, value
+                  in _b_factor_rows(topology_pdb(numbered_universe,
+                                                 interaction, 0))
+                  if value != 0.0]
+        residues = interaction_expressions(
+            interaction, 0, numbered_universe)["residues"]
+        assert tagged == [row["name"] for group in residues
+                          for row in group["atoms"]]
+
+    def test_serial_column_truncates_to_five_digits(self):
+        from DuIvyInteractions.visualizers.structure import _pdb_serial
+        assert _pdb_serial(116383) == 16383
+        assert _pdb_serial(100000) == 0
+        assert _pdb_serial(51) == 51
+
+
+class TestD927SegmentChains:
+    """真实 D927（8 个 segment）的 chain 分配与蛋白残基选择器唯一性。"""
+
+    SEGMENT_CHAINS = {"seg_0_RBD_pro": "A", "seg_1_D927": "B",
+                      "seg_2_KRAS_pro": "C", "seg_3_GNP_neg": "D",
+                      "seg_4_Mg": "I", "seg_5_SOL": "W",
+                      "seg_6_NA": "I", "seg_7_CL": "I"}
+
+    def test_one_chain_letter_per_segment(self, d927_universe):
+        chains = residue_chains(d927_universe)
+        for segment in d927_universe.atoms.segments:
+            letters = {chains[int(index)]
+                       for index in segment.residues.resindices}
+            assert letters == {self.SEGMENT_CHAINS[segment.segid]}
+        protein = {self.SEGMENT_CHAINS[str(segment.segid)]: len(segment.atoms)
+                   for segment in d927_universe.atoms.segments
+                   if str(segment.segid).endswith("_pro")}
+        atom_chains = collections.Counter(
+            chains[int(index)] for index in d927_universe.atoms.resindices)
+        assert protein == {"A": atom_chains["A"], "C": atom_chains["C"]}
+
+    def test_topology_chain_atom_counts_match_segments(self, d927_universe,
+                                                       d927_topology_text):
+        segment_atoms = {segment.segid: len(segment.atoms)
+                         for segment in d927_universe.atoms.segments}
+        counts = collections.Counter(line[21] for line in
+                                     _atom_lines(d927_topology_text))
+        assert counts["A"] == segment_atoms["seg_0_RBD_pro"] == 2355
+        assert counts["B"] == segment_atoms["seg_1_D927"] == 53
+        assert counts["C"] == segment_atoms["seg_2_KRAS_pro"] == 2648
+        assert counts["D"] == segment_atoms["seg_3_GNP_neg"] == 45
+        assert counts["W"] == segment_atoms["seg_5_SOL"] == 111063
+        assert counts["I"] == (segment_atoms["seg_4_Mg"]
+                               + segment_atoms["seg_6_NA"]
+                               + segment_atoms["seg_7_CL"]) == 219
+        assert sum(counts.values()) == d927_universe.atoms.n_atoms == 116383
+
+    def test_protein_selectors_use_segment_letters(self, d927_universe):
+        residues = d927_universe.atoms.residues
+        rbd = next(res for res in residues
+                   if res.segid == "seg_0_RBD_pro" and int(res.resid) == 51)
+        kras = [res for res in residues if res.segid == "seg_2_KRAS_pro"]
+        # 该体系 KRAS 编号为 144-310、与 RBD 1-142 不重叠，故没有 resid=51；
+        # 同号冲突由合成两 segment 用例（TestTopologyPdb）覆盖。
+        assert all(int(res.resid) != 51 for res in kras)
+        selectors = _residue_selectors(d927_universe, [rbd, kras[0]])
+        assert selectors[0] == "chain A and resi 51"
+        assert selectors[1] == f"chain C and resi {int(kras[0].resid)}"
+
+
+class TestInteractionExpressions:
+    """Mol* 选择表达式（每组残基级 or 连接 + 每原子 b 区间）。"""
+
+    ATOM_BANDS = ["b > 99.75 and b < 100.25",
+                  "b > 100.75 and b < 101.25",
+                  "b > 101.75 and b < 102.25",
+                  "b > 102.75 and b < 103.25"]
+
+    def test_labels_and_residue_expressions(self, numbered_universe):
+        residues = interaction_expressions(
+            _numbered_interaction(), 0, numbered_universe)["residues"]
+        assert [row["label"] for row in residues] == [
+            "TYR50 (PDB 51) · aromatic_ring",
+            "MOL142 (PDB 143) · aromatic_ring"]
+        assert [row["expression"] for row in residues] == [
+            f"({self.ATOM_BANDS[0]}) or ({self.ATOM_BANDS[1]})",
+            f"({self.ATOM_BANDS[2]}) or ({self.ATOM_BANDS[3]})"]
+
+    def test_one_expression_per_atom(self, numbered_universe):
+        residues = interaction_expressions(
+            _numbered_interaction(), 0, numbered_universe)["residues"]
+        assert [row["name"] for row in residues[0]["atoms"]] == ["CZ", "CE1"]
+        assert [row["expression"] for row in residues[0]["atoms"]] == (
+            self.ATOM_BANDS[:2])
+        assert [row["name"] for row in residues[1]["atoms"]] == ["N16", "N17"]
+        assert [row["expression"] for row in residues[1]["atoms"]] == (
+            self.ATOM_BANDS[2:])
+
+    def test_expressions_never_fall_back_to_chain_or_resi(
+            self, numbered_universe):
+        residues = interaction_expressions(
+            _numbered_interaction(), 0, numbered_universe)["residues"]
+        expressions = [row["expression"] for row in residues] + [
+            atom["expression"] for group in residues
+            for atom in group["atoms"]]
+        assert all("chain" not in text and "resi" not in text
+                   for text in expressions)
+
+    def test_residue_selector_uses_topology_chain_rules(self, numbered_universe):
+        residues = interaction_expressions(
+            _numbered_interaction(), 0, numbered_universe)["residues"]
+        assert all(set(row) == {"label", "residue_selector", "is_water",
+                                "expression", "atoms"} for row in residues)
+        assert [row["residue_selector"] for row in residues] == [
+            "chain A and resi 51", "chain B and resi 143"]
+        chains = _chain_rows(topology_pdb(numbered_universe))
+        assert residues[0]["residue_selector"] == (
+            f"chain {chains[('TYR', 51)]} and resi 51")
+        assert residues[1]["residue_selector"] == (
+            f"chain {chains[('MOL', 143)]} and resi 143")
+
+    def test_water_bridge_groups_all_have_residue_selectors(self,
+                                                            bridge_universe):
+        residues = interaction_expressions(
+            _water_bridge_interaction(), 0, bridge_universe)["residues"]
+        selectors = [row["residue_selector"] for row in residues]
+        assert all(selectors)
+        assert selectors == ["chain A and resi 1", "chain W and resi 2",
+                             "chain A and resi 3"]
+
+    def test_is_water_flags_only_water_groups(self, bridge_universe,
+                                              numbered_universe):
+        bridge = interaction_expressions(
+            _water_bridge_interaction(), 0, bridge_universe)["residues"]
+        assert [row["is_water"] for row in bridge] == [False, True, False]
+        stack = interaction_expressions(
+            _numbered_interaction(), 0, numbered_universe)["residues"]
+        assert [row["is_water"] for row in stack] == [False, False]
+
+    def test_water_bridge_groups_have_disjoint_bands(self, bridge_universe):
+        residues = interaction_expressions(
+            _water_bridge_interaction(), 0, bridge_universe)["residues"]
+        assert [row["label"] for row in residues] == [
+            "ALA1 · H_donor", "SOL2 · water", "LYS3 · H_acceptor"]
+        assert [row["name"] for row in residues[1]["atoms"]] == ["OW", "HW1"]
+        for row in residues:
+            assert row["expression"] == " or ".join(
+                f"({atom['expression']})" for atom in row["atoms"])
+            assert "resi" not in row["expression"]
+        bands = [_b_band(row["expression"])
+                 for group in residues for row in group["atoms"]]
+        assert bands == [(99.75, 100.25), (100.75, 101.25),
+                         (101.75, 102.25), (102.75, 103.25),
+                         (103.75, 104.25), (104.75, 105.25)]
+        for index, (low, high) in enumerate(bands):
+            others = bands[:index] + bands[index + 1:]
+            assert all(high < other_low or low > other_high
+                       for other_low, other_high in others)
+
+
+class TestFrameContacts:
+    """逐帧最近接触对 [g1, a1, g2, a2]。"""
+
+    def test_one_entry_per_frame(self, multi_universe):
+        rows = frame_contacts(_framed([True, False]), 0, multi_universe)
+        assert len(rows) == len(multi_universe.trajectory) == 2
+
+    def test_active_frame_matches_closest_contact(self, multi_universe):
+        interaction = _framed([True, False])
+        rows = frame_contacts(interaction, 0, multi_universe)
+        first, second = interaction.groups[0]
+        expected = closest_contact(multi_universe, first.atom_indices,
+                                   second.atom_indices)
+        assert rows[0] == [0, _position(first, expected[0]),
+                           1, _position(second, expected[1])]
+        contacts = [first.atoms[rows[0][1]], second.atoms[rows[0][3]]]
+        assert [atom.atom_name for atom in contacts] == [
+            multi_universe.atoms[index].name for index in expected]
+
+    def test_inactive_frame_is_none(self, multi_universe):
+        rows = frame_contacts(_framed([True, False]), 0, multi_universe)
+        assert rows[0] is not None and rows[1] is None
+
+    def test_over_limit_returns_none(self, multi_universe):
+        interaction = _framed([True, False])
+        assert frame_contacts(interaction, 0, multi_universe,
+                              limit=1) is None
+        assert frame_contacts(interaction, 0, multi_universe,
+                              limit=2) is not None
+
+    def test_single_frame_contact_uses_first_and_last_group(self, bridge_universe):
+        interaction = _water_bridge_interaction()
+        row = frame_contact(interaction, 0, bridge_universe, 0)
+        expected = closest_contact(bridge_universe, [2, 3], [4, 5])
+        assert row == [0, _position(interaction.groups[0][0], expected[0]),
+                       2, _position(interaction.groups[0][2], expected[1])]
+
+    def test_single_frame_out_of_range_is_none(self, universe):
+        assert frame_contact(_interaction(), 0, universe, 3) is None
+
+
+def _position(group, global_index: int) -> int:
+    """全局原子索引在 group.atoms 中的位置（测试侧独立实现）。"""
+    return [atom.atom_global_idx for atom in group.atoms].index(global_index)
+
+
 # ============================================================
 # 路由
 # ============================================================
@@ -403,79 +830,176 @@ class TestStructureSelect:
         assert response.json()["detail"] == "path outside root"
 
 
-class TestStructureView:
+class TestTopologyRoute:
 
-    def test_view_without_selection_returns_400(self, client):
-        response = client.get("/api/structure/view",
-                              params={"type": "hydrogen_bond", "idx": 0,
-                                      "frame": 0})
+    def test_returns_full_topology_pdb(self, client, pdb_file):
+        _open_structure(client, pdb_file)
+        response = client.get("/api/structure/topology",
+                              params={"type": "hydrogen_bond", "idx": 0})
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "chemical/x-pdb"
+        rows = _b_factor_rows(response.text)
+        assert len(rows) == len(ATOMS)
+        assert [value for _, value in rows] == [100.0, 101.0, 102.0, 103.0]
+        assert response.text.rstrip().endswith("END")
+
+    def test_tags_only_pair_atoms_in_full_structure(self, water_client,
+                                                    water_pdb):
+        _open_structure(water_client, water_pdb)
+        response = water_client.get("/api/structure/topology",
+                                    params={"type": "hydrogen_bond",
+                                            "idx": 0})
+        rows = dict(_b_factor_rows(response.text))
+        assert len(rows) == len(WATER_ATOMS)
+        assert rows["OW"] == 0.0 and rows["HW1"] == 0.0
+        assert [rows[name] for name in ("N1", "H1", "O1", "O2")] == [
+            100.0, 101.0, 102.0, 103.0]
+
+    def test_missing_pair_parameters_return_400(self, client, pdb_file):
+        _open_structure(client, pdb_file)
+        assert client.get("/api/structure/topology").status_code == 400
+        response = client.get("/api/structure/topology",
+                              params={"type": "hydrogen_bond"})
+        assert response.status_code == 400
+        assert response.json()["detail"] == "type and idx required"
+
+    def test_alignment_errors_return_400(self, client, pdb_file, monkeypatch):
+        _open_structure(client, pdb_file)
+        monkeypatch.setattr("DuIvyInteractions.web.app.alignment_errors",
+                            lambda universe, interaction: ["atom 0: mismatch"])
+        response = client.get("/api/structure/topology",
+                              params={"type": "hydrogen_bond", "idx": 0})
+        assert response.status_code == 400
+        assert response.json()["errors"] == ["atom 0: mismatch"]
+
+    def test_without_selection_returns_400(self, client):
+        response = client.get("/api/structure/topology")
         assert response.status_code == 400
         assert response.json()["detail"] == "structure not selected"
 
-    def test_view_returns_frame_payload(self, client, pdb_file):
+    def test_served_with_token(self, h5_dir, pdb_file):
+        client = _client(token=TOKEN)
+        client.post("/select", params={"token": TOKEN},
+                    data={"path": str(h5_dir)})
+        selected = client.post("/api/structure/select",
+                               params={"token": TOKEN},
+                               data={"topology": str(pdb_file),
+                                     "trajectory": str(pdb_file)})
+        assert selected.status_code == 200
+        response = client.get("/api/structure/topology",
+                              params={"token": TOKEN,
+                                      "type": "hydrogen_bond", "idx": 0})
+        assert response.status_code == 200
+        assert "ATOM" in response.text
+
+    def test_requires_token(self):
+        client = _client(token=TOKEN)
+        response = client.get("/api/structure/topology")
+        assert response.status_code == 401
+
+
+class TestTrajectoryRoute:
+
+    def test_returns_raw_trajectory_bytes(self, client, pdb_file):
         _open_structure(client, pdb_file)
-        response = client.get("/api/structure/view",
-                              params={"type": "hydrogen_bond", "idx": 0,
-                                      "frame": 0})
+        response = client.get("/api/structure/trajectory")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.content == pdb_file.read_bytes()
+        assert len(response.content) == pdb_file.stat().st_size
+        assert response.content[:4] == b"CRYS"
+
+    def test_without_selection_returns_400(self, client):
+        response = client.get("/api/structure/trajectory")
+        assert response.status_code == 400
+        assert response.json()["detail"] == "structure not selected"
+
+
+class TestInteractionsRoute:
+
+    def _payload(self, client, pdb_file, type_name="pi_stacking", idx=0):
+        _open_structure(client, pdb_file)
+        return client.get("/api/structure/interactions",
+                          params={"type": type_name, "idx": idx})
+
+    def test_payload_shape(self, numbered_client, numbered_pdb):
+        response = self._payload(numbered_client, numbered_pdb)
         assert response.status_code == 200
         data = response.json()
-        assert data["frame"] == 0 and data["n_frames"] == 1
-        assert data["active"] is True
+        assert set(data) == {"n_frames", "existence", "residues",
+                             "contacts", "n_atoms"}
+        assert data["n_frames"] == 1
         assert data["existence"] == [1]
-        assert data["contact"] == [1, 2]
-        assert data["pdb"].count("ATOM") == len(ATOMS)
+        assert data["n_atoms"] == len(NUMBERED_ATOMS)
+        assert data["contacts"] == [[0, 0, 1, 0]]
 
-    def test_view_inactive_frame_has_no_contact(self, tmp_path, pdb_file):
-        directory = tmp_path / "inactive"
+    def test_payload_carries_expressions(self, numbered_client, numbered_pdb):
+        data = self._payload(numbered_client, numbered_pdb).json()
+        assert [row["expression"] for row in data["residues"]] == [
+            "(b > 99.75 and b < 100.25) or (b > 100.75 and b < 101.25)",
+            "(b > 101.75 and b < 102.25) or (b > 102.75 and b < 103.25)"]
+        assert len(data["residues"][0]["atoms"]) == 2
+
+    def test_alignment_errors_return_400(self, numbered_client, numbered_pdb,
+                                         monkeypatch):
+        monkeypatch.setattr("DuIvyInteractions.web.app.alignment_errors",
+                            lambda universe, interaction: ["atom 0: mismatch"])
+        response = self._payload(numbered_client, numbered_pdb)
+        assert response.status_code == 400
+        assert response.json() == {"detail": "atom 0: mismatch",
+                                   "errors": ["atom 0: mismatch"]}
+
+    def test_unknown_type_returns_404(self, numbered_client, numbered_pdb):
+        response = self._payload(numbered_client, numbered_pdb, type_name="nope")
+        assert response.status_code == 404
+
+    def test_pair_out_of_range_returns_404(self, numbered_client, numbered_pdb):
+        response = self._payload(numbered_client, numbered_pdb, idx=9)
+        assert response.status_code == 404
+
+    def test_without_selection_returns_400(self, numbered_client):
+        response = numbered_client.get("/api/structure/interactions",
+                                       params={"type": "pi_stacking",
+                                               "idx": 0})
+        assert response.status_code == 400
+        assert response.json()["detail"] == "structure not selected"
+
+
+class TestContactRoute:
+
+    def test_single_frame_contact(self, numbered_client, numbered_pdb):
+        _open_structure(numbered_client, numbered_pdb)
+        response = numbered_client.get(
+            "/api/structure/contact",
+            params={"type": "pi_stacking", "idx": 0, "frame": 0})
+        assert response.status_code == 200
+        assert response.json() == {"contact": [0, 0, 1, 0]}
+
+    def test_inactive_frame_returns_null(self, tmp_path, pdb_file):
+        directory = tmp_path / "inactive_contact"
         directory.mkdir()
         save_interactions([_interaction(active=False)],
                           str(directory / "hydrogen_bond.h5"))
         client = _client()
         client.post("/select", data={"path": str(directory)})
         _open_structure(client, pdb_file)
-        data = client.get("/api/structure/view",
+        data = client.get("/api/structure/contact",
                           params={"type": "hydrogen_bond", "idx": 0,
                                   "frame": 0}).json()
-        assert data["active"] is False and data["contact"] is None
+        assert data == {"contact": None}
 
-    def test_view_frame_out_of_range_returns_404(self, client, pdb_file):
+    def test_frame_out_of_range_returns_404(self, client, pdb_file):
         _open_structure(client, pdb_file)
-        response = client.get("/api/structure/view",
+        response = client.get("/api/structure/contact",
                               params={"type": "hydrogen_bond", "idx": 0,
                                       "frame": 5})
         assert response.status_code == 404
 
-    def test_view_unknown_type_returns_404(self, client, pdb_file):
-        _open_structure(client, pdb_file)
-        response = client.get("/api/structure/view",
-                              params={"type": "nope", "idx": 0, "frame": 0})
-        assert response.status_code == 404
-
-    def test_view_pair_out_of_range_returns_404(self, client, pdb_file):
-        _open_structure(client, pdb_file)
-        response = client.get("/api/structure/view",
-                              params={"type": "hydrogen_bond", "idx": 9,
-                                      "frame": 0})
-        assert response.status_code == 404
-
-    def test_view_requires_token(self, h5_dir, pdb_file):
-        client = _client(token=TOKEN)
-        response = client.get("/api/structure/view",
-                              params={"type": "hydrogen_bond", "idx": 0,
-                                      "frame": 0})
-        assert response.status_code == 401
-
-    def test_alignment_errors_are_returned(self, client, pdb_file, monkeypatch):
-        _open_structure(client, pdb_file)
-        monkeypatch.setattr("DuIvyInteractions.web.app.alignment_errors",
-                            lambda universe, interaction: ["atom 0: mismatch"])
-        response = client.get("/api/structure/view",
-                              params={"type": "hydrogen_bond", "idx": 0,
-                                      "frame": 0})
+    def test_without_selection_returns_400(self, client):
+        response = client.get("/api/structure/contact",
+                              params={"type": "hydrogen_bond", "idx": 0})
         assert response.status_code == 400
-        data = response.json()
-        assert data["errors"] == ["atom 0: mismatch"]
-        assert data["detail"] == "atom 0: mismatch"
+        assert response.json()["detail"] == "structure not selected"
 
 
 class TestStructurePage:
@@ -485,7 +1009,7 @@ class TestStructurePage:
         assert response.status_code == 200
         html = response.text
         assert "molstar.js" in html and "structure.js" in html
-        assert 'id="frameSlider"' in html and 'id="structureConfig"' in html
+        assert 'id="molstarViewer"' in html and 'id="structureConfig"' in html
         assert "structure not selected" in html
 
     def test_page_renders_with_structure(self, client, pdb_file):
@@ -527,49 +1051,8 @@ class TestStructurePage:
 
 
 # ============================================================
-# frame_view / 水相关判定 / 接触标签
+# 水相关判定 / 基团标签 / 接触标签
 # ============================================================
-
-class TestFrameView:
-
-    def test_hide_water_drops_water_atoms(self, water_universe):
-        text, shown = frame_view(water_universe, 0, hide_water=True)
-        assert shown == [2, 3, 4, 5]
-        assert text.count("ATOM") == len(shown)
-        assert "SOL" not in text
-
-    def test_shown_maps_each_pdb_line_to_global_atom(self, water_universe):
-        text, shown = frame_view(water_universe, 0, hide_water=True)
-        names = [line[12:16].strip() for line in text.splitlines()
-                 if line.startswith("ATOM")]
-        assert names == [water_universe.atoms[index].name for index in shown]
-
-    def test_keep_atoms_forces_water_atoms(self, water_universe):
-        text, shown = frame_view(water_universe, 0, hide_water=True,
-                                 keep_atoms=frozenset({0}))
-        assert shown == [0, 2, 3, 4, 5]
-        names = [line[12:16].strip() for line in text.splitlines()
-                 if line.startswith("ATOM")]
-        assert names == ["OW", "N1", "H1", "O1", "O2"]
-
-    def test_without_hide_returns_all_atoms(self, water_universe):
-        text, shown = frame_view(water_universe, 0)
-        assert shown == list(range(water_universe.atoms.n_atoms))
-        assert text == frame_pdb(water_universe, 0)
-
-    def test_out_of_range_raises(self, water_universe):
-        with pytest.raises(ValueError, match="frame out of range: 1"):
-            frame_view(water_universe, 1, hide_water=True)
-
-    def test_original_universe_positions_unchanged(self, water_universe):
-        before = water_universe.atoms.positions.copy()
-        frame_view(water_universe, 0, hide_water=True)
-        assert np.array_equal(water_universe.atoms.positions, before)
-
-    def test_water_residue_constant_covers_common_names(self):
-        assert {"SOL", "HOH", "WAT", "TIP3", "TIP4", "HO4", "HO5",
-                "H2O"} <= WATER_RESIDUES
-
 
 class TestInvolvesWater:
 
@@ -717,277 +1200,6 @@ class TestContactLabel:
                              numbered_universe) == (
             "TYR50 (PDB 51) · aromatic_ring ┄ MOL142 (PDB 143) · "
             "aromatic_ring")
-
-
-# ============================================================
-# /api/structure/view 的 solvent 模式
-# ============================================================
-
-class TestStructureViewSolvent:
-
-    def test_hide_reports_fewer_atoms_than_total(self, water_client, water_pdb):
-        _open_structure(water_client, water_pdb)
-        data = water_client.get("/api/structure/view",
-                                params={"type": "hydrogen_bond", "idx": 0,
-                                        "frame": 0,
-                                        "solvent": "hide"}).json()
-        assert data["solvent"] == "hide"
-        assert data["involves_water"] is False
-        assert data["n_atoms_total"] == len(WATER_ATOMS)
-        assert data["n_atoms_shown"] == len(WATER_ATOMS) - 2
-        assert "SOL" not in data["pdb"]
-
-    def test_hide_contact_uses_display_indices(self, water_client, water_pdb):
-        _open_structure(water_client, water_pdb)
-        data = water_client.get("/api/structure/view",
-                                params={"type": "hydrogen_bond", "idx": 0,
-                                        "frame": 0,
-                                        "solvent": "hide"}).json()
-        assert data["contact"] == [1, 2]
-        lines = [line for line in data["pdb"].splitlines()
-                 if line.startswith("ATOM")]
-        assert [lines[row][12:16].strip() for row in data["contact"]] == [
-            "H1", "O1"]
-        assert data["contact_label"] == (
-            "ALA1 · H_donor H1 ┄ ALA1 · H_acceptor O1")
-
-    def test_full_solvent_keeps_all_atoms(self, water_client, water_pdb):
-        _open_structure(water_client, water_pdb)
-        data = water_client.get("/api/structure/view",
-                                params={"type": "hydrogen_bond", "idx": 0,
-                                        "frame": 0}).json()
-        assert data["solvent"] == "full"
-        assert data["n_atoms_shown"] == data["n_atoms_total"]
-        assert data["contact"] == [3, 4]
-
-    def test_unknown_solvent_falls_back_to_full(self, water_client, water_pdb):
-        _open_structure(water_client, water_pdb)
-        data = water_client.get("/api/structure/view",
-                                params={"type": "hydrogen_bond", "idx": 0,
-                                        "frame": 0,
-                                        "solvent": "weird"}).json()
-        assert data["solvent"] == "full"
-
-    def test_water_bridge_ignores_hide(self, water_bridge_client, water_pdb):
-        _open_structure(water_bridge_client, water_pdb)
-        data = water_bridge_client.get(
-            "/api/structure/view",
-            params={"type": "water_bridge", "idx": 0, "frame": 0,
-                    "solvent": "hide"}).json()
-        assert data["involves_water"] is True
-        assert data["solvent"] == "full"
-        assert data["n_atoms_shown"] == data["n_atoms_total"]
-        assert "SOL" in data["pdb"]
-
-    def test_frame_cache_keeps_solvent_modes_apart(self, water_client,
-                                                   water_pdb):
-        _open_structure(water_client, water_pdb)
-        params = {"type": "hydrogen_bond", "idx": 0, "frame": 0}
-        hide = water_client.get("/api/structure/view",
-                                params={**params, "solvent": "hide"}).json()
-        full = water_client.get("/api/structure/view",
-                                params={**params, "solvent": "full"}).json()
-        again = water_client.get("/api/structure/view",
-                                 params={**params, "solvent": "hide"}).json()
-        assert hide["pdb"] != full["pdb"]
-        assert len(hide["pdb"]) < len(full["pdb"])
-        assert again["pdb"] == hide["pdb"]
-        assert again["n_atoms_shown"] == hide["n_atoms_shown"]
-
-
-# ============================================================
-# /api/structure/view 的 groups（两端基团原子 + 标签）
-# ============================================================
-
-class TestStructureViewGroups:
-
-    def test_groups_follow_pair_groups_in_full_mode(self, client, pdb_file):
-        _open_structure(client, pdb_file)
-        data = client.get("/api/structure/view",
-                          params={"type": "hydrogen_bond", "idx": 0,
-                                  "frame": 0}).json()
-        # h5 与 PDB 编号同为 1 → 标签只写 h5 编号（前缀取 h5 残基名）
-        assert data["groups"] == [
-            {"label": "LYS1 · H_donor", "atoms": [0, 1]},
-            {"label": "LYS1 · H_acceptor", "atoms": [2, 3]}]
-        assert data["n_atoms_shown"] == len(ATOMS)
-        assert data["contact_label"] == (
-            "LYS1 · H_donor H1 ┄ LYS1 · H_acceptor O1")
-
-    def test_group_atoms_use_display_rows_in_hide_mode(self, water_client,
-                                                       water_pdb):
-        _open_structure(water_client, water_pdb)
-        data = water_client.get("/api/structure/view",
-                                params={"type": "hydrogen_bond", "idx": 0,
-                                        "frame": 0,
-                                        "solvent": "hide"}).json()
-        assert data["n_atoms_shown"] == len(WATER_ATOMS) - 2
-        assert data["groups"] == [
-            {"label": "ALA1 · H_donor", "atoms": [0, 1]},
-            {"label": "ALA1 · H_acceptor", "atoms": [2, 3]}]
-        lines = [line for line in data["pdb"].splitlines()
-                 if line.startswith("ATOM")]
-        names = [lines[row][12:16].strip()
-                 for group in data["groups"] for row in group["atoms"]]
-        assert names == ["N1", "H1", "O1", "O2"]
-
-    def test_every_group_atom_is_inside_shown_pdb(self, water_client,
-                                                  water_pdb):
-        _open_structure(water_client, water_pdb)
-        data = water_client.get("/api/structure/view",
-                                params={"type": "hydrogen_bond", "idx": 0,
-                                        "frame": 0,
-                                        "solvent": "hide"}).json()
-        assert data["groups"][0]["atoms"] == [0, 1]  # 全局 [2, 3] 已映射
-        for group in data["groups"]:
-            assert all(0 <= atom < data["n_atoms_shown"]
-                       for atom in group["atoms"])
-
-    def test_water_bridge_reports_three_groups(self, water_bridge_client,
-                                               water_pdb):
-        _open_structure(water_bridge_client, water_pdb)
-        data = water_bridge_client.get(
-            "/api/structure/view",
-            params={"type": "water_bridge", "idx": 0, "frame": 0,
-                    "solvent": "hide"}).json()
-        assert data["involves_water"] is True
-        # h5 末组 LYS3 的原子在 PDB 中属 resid 1 → 补 (PDB 1)
-        assert [group["label"] for group in data["groups"]] == [
-            "ALA1 · H_donor", "SOL2 · water", "LYS3 (PDB 1) · H_acceptor"]
-        assert data["groups"][1]["atoms"] == [0, 1]
-
-    def test_view_labels_show_both_numberings(self, numbered_client,
-                                              numbered_pdb):
-        _open_structure(numbered_client, numbered_pdb)
-        data = numbered_client.get("/api/structure/view",
-                                   params={"type": "pi_stacking", "idx": 0,
-                                           "frame": 0,
-                                           "solvent": "hide"}).json()
-        assert [group["label"] for group in data["groups"]] == [
-            "TYR50 (PDB 51) · aromatic_ring",
-            "MOL142 (PDB 143) · aromatic_ring"]
-        assert data["contact_label"] == (
-            "TYR50 (PDB 51) · aromatic_ring CZ ┄ "
-            "MOL142 (PDB 143) · aromatic_ring N16")
-
-    def test_missing_display_atom_is_skipped(self):
-        from DuIvyInteractions.web.app import _shown_atoms
-        assert _shown_atoms([0, 9], {0: 5}) == [5]
-        assert _shown_atoms([0, 9], None) == [0, 9]
-
-
-# ============================================================
-# /api/structure/view 的 highlights（每组一个独立小结构）
-# ============================================================
-
-class TestStructureViewHighlights:
-
-    def test_one_highlight_per_group_with_h5_atom_names(self, client,
-                                                        pdb_file):
-        _open_structure(client, pdb_file)
-        data = client.get("/api/structure/view",
-                          params={"type": "hydrogen_bond", "idx": 0,
-                                  "frame": 0}).json()
-        assert [view["label"] for view in data["highlights"]] == [
-            "LYS1 · H_donor", "LYS1 · H_acceptor"]
-        names = [[line[12:16].strip() for line in _atom_lines(view["pdb"])]
-                 for view in data["highlights"]]
-        assert names == [["N1", "H1"], ["O1", "O2"]]
-
-    def test_contact_pdb_holds_the_closest_pair_in_two_chains(self, client,
-                                                              pdb_file,
-                                                              universe):
-        _open_structure(client, pdb_file)
-        data = client.get("/api/structure/view",
-                          params={"type": "hydrogen_bond", "idx": 0,
-                                  "frame": 0}).json()
-        lines = _atom_lines(data["contact_pdb"])
-        assert len(lines) == 2
-        expected = closest_contact(universe, [0, 1], [2, 3])
-        assert [line[12:16].strip() for line in lines] == [
-            universe.atoms[index].name for index in expected]
-        assert lines[0][21] == "A" and lines[1][21] == "B"
-
-    def test_highlight_uses_universe_auth_residue_numbers(self, numbered_client,
-                                                          numbered_pdb):
-        _open_structure(numbered_client, numbered_pdb)
-        data = numbered_client.get("/api/structure/view",
-                                   params={"type": "pi_stacking", "idx": 0,
-                                           "frame": 0,
-                                           "solvent": "hide"}).json()
-        assert [view["label"] for view in data["highlights"]] == [
-            "TYR50 (PDB 51) · aromatic_ring",
-            "MOL142 (PDB 143) · aromatic_ring"]
-        first = _atom_lines(data["highlights"][0]["pdb"])
-        second = _atom_lines(data["highlights"][1]["pdb"])
-        assert {line[17:20].strip() for line in first} == {"TYR"}
-        assert {line[22:26].strip() for line in first} == {"51"}
-        assert {line[21] for line in first} == {"A"}
-        assert {line[17:20].strip() for line in second} == {"MOL"}
-        assert {line[22:26].strip() for line in second} == {"143"}
-        assert {line[21] for line in second} == {"B"}
-
-    def test_highlight_coordinates_match_main_pdb(self, water_client,
-                                                  water_pdb):
-        _open_structure(water_client, water_pdb)
-        data = water_client.get("/api/structure/view",
-                                params={"type": "hydrogen_bond", "idx": 0,
-                                        "frame": 0,
-                                        "solvent": "hide"}).json()
-        main = {line[12:16].strip(): [float(line[30:38]),
-                                      float(line[38:46]),
-                                      float(line[46:54])]
-                for line in _atom_lines(data["pdb"])}
-        checked = 0
-        for view in data["highlights"]:
-            for line in _atom_lines(view["pdb"]):
-                coords = [float(line[30:38]), float(line[38:46]),
-                          float(line[46:54])]
-                assert coords == pytest.approx(main[line[12:16].strip()])
-                checked += 1
-        assert checked == 4
-
-    def test_water_bridge_has_three_highlights(self, water_bridge_client,
-                                               water_pdb):
-        _open_structure(water_bridge_client, water_pdb)
-        data = water_bridge_client.get(
-            "/api/structure/view",
-            params={"type": "water_bridge", "idx": 0, "frame": 0,
-                    "solvent": "hide"}).json()
-        assert [view["label"] for view in data["highlights"]] == [
-            "ALA1 · H_donor", "SOL2 · water", "LYS3 (PDB 1) · H_acceptor"]
-        assert [len(_atom_lines(view["pdb"]))
-                for view in data["highlights"]] == [2, 2, 2]
-        assert _atom_lines(data["highlights"][1]["pdb"])[0][12:16].strip() == (
-            "OW")
-
-    def test_inactive_frame_has_highlights_but_no_contact_pdb(self, tmp_path,
-                                                              pdb_file):
-        directory = tmp_path / "inactive_highlights"
-        directory.mkdir()
-        save_interactions([_interaction(active=False)],
-                          str(directory / "hydrogen_bond.h5"))
-        client = _client()
-        client.post("/select", data={"path": str(directory)})
-        _open_structure(client, pdb_file)
-        data = client.get("/api/structure/view",
-                          params={"type": "hydrogen_bond", "idx": 0,
-                                  "frame": 0}).json()
-        assert data["active"] is False
-        assert data["contact_pdb"] is None
-        assert [len(_atom_lines(view["pdb"])) for view in data["highlights"]] == [
-            2, 2]
-
-    def test_highlight_pdb_is_parseable(self, client, pdb_file):
-        _open_structure(client, pdb_file)
-        data = client.get("/api/structure/view",
-                          params={"type": "hydrogen_bond", "idx": 0,
-                                  "frame": 0}).json()
-        for view in data["highlights"]:
-            parsed = mda.Universe(io.StringIO(view["pdb"]), format="PDB")
-            assert parsed.atoms.n_atoms == len(_atom_lines(view["pdb"]))
-        contact = mda.Universe(io.StringIO(data["contact_pdb"]), format="PDB")
-        assert contact.atoms.n_atoms == 2
 
 
 # ============================================================

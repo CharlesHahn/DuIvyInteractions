@@ -29,21 +29,18 @@
 </div>
 
 <div class="panel">
-  <div class="structure-toolbar">
-    <label class="structure-toggle"><input type="checkbox" id="showWater"> show water</label>
-    <label class="structure-toggle"><input type="checkbox" id="showSequence" checked> show sequence</label>
-  </div>
   <div id="molstarViewer" class="structure-viewer"></div>
   <div class="structure-frame-row">
-    <input type="range" id="frameSlider" min="0" max="{{ [n_frames - 1, 0] | max }}" value="0"{% if not has_structure or n_frames == 0 %} disabled{% endif %}>
     <span id="frameLabel" class="muted structure-frame-label">{% if has_structure %}frame 0 / {{ n_frames }}{% else %}no structure{% endif %}</span>
   </div>
-  <div class="bars structure-existence" id="existenceBar">
-    {% for value in existence %}<span class="{% if value %}on{% endif %}" title="frame {{ loop.index0 }}: {{ 'active' if value else 'inactive' }}"></span>{% endfor %}
+  {# 进度条并入相互作用向量条：可直接拖动/点选/键盘换帧（structure.js 处理指针与键盘） #}
+  <div class="bars structure-existence" id="existenceBar" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="{{ [(n_frames | default(0)) - 1, 0] | max }}" aria-valuenow="0" aria-label="interaction frames">
+    {% for value in existence | default([], true) %}<span class="{% if value %}on{% endif %}" title="frame {{ loop.index0 }}: {{ 'active' if value else 'inactive' }}"></span>{% endfor %}
   </div>
   <div class="structure-groups" id="groupLegend"></div>
   <div class="structure-status" id="structureStatus"></div>
   <p class="hint">标签编号同时给出 h5 表格编号与 PDB auth 编号：如 TYR50 (PDB 51)；两者相同时只显示一个。</p>
+  <p class="hint">轨迹一次载入（拓扑 PDB + 原始轨迹文件），帧切换只换坐标帧，不重建结构、不移动相机；水分子不显示；相互作用残基以棍棒显示，组色为本页图例里定义的基团原子。</p>
 </div>
 
 {% if (browse_mode | default('picker')) == "server" %}
@@ -72,7 +69,7 @@
 </div>
 {% endif %}
 
-<script id="structureConfig" type="application/json">{{ {"type": type, "idx": idx, "n_frames": n_frames, "has_structure": has_structure, "existence": existence} | tojson }}</script>
+<script id="structureConfig" type="application/json">{{ {"type": type, "idx": idx, "n_frames": n_frames | default(0), "has_structure": has_structure | default(false), "existence": existence | default([], true), "trajectory": trajectory | default("")} | tojson }}</script>
 {% endblock %}
 
 {% block scripts %}

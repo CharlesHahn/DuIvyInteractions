@@ -976,27 +976,6 @@ tr.clickable { cursor: pointer; }
 }
 .structure-status.error { color: var(--danger); }
 
-/* ---------- 3D 结构视图工具栏（水/序列开关） ---------- */
-.structure-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin: 0 0 8px;
-}
-.structure-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-2);
-  cursor: pointer;
-}
-.structure-toggle input { accent-color: var(--accent); }
-/* Mol* 布局 API 不可用时的序列区兜底隐藏 */
-.structure-viewer--no-sequence .msp-layout-top { display: none !important; }
-.structure-viewer--no-sequence .msp-layout-main { top: 0 !important; }
-
 /* ---------- 结构文件选择弹窗（filepick.js；picker 模式不渲染） ---------- */
 
 .filepick-modal {
@@ -1204,3 +1183,29 @@ tr.clickable { cursor: pointer; }
 }
 
 .structure-group-label { white-space: nowrap; }
+
+/* 图例末尾说明：组色对应 3D 里更粗的同色基团原子棍棒（structure.js 末尾追加） */
+.structure-group-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 相互作用向量条兼作进度条：可拖动/点选/键盘换帧（structure.js 末尾追加） */
+.structure-existence {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.structure-existence:active { cursor: grabbing; }
+
+.structure-existence:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.structure-existence span.active { outline: 1px solid var(--accent); }
+
+/* 左区收起（regionState.left = "collapsed"，来自 collapseLeftPanel）只保留
+   32px 图标条：图标按钮与内容区都由 Mol* 自带样式控制，这里只加固左区宽度 */
+.structure-viewer .msp-layout-collapse-left .msp-layout-left { width: 32px; }

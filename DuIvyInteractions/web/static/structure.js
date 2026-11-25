@@ -1,4 +1,5 @@
-/* 3D 结构页：Mol* 渲染单帧 PDB，默认视角聚焦相互作用，并提供水/序列开关与路径浏览 */
+/* 3D 结构页：Mol* 原生轨迹（拓扑 PDB + 原始轨迹文件）只载入一次；
+   帧切换只更新 modelIndex（不重建结构、不动相机），相互作用残基以棍棒呈现。 */
 (function () {
   "use strict";
 
@@ -11,74 +12,113 @@
   var topologyInput = document.getElementById("topologyInput");
   var trajectoryInput = document.getElementById("trajectoryInput");
   var openButton = document.getElementById("openStructure");
-  var slider = document.getElementById("frameSlider");
   var frameLabel = document.getElementById("frameLabel");
   var existenceBar = document.getElementById("existenceBar");
   var statusEl = document.getElementById("structureStatus");
-  var showWater = document.getElementById("showWater");
-  var showSequence = document.getElementById("showSequence");
+  var groupLegendEl = document.getElementById("groupLegend");
   var browseButtons = document.querySelectorAll("button[data-browse]");
 
-  var DEBOUNCE_MS = 80;        // 滑块输入到请求的防抖间隔
-  var CACHE_LIMIT = 5;         // 前端 PDB 文本 LRU 帧数（键含 solvent）
-  var PREFETCH_AHEAD = 1;      // 预取当前帧之后的一帧
-  var PDB_FORMAT = "pdb";
-  var DASH_LENGTH = 0.12;      // Mol* 距离测量虚线间距
-  var LINE_SIZE = 0.06;        // Mol* 距离测量线宽
-  var SOLVENT_HIDE = "hide";
-  var SOLVENT_FULL = "full";
-  var REGION_FULL = "full";
-  var REGION_HIDDEN = "hidden";
-  var NO_SEQUENCE_CLASS = "structure-viewer--no-sequence";
+  var TOPOLOGY_URL = "/api/structure/topology";
+  var TRAJECTORY_URL = "/api/structure/trajectory";
+  var INTERACTIONS_URL = "/api/structure/interactions";
+  var CONTACT_URL = "/api/structure/contact";
+  var SELECT_URL = "/api/structure/select";
+  var PICK_ENDPOINT = "/api/pick";
+  var PICK_BODY = "mode=file&kind=structure";
+
+  var TOPOLOGY_FORMAT = "pdb";
+  var MODEL_KIND = "model-data";
+  var DEFAULT_TRAJECTORY_FORMAT = "xtc";
+  var BINARY_FORMATS = { xtc: true, trr: true, dcd: true };
+
+  /* 后端给的表达式是 PyMOL 风格选择语言；Mol* 只有 script 类型的组件会按
+     language 解析字符串（表达式类型需要编译好的 AST，字符串会被当常量）。 */
+  var EXPRESSION_LANGUAGE = "pymol";
+  var COMPONENT_SCRIPT = "script";
+  var POLYMER_KEYWORD = "polymer";        /* static 组件关键字（兜底用） */
+  /* 宏：protein / water / nucleic 是选择语言里真实存在的宏；
+     polymer 只是数值属性、organic/inorganic 不是宏，裸用会解析成空选择 */
+  var POLYMER_EXPRESSION = "protein";
+  var NON_POLYMER_EXPRESSION = "not (protein or water or nucleic)";
+  var STATIC_LIGAND = "ligand";
+  var STATIC_ION = "ion";
+  var STICK_TYPE = "ball-and-stick";
+  var CARTOON_TYPE = "cartoon";
+  var UNIFORM_THEME = "uniform";
+
+  var STICK_COLOR = "#8491b4";      /* 残基其余原子：中性灰蓝棍棒 */
+  var STICK_SIZE = 0.16;            /* 残基其余原子棍棒半径 */
+  var GROUP_STICK_SIZE = 0.18;      /* 定义基团原子：同层棍棒，略粗 */
+  var STICK_ASPECT = 1.0;           /* 1.0 = 棍棒（无球） */
+  var LIGAND_SIZE = 0.28;           /* 配体/离子球棍 */
+  var DASH_LENGTH = 0.12;
+  var LINE_SIZE = 0.06;
+  var GROUP_COLORS = ["#e64b35", "#3c5488", "#00a087", "#4dbbd5"];
+  var DEBOUNCE_MS = 60;             /* 滑块拖动到换帧的防抖 */
+  var FRAME_POLL_MS = 150;          /* 轮询 Mol* 原生轨迹控件的当前帧 */
+
+  var TAG_POLYMER = "dii-polymer";
+  var TAG_LIGAND = "dii-ligand";
+  var TAG_RESIDUE_REST = "dii-rest-";
+  var TAG_RESIDUE_ATOMS = "dii-atoms-";
+  var TAG_FOCUS = "dii-focus";
+  var TAG_FOCUS_ITEM = "dii-focus-";
+  var TAG_CONTACT_A = "dii-contact-a";
+  var TAG_CONTACT_B = "dii-contact-b";
+
+  var GROUP_ITEM_CLASS = "structure-group-item";
+  var GROUP_LABEL_CLASS = "structure-group-label";
+  var GROUP_DOT_CLASS = "structure-group-dot";
+  var GROUP_NOTE_CLASS = "structure-group-note";
+  var GROUP_COLOR_NOTE = "组色 = 定义基团原子；灰色 = 同残基其余原子";
+  var STATUS_CLASS = "structure-status";
+  var STATUS_ERROR_CLASS = "structure-status error";
   var BROWSE_TARGET_ATTR = "data-target";
   var BROWSE_MODE_ATTR = "data-browse";
   var BROWSE_PICKER = "picker";
   var BROWSE_SERVER = "server";
-  var PICK_ENDPOINT = "/api/pick";
-  var PICK_BODY = "mode=file&kind=structure";
+  var MODEL_INDEX_PARAM = "modelIndex";
+  var MODEL_INDEX_LABEL = "Model Index";
+  var MODEL_TRANSFORM_NAME = "model-from-trajectory";
+
+  /* 尽量贴近 Mol* 默认：开关全部用原生按钮/原生设置项，本页不自造控件 */
   var VIEWER_OPTIONS = {
     layoutIsExpanded: false,
     layoutShowControls: true,
     layoutShowLeftPanel: true,
+    /* 左侧原生 32px 图标条（图标按钮原生保留） */
+    collapseLeftPanel: true,
+    /* 右侧保持可见：原生 Controls→Settings→Layout 多选（Sequence/Log/Left/Right）
+       是 Sequence 的官方开关，面板不可达用户就没法用它 */
+    collapseRightPanel: false,
     layoutShowSequence: true,
     layoutShowLog: false,
     layoutShowRemoteState: false,
+    /* 原生视口按钮：Toggle Controls Panel / Settings & Controls Info */
     viewportShowControls: true,
+    viewportShowSettings: true,
     viewportShowSelectionMode: false,
-    viewportShowAnimation: false
+    viewportShowAnimation: false,
+    viewportShowTrajectoryControls: true
   };
-  var STATUS_CLASS = "structure-status";
-  var STATUS_ERROR_CLASS = "structure-status error";
-  var GROUP_COLORS = ["#e64b35", "#3c5488", "#00a087"];   // NPG 配色，按 group 顺序循环取色
-  var GROUP_TYPE = "ball-and-stick";    // 两端基团用球棍，蛋白质骨架保持 cartoon
-  var GROUP_SIZE_FACTOR = 0.3;          // ball-and-stick 球半径系数
-  var GROUP_SIZE_ASPECT = 0.6;          // ball-and-stick 键粗细比
-  var GROUP_COLOR_THEME = "uniform";    // Mol* 颜色主题：纯色
-  var GROUP_BUNDLE_TYPE = "bundle";     // StructureComponent 只接受 static/script/expression/bundle
-  var GROUP_TAG_PREFIX = "dii-group-";
-  var GROUP_ITEM_CLASS = "structure-group-item";
-  var GROUP_LABEL_CLASS = "structure-group-label";
-  var GROUP_DOT_CLASS = "structure-group-dot";
-  var GROUP_LEGEND_ID = "groupLegend";
-  var GROUP_NOTE = " · group overlay unavailable";
-  var CONTACT_NOTE = " · contact overlay unavailable";
-  var HIGHLIGHT_FALLBACK_NOTE = " · highlight fallback";
-  var HIGHLIGHT_FAILED_NOTE = " · highlight unavailable";
-  var groupLegendEl = document.getElementById(GROUP_LEGEND_ID);
 
   var viewer = null;
   var ready = false;
-  var latestFrame = 0;
-  var requestSeq = 0;
+  var trajectory = null;        /* loadTrajectory 的返回值 {model, coords, preset} */
+  var structureRef = null;      /* 主结构 cell 的 ref：帧更新后 cell 对象会换，始终按 ref 取 */
+  var modelRef = null;          /* model-from-trajectory 的 ref（改帧用） */
+  var data = null;              /* /api/structure/interactions 的 JSON */
+  var frame = 0;
+  var measurement = null;       /* 当前唯一一条虚线测量 {selection, representation} */
+  var contactState = "";        /* 状态栏：contact: ok|failed */
+  var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
+  var contactSeq = 0;
+  var frameSeq = 0;             /* 已请求的换帧序号（滑块） */
+  var appliedSeq = 0;           /* 已完成的换帧序号（轮询据此避让） */
+  var failures = 0;
   var pendingTimer = null;
-  var renderChain = Promise.resolve();
-  var cache = {};
-  var cacheOrder = [];
-  var contacts = [];
-  var groupReprs = [];
-  var mainStructure = null;    // 主结构 cell（cartoon），回退路径与聚焦用
-  var highlightGroups = 0;     // 本帧成功加球棍的高亮组数（状态栏展示）
-  var waterAutoChecked = false;
+  var pollTimer = null;
+  var dragging = false;         /* existence 条按住拖动中 */
 
   function setStatus(text, isError) {
     if (!statusEl) return;
@@ -86,446 +126,808 @@
     statusEl.className = isError ? STATUS_ERROR_CLASS : STATUS_CLASS;
   }
 
-  function solventMode() {
-    return showWater && showWater.checked ? SOLVENT_FULL : SOLVENT_HIDE;
+  function noteFailure(label, error) {
+    failures += 1;
+    console.warn("[dii] " + label, error);
   }
 
-  function cacheKey(frame, solvent) {
-    return frame + ":" + solvent;
+  function hexToInt(hex) {
+    return parseInt(String(hex).replace("#", ""), 16);
   }
 
-  function touchCache(key) {
-    var index = cacheOrder.indexOf(key);
-    if (index >= 0) cacheOrder.splice(index, 1);
-    cacheOrder.push(key);
+  function readJson(response) {
+    return response.json().then(function (payload) {
+      if (!response.ok) {
+        var detail = payload && (payload.detail || payload.error)
+          ? (payload.detail || payload.error) : "HTTP " + response.status;
+        throw new Error(String(detail));
+      }
+      return payload;
+    });
   }
 
-  function cacheGet(key) {
-    if (!Object.prototype.hasOwnProperty.call(cache, key)) return null;
-    touchCache(key);
-    return cache[key];
+  /* ---------------- 帧范围与状态栏 ---------------- */
+
+  function existenceValues() {
+    if (data && data.existence) return data.existence;
+    return cfg.existence || [];
   }
 
-  function cachePut(key, payload) {
-    cache[key] = payload;
-    touchCache(key);
-    while (cacheOrder.length > CACHE_LIMIT) {
-      delete cache[cacheOrder.shift()];
+  function frameLimit() {
+    var total = data && typeof data.n_frames === "number"
+      ? data.n_frames : (cfg.n_frames || 0);
+    var values = data && data.existence ? data.existence : null;
+    if (values && values.length && (!total || values.length < total)) {
+      return values.length;
     }
+    return total;
   }
 
-  function clearCache() {
-    cache = {};
-    cacheOrder = [];
+  function clampFrame(value) {
+    var limit = frameLimit();
+    var number = parseInt(value, 10);
+    if (isNaN(number) || number < 0) return 0;
+    if (limit && number > limit - 1) return limit - 1;
+    return number;
   }
 
-  function highlightFrame(frame) {
-    if (!existenceBar) return;
-    var bars = existenceBar.children;
-    for (var i = 0; i < bars.length; i++) {
-      var active = cfg.existence && cfg.existence[i];
-      bars[i].className = (active ? "on" : "") + (i === frame ? " current" : "");
-    }
-  }
-
-  function updateFrameLabel(frame) {
+  function updateFrameLabel(value) {
     if (!frameLabel) return;
-    frameLabel.textContent = cfg.n_frames
-      ? "frame " + frame + " / " + cfg.n_frames
+    var limit = frameLimit();
+    frameLabel.textContent = limit
+      ? "frame " + value + " / " + limit
       : "no structure";
   }
 
-  function requestFrame(frame, solvent) {
-    var url = "/api/structure/view?type=" + encodeURIComponent(cfg.type) +
-      "&idx=" + cfg.idx + "&frame=" + frame + "&solvent=" + solvent;
-    return fetch(url).then(function (response) {
-      return response.json().then(function (data) {
-        if (!response.ok) {
-          var detail = data && data.detail ? data.detail : "HTTP " + response.status;
-          throw new Error(String(detail));
-        }
-        return data;
-      });
-    });
-  }
-
-  function queueRender(payload) {
-    renderChain = renderChain.then(function () {
-      if (payload.frame !== latestFrame) return null;
-      return renderPayload(payload);
-    }).catch(function (error) {
-      setStatus("render failed: " + error.message, true);
-    });
-    return renderChain;
-  }
-
-  function autoEnableWater(payload) {
-    if (waterAutoChecked) return false;
-    waterAutoChecked = true;
-    if (payload.involves_water !== true || !showWater || showWater.checked) {
-      return false;
+  function highlightFrame(value) {
+    if (!existenceBar) return;
+    var values = existenceValues();
+    var bars = existenceBar.children;
+    for (var i = 0; i < bars.length; i++) {
+      bars[i].className = (values[i] ? "on" : "") +
+        (i === value ? " active" : "");
     }
-    showWater.checked = true;
-    return true;
+    existenceBar.setAttribute("aria-valuenow", String(value));
   }
 
-  function loadFrame(frame) {
-    if (!ready || frame < 0 || frame >= cfg.n_frames) return;
-    latestFrame = frame;
+  function renderExistence(values) {
+    if (!existenceBar || !values || !values.length) return;
+    while (existenceBar.firstChild) {
+      existenceBar.removeChild(existenceBar.firstChild);
+    }
+    for (var i = 0; i < values.length; i++) {
+      var bar = document.createElement("span");
+      bar.className = values[i] ? "on" : "";
+      bar.title = "frame " + i + ": " +
+        (values[i] ? "active" : "inactive");
+      existenceBar.appendChild(bar);
+    }
+  }
+
+  function updateFrameRange() {
+    var limit = frameLimit();
+    if (existenceBar && limit > 0) {
+      existenceBar.setAttribute("aria-valuemax", String(limit - 1));
+    }
+    frame = clampFrame(frame);
     updateFrameLabel(frame);
-    var solvent = solventMode();
-    var key = cacheKey(frame, solvent);
-    var cached = cacheGet(key);
-    if (cached) {
-      queueRender(cached);
-      prefetch(frame + PREFETCH_AHEAD);
-      return;
-    }
-    var sequence = ++requestSeq;
-    setStatus("loading frame " + frame + "…", false);
-    requestFrame(frame, solvent).then(function (payload) {
-      cachePut(key, payload);
-      if (sequence !== requestSeq) return;
-      if (autoEnableWater(payload)) {
-        loadFrame(frame);
-        return;
-      }
-      queueRender(payload);
-      prefetch(frame + PREFETCH_AHEAD);
-    }).catch(function (error) {
-      if (sequence === requestSeq) setStatus(error.message, true);
-    });
+    highlightFrame(frame);
   }
 
-  function prefetch(frame) {
-    var solvent = solventMode();
-    var key = cacheKey(frame, solvent);
-    if (frame < 0 || frame >= cfg.n_frames || cacheGet(key)) return;
-    requestFrame(frame, solvent).then(function (payload) {
-      cachePut(key, payload);
-    }).catch(function () { /* 预取失败保持静默，滚动时再请求 */ });
-  }
-
-  function renderPayload(payload) {
-    var overlay = { note: "", failed: false };
-    setStatus("rendering frame " + payload.frame + "…", false);
-    highlightFrame(payload.frame);
-    return clearContacts().then(function () {
-      return clearGroups();
-    }).then(function () {
-      return removeStructures();
-    }).then(function () {
-      return loadStructureCell(payload.pdb);
-    }).then(function (cell) {
-      mainStructure = cell;
-      return drawOverlay(payload);
-    }).then(function (result) {
-      overlay = result || overlay;
-    }).then(function () {
-      setStatus(statusText(payload) + overlay.note, !!overlay.failed);
-    });
-  }
-
-  /* 默认走高亮小结构路径；highlights 缺失时退回主结构（旧 groups/contact 路径） */
-  function drawOverlay(payload) {
-    renderGroupLegend(payload.highlights || payload.groups || []);
-    if (!payload.highlights || !payload.highlights.length) {
-      return drawMainOverlay(payload).then(function (result) {
-        result.note = HIGHLIGHT_FALLBACK_NOTE + result.note;
-        return result;
-      });
-    }
-    return drawHighlightOverlay(payload).catch(function (error) {
-      console.warn("[dii] highlight overlay failed", error);
-      return { note: HIGHLIGHT_FAILED_NOTE, failed: true };
-    });
-  }
-
-  /* 每条 highlight PDB 单独载入、整条结构加球棍；contact_pdb 两个原子画虚线 */
-  function drawHighlightOverlay(payload) {
-    var state = { note: "", failed: false };
-    var focus = null;
-    return addHighlightReprs(payload).then(function (groupFailed) {
-      if (groupFailed) {
-        state.note += GROUP_NOTE;
-        state.failed = true;
-      }
-      return addContactPdb(payload);
-    }).then(function (contact) {
-      focus = contact.loci;
-      if (contact.failed) {
-        state.note += CONTACT_NOTE;
-        state.failed = true;
-      }
-      if (!contact.loci && payload.contact) {
-        return drawContact(structureDataOf(mainStructure), payload.contact,
-          contactText(payload)).catch(function () {
-            state.note += CONTACT_NOTE;
-            state.failed = true;
-          });
-      }
-      return null;
-    }).then(function () {
-      if (focus) {
-        focusLoci(focus);
-      } else {
-        focusLoci(wholeStructureLoci(structureDataOf(mainStructure)));
-      }
-      return state;
-    });
-  }
-
-  /* 回退：主结构 + groups.atoms + payload.contact（旧行为，保留） */
-  function drawMainOverlay(payload) {
-    var state = { note: "", failed: false };
-    var structure = structureData();
-    return addGroupReprs(payload).then(function (groupFailed) {
-      if (groupFailed) {
-        state.note += GROUP_NOTE;
-        state.failed = true;
-      }
-      if (!(payload.active && payload.contact)) return null;
-      return drawContact(structure, payload.contact, contactText(payload))
-        .catch(function () {
-          state.note += CONTACT_NOTE;
-          state.failed = true;
-        });
-    }).then(function () {
-      focusMainOverlay(payload, structure);
-      return state;
-    });
-  }
-
-  function contactText(payload) {
-    return payload.contact_label ? String(payload.contact_label) : "";
-  }
-
-  function statusText(payload) {
-    var parts = ["frame " + payload.frame, payload.active ? "active" : "inactive"];
-    if (typeof payload.n_atoms_shown === "number" &&
-        typeof payload.n_atoms_total === "number") {
-      parts.push("atoms " + payload.n_atoms_shown + "/" + payload.n_atoms_total);
-    }
-    if (payload.involves_water) parts.push("water involved");
-    if (payload.solvent === SOLVENT_FULL) parts.push("water shown");
-    var groups = payload.groups || payload.highlights || [];
-    if (groups.length) parts.push(groups.length + " groups");
-    if (highlightGroups) parts.push("highlight: " + highlightGroups + " groups");
+  function statusText() {
+    var parts = ["frame " + frame + " / " + frameLimit(),
+                 "trajectory loaded"];
+    var residues = data && data.residues ? data.residues : [];
+    if (residues.length) parts.push(residues.length + " groups");
+    if (contactState) parts.push("contact: " + contactState);
+    if (focusPath) parts.push("focus: " + focusPath);
+    if (failures) parts.push(failures + " warnings");
     return parts.join(" · ");
   }
 
-  function clearContacts() {
-    if (!contacts.length || !viewer) return Promise.resolve();
-    var builder = viewer.plugin.state.data.build();
-    for (var i = 0; i < contacts.length; i++) {
-      if (contacts[i].selection) builder.delete(contacts[i].selection);
-      if (contacts[i].representation) builder.delete(contacts[i].representation);
-    }
-    contacts = [];
-    return Promise.resolve(builder.commit({ canUndo: false })).catch(function () {
-      return null;
-    });
+  /* ---------------- 数据请求 ---------------- */
+
+  function interactionUrl() {
+    return INTERACTIONS_URL + "?type=" + encodeURIComponent(cfg.type) +
+      "&idx=" + cfg.idx;
   }
 
-  function clearGroups() {
-    if (!groupReprs.length || !viewer) return Promise.resolve();
-    var builder = viewer.plugin.state.data.build();
-    for (var i = 0; i < groupReprs.length; i++) {
-      if (groupReprs[i].representation) {
-        builder.delete(groupReprs[i].representation);
+  /* 拓扑 PDB 由后端按该对原子打 B-factor 标记（表达式据此圈选），必须带 type/idx */
+  function topologyUrl() {
+    return TOPOLOGY_URL + "?type=" + encodeURIComponent(cfg.type) +
+      "&idx=" + cfg.idx;
+  }
+
+  function contactUrl(value) {
+    return CONTACT_URL + "?type=" + encodeURIComponent(cfg.type) +
+      "&idx=" + cfg.idx + "&frame=" + value;
+  }
+
+  function fetchTopologyText() {
+    return fetch(topologyUrl()).then(function (response) {
+      if (!response.ok) {
+        throw new Error("topology HTTP " + response.status);
       }
-      if (groupReprs[i].component) builder.delete(groupReprs[i].component);
-    }
-    groupReprs = [];
-    return Promise.resolve(builder.commit({ canUndo: false })).catch(function () {
+      return response.text();
+    });
+  }
+
+  function fetchInteractions() {
+    return fetch(interactionUrl()).then(readJson).then(function (payload) {
+      data = payload || null;
+      renderExistence(data && data.existence);
+      updateFrameRange();
+      renderLegend(data && data.residues ? data.residues : []);
+      return data;
+    }).catch(function (error) {
+      noteFailure("interaction data failed", error);
+      data = null;
       return null;
     });
   }
 
-  function removeStructures() {
-    mainStructure = null;
-    highlightGroups = 0;
+  function fetchContact(value) {
+    return fetch(contactUrl(value)).then(readJson).then(function (payload) {
+      return payload && payload.contact ? payload.contact : null;
+    }).catch(function (error) {
+      noteFailure("contact request failed", error);
+      return null;
+    });
+  }
+
+  function trajectoryFormat() {
+    var path = String(cfg.trajectory || "").trim();
+    if (!path && trajectoryInput) path = trajectoryInput.value;
+    var parts = String(path).toLowerCase().split(".");
+    var ext = parts.length > 1 ? parts[parts.length - 1] : "";
+    return BINARY_FORMATS[ext] ? ext : DEFAULT_TRAJECTORY_FORMAT;
+  }
+
+  /* ---------------- 一次载入轨迹 ---------------- */
+
+  /* PDB 不是拓扑格式：dataFormats 只有 psf/prmtop/top 会给出 .topology，
+     所以拓扑文字必须以 model-data 走 parseTrajectory + createModel。 */
+  function loadTrajectoryOnce(topologyText) {
+    return viewer.loadTrajectory({
+      model: {
+        kind: MODEL_KIND,
+        data: topologyText,
+        format: TOPOLOGY_FORMAT
+      },
+      coordinates: {
+        kind: "coordinates-url",
+        url: TRAJECTORY_URL,
+        isBinary: true,
+        format: trajectoryFormat()
+      }
+    });
+  }
+
+  function loadScene() {
+    setStatus("loading topology and trajectory…", false);
+    return Promise.all([fetchTopologyText(), fetchInteractions()])
+      .then(function (results) {
+        return loadTrajectoryOnce(results[0]);
+      })
+      .then(function (result) {
+        trajectory = result;
+        return afterLoad();
+      })
+      .catch(function (error) {
+        setStatus(loadFailureText(error), true);
+      });
+  }
+
+  function loadFailureText(error) {
+    var message = error && error.message ? error.message : String(error);
+    return "trajectory load failed (model=" + MODEL_KIND + ", format=" +
+      TOPOLOGY_FORMAT + ", coords=" + trajectoryFormat() + "): " + message;
+  }
+
+  function afterLoad() {
+    var entry = structureEntry();
+    if (!entry) throw new Error("trajectory produced no structure");
+    structureRef = refOf(entry.cell);
+    modelRef = findModelRef();
+    return clearDefaultComponents()
+      .then(function () { return buildLayers(); })
+      .then(function () { return focusInitially(); })
+      .then(function () { return selectFrame(0); })
+      .then(function () { startPolling(); });
+  }
+
+  /* 改帧目标是 model-from-trajectory 变换：优先 hierarchy 的 model 条目，
+     其次 loadTrajectory 返回值里的 preset（model-data 分支下是 To 构建器，
+     只有 .ref 没有 .cell，故统一用 refOf 取 ref），最后在 state 里按变换名兜底扫。 */
+  function findModelRef() {
+    var entry = structureEntry();
+    var ref = entry && entry.model ? refOf(entry.model) : null;
+    if (ref) return ref;
+    var preset = trajectory ? trajectory.preset : null;
+    ref = preset && preset.model ? refOf(preset.model) : null;
+    if (ref) return ref;
+    return scanModelRef();
+  }
+
+  function scanModelRef() {
+    var found = null;
+    viewer.plugin.state.data.cells.forEach(function (cell) {
+      var transformer = cell.transform ? cell.transform.transformer : null;
+      if (found || !transformer || transformer.name !== MODEL_TRANSFORM_NAME) {
+        return;
+      }
+      found = cell.transform.ref;
+    });
+    return found;
+  }
+
+  /* ---------------- 结构 / 组件定位 ---------------- */
+
+  function structures() {
+    if (!viewer || !viewer.plugin) return [];
     var hierarchy = viewer.plugin.managers.structure.hierarchy;
-    var roots = hierarchy.current.trajectories;
-    if (!roots || !roots.length) return Promise.resolve();
-    return Promise.resolve(hierarchy.remove(roots, false));
+    return hierarchy.current.structures;
   }
 
-  function cellOfStructure(structure) {
-    return structure.transform && structure.transform.cell
-      ? structure.transform.cell : structure.cell;
+  function structureEntry() {
+    var entries = structures();
+    return entries.length ? entries[0] : null;
   }
 
+  /* 当前主结构 cell（按 ref 实时取，帧切换后不会拿到旧 cell 对象） */
   function structureCell() {
-    var structures = viewer.plugin.managers.structure.hierarchy.current.structures;
-    if (!structures.length) return null;
-    return cellOfStructure(structures[structures.length - 1]);
+    if (!structureRef || !viewer || !viewer.plugin) return null;
+    return viewer.plugin.state.data.cells.get(structureRef) || null;
   }
 
-  function structureData() {
-    return structureDataOf(structureCell());
-  }
-
-  function structureDataOf(cell) {
+  function rootStructure() {
+    var cell = structureCell();
     return cell && cell.obj ? cell.obj.data : null;
   }
 
-  function structureCellRefs() {
-    var structures = viewer.plugin.managers.structure.hierarchy.current.structures;
-    var refs = [];
-    for (var i = 0; i < structures.length; i++) {
-      refs.push(structures[i].cell.transform.ref);
-    }
-    return refs;
-  }
-
-  function newestStructureCell(before) {
-    var structures = viewer.plugin.managers.structure.hierarchy.current.structures;
-    for (var i = structures.length - 1; i >= 0; i--) {
-      var cell = cellOfStructure(structures[i]);
-      if (cell && before.indexOf(cell.transform.ref) < 0) return cell;
-    }
+  function refOf(target) {
+    if (!target) return null;
+    if (typeof target === "string") return target;
+    if (target.transform && target.transform.ref) return target.transform.ref;
+    if (target.ref) return target.ref;
+    if (target.cell && target.cell.transform) return target.cell.transform.ref;
     return null;
   }
 
-  /* 载入一条结构（主结构或高亮小结构）并返回它的 cell：
-     实际新增的那条（等同 hierarchy 最后一项），不依赖条目排序 */
-  function loadStructureCell(data) {
-    var before = structureCellRefs();
-    return viewer.loadStructureFromData(data, PDB_FORMAT).then(function () {
-      var cell = newestStructureCell(before);
-      if (!cell) throw new Error("structure was not added");
-      return cell;
-    });
+  /* 整条结构的 Loci：fromExpression 只认编译好的 AST 或查询函数（字符串会被
+     ml() 当常量），因此用函数形式拿 MolScript builder 构造 "all"。 */
+  function wholeStructureLoci(structure) {
+    if (!structure) return null;
+    return molstar.lib.structure.StructureElement.Loci.fromExpression(
+      structure, structureExpression);
   }
 
-  /* StateBuilder.to() 只认 string / cell（.transform+.parent+.status）/ 带 .ref 的
-     selector；hierarchy 条目是 {kind:"structure", cell, ...}，没有 .ref，
-     故把 cell 本身作为新组件的父级（与 Mol* 内部 applyTheme 传 I.cell 一致）。 */
-  function structureSelector() {
-    return structureCell();
+  function structureExpression(builder) {
+    return builder.struct.generator.all();
   }
 
-  function structureEntryOf(cell) {
-    var ref = cell && cell.transform ? cell.transform.ref : null;
-    if (!ref) return null;
-    var structures = viewer.plugin.managers.structure.hierarchy.current.structures;
-    for (var i = 0; i < structures.length; i++) {
-      if (structures[i].cell.transform.ref === ref) return structures[i];
+  /* 组件子结构上的 Loci → 主结构上的 Loci。StructureComponent 的 unit 由
+     Unit.getChild 生成、保留同一个 unit.id，Loci.remap 正是按 unit.id +
+     elements 行号重映射；测量/相机都要求 Loci 落在主结构上。 */
+  function toRootLoci(loci) {
+    var root = rootStructure();
+    if (!loci || !root) return null;
+    if (loci.structure === root) return loci;
+    var remapped;
+    try {
+      remapped = molstar.lib.structure.StructureElement.Loci.remap(loci, root);
+    } catch (error) {
+      noteFailure("loci remap failed", error);
+      return null;
     }
-    return null;
+    return isLociEmpty(remapped) ? null : remapped;
   }
 
-  /* 小结构经默认 preset 自带元素配色表示；只删表示、保留结构本身（Loci 仍要用） */
-  function clearDefaultReprs(cell) {
-    var entry = structureEntryOf(cell);
-    if (!entry || !entry.components) return Promise.resolve();
+  function rootLociOf(structure) {
+    return toRootLoci(wholeStructureLoci(structure));
+  }
+
+  function isLociEmpty(loci) {
+    if (!loci) return true;
+    return molstar.lib.structure.StructureElement.Loci.isEmpty(loci);
+  }
+
+  function unionLoci(first, second) {
+    if (!first) return second;
+    if (!second) return first;
+    try {
+      return molstar.lib.structure.StructureElement.Loci.union(first, second);
+    } catch (error) {
+      noteFailure("loci union failed", error);
+      return first;
+    }
+  }
+
+  /* ---------------- 表示重建（只做一次） ---------------- */
+
+  function clearDefaultComponents() {
     var builder = viewer.plugin.state.data.build();
+    var entries = structures();
     var removed = 0;
-    for (var i = 0; i < entry.components.length; i++) {
-      var reprs = entry.components[i].representations || [];
-      for (var j = 0; j < reprs.length; j++) {
-        if (!reprs[j]) continue;
-        builder.delete(reprs[j].cell || reprs[j]);
+    for (var i = 0; i < entries.length; i++) {
+      var components = entries[i].components || [];
+      for (var j = 0; j < components.length; j++) {
+        var ref = refOf(components[j].cell);
+        if (!ref) continue;
+        builder.delete(ref);
         removed += 1;
       }
     }
     if (!removed) return Promise.resolve();
-    return Promise.resolve(builder.commit({ canUndo: false })).catch(function (error) {
-      console.warn("[dii] default representation cleanup failed", error);
+    return Promise.resolve(builder.commit({ canUndo: false }))
+      .catch(function (error) {
+        noteFailure("default component cleanup failed", error);
+      });
+  }
+
+  function structureBuilders() {
+    return viewer.plugin.builders.structure;
+  }
+
+  /* script 组件：params = {language, expression}，由 Mol* 按语言解析字符串 */
+  function buildScriptComponent(expression, tag, label) {
+    if (!expression || !structureRef) {
+      return Promise.resolve({ ok: false, component: null });
+    }
+    var spec = {
+      type: {
+        name: COMPONENT_SCRIPT,
+        params: { language: EXPRESSION_LANGUAGE, expression: expression }
+      },
+      nullIfEmpty: true,
+      label: label || ""
+    };
+    return Promise.resolve(
+      structureBuilders().tryCreateComponent(structureRef, spec, tag)
+    ).then(function (component) {
+      if (!componentElementCount(component)) {
+        console.warn("[dii] empty component:", tag, "expr=" + expression);
+        return { ok: false, component: null };
+      }
+      return { ok: true, component: component };
+    }).catch(function (error) {
+      noteFailure("component failed: " + tag, error);
+      return { ok: false, component: null };
     });
   }
 
-  function unitOf(structure, atomIndex) {
-    for (var i = 0; i < structure.units.length; i++) {
-      var elements = structure.units[i].elements;
-      for (var j = 0; j < elements.length; j++) {
-        if (elements[j] === atomIndex) {
-          return { unit: structure.units[i], index: j };
+  /* 组件构建"成功但为空"也要当失败：否则 cartoon/配体层会静默消失 */
+  function componentElementCount(component) {
+    var structure = component && component.data ? component.data : null;
+    return structure && typeof structure.elementCount === "number"
+      ? structure.elementCount : 0;
+  }
+
+  function addLayerRepresentation(component, params, tag) {
+    if (!component) return Promise.resolve(null);
+    var builders = structureBuilders().representation;
+    return Promise.resolve(
+      builders.addRepresentation(component, params, { tag: tag })
+    ).catch(function (error) {
+      noteFailure("representation failed: " + tag, error);
+      return null;
+    });
+  }
+
+  function buildLayer(expression, tag, label, params) {
+    return buildScriptComponent(expression, tag, label)
+      .then(function (result) {
+        return addLayerRepresentation(result.component, params,
+          tag + "-repr");
+      });
+  }
+
+  /* tryCreateComponentStatic(parent, keyword, {label}, tags)：第三个参数是
+     label/tags，不是标签字符串（第四个参数必须是数组，否则展开会报错）。 */
+  function buildStaticLayer(keyword, label, params) {
+    var builders = structureBuilders();
+    return Promise.resolve(
+      builders.tryCreateComponentStatic(structureRef, keyword,
+        { label: label })
+    ).then(function (component) {
+      return addLayerRepresentation(component, params,
+        "static-" + keyword + "-repr");
+    }).catch(function (error) {
+      noteFailure("static component failed: " + keyword, error);
+      return null;
+    });
+  }
+
+  function stickParams(sizeFactor, colorHex) {
+    return {
+      type: STICK_TYPE,
+      typeParams: {
+        sizeFactor: sizeFactor,
+        sizeAspectRatio: STICK_ASPECT
+      },
+      color: UNIFORM_THEME,
+      colorParams: { value: hexToInt(colorHex) }
+    };
+  }
+
+  function cartoonParams() {
+    return { type: CARTOON_TYPE };
+  }
+
+  function ligandParams() {
+    return {
+      type: STICK_TYPE,
+      typeParams: { sizeFactor: LIGAND_SIZE }
+    };
+  }
+
+  /* 主结构按残基分区，不再叠加额外几何：骨架与配体层都排除相互作用残基，
+     相互作用残基本身拆成"其余原子（灰）+ 定义基团原子（组色）"两块互补棍棒。 */
+  function buildLayers() {
+    var residues = data && data.residues ? data.residues : [];
+    var chain = buildPolymerLayer(residues);
+    chain = chain.then(function () { return buildLigandLayer(residues); });
+    for (var i = 0; i < residues.length; i++) {
+      chain = chain.then(residueStep(residues[i], i));
+    }
+    return chain;
+  }
+
+  function buildPolymerLayer(residues) {
+    return buildScriptComponent(polymerExpression(residues), TAG_POLYMER,
+      "polymer").then(function (result) {
+      if (result.component) {
+        return addLayerRepresentation(result.component, cartoonParams(),
+          TAG_POLYMER + "-repr");
+      }
+      if (result.ok) return null;
+      return buildStaticLayer(POLYMER_KEYWORD, "polymer", cartoonParams());
+    });
+  }
+
+  function polymerExpression(residues) {
+    var excluded = residueSelectorUnion(residues);
+    if (!excluded) return POLYMER_EXPRESSION;
+    return POLYMER_EXPRESSION + " and not (" + excluded + ")";
+  }
+
+  function residueStep(residue, index) {
+    return function () {
+      return buildResidueLayer(residue, index);
+    };
+  }
+
+  /* 同一残基的两块互不重叠棍棒：其余原子（灰）+ 定义基团原子（组色） */
+  function buildResidueLayer(residue, index) {
+    var atoms = groupUnionExpression(residue);
+    if (!atoms) return Promise.resolve(null);
+    var color = GROUP_COLORS[index % GROUP_COLORS.length];
+    var label = residue.label || "group " + (index + 1);
+    return buildResidueRest(residue, index, atoms, label).then(function () {
+      return buildLayer(atoms, TAG_RESIDUE_ATOMS + index, label + " atoms",
+        stickParams(GROUP_STICK_SIZE, color));
+    });
+  }
+
+  function buildResidueRest(residue, index, atoms, label) {
+    if (isWaterResidue(residue)) return Promise.resolve(null);
+    var selector = residueSelector(residue);
+    if (!selector) return Promise.resolve(null);
+    var rest = "(" + selector + ") and not (" + atoms + ")";
+    return buildLayer(rest, TAG_RESIDUE_REST + index, label + " rest",
+      stickParams(STICK_SIZE, STICK_COLOR));
+  }
+
+  /* 残基级选择器（后端 residue_selector），缺失时只画组内原子，不猜几何 */
+  function residueSelector(residue) {
+    return residue && residue.residue_selector
+      ? String(residue.residue_selector) : null;
+  }
+
+  /* 水的 resSeq 被 PDB 4 列截断后不唯一（15688→5689），残基级选择器会命中
+     其它水分子；水分子 3 个原子本来全在组里，故跳过"其余原子"层与排除列表。 */
+  function isWaterResidue(residue) {
+    return !!residue && residue.is_water === true;
+  }
+
+  function residueSelectorUnion(residues) {
+    var parts = [];
+    for (var i = 0; i < residues.length; i++) {
+      if (isWaterResidue(residues[i])) continue;
+      var selector = residueSelector(residues[i]);
+      if (selector) parts.push("(" + selector + ")");
+    }
+    return parts.length ? parts.join(" or ") : null;
+  }
+
+  function groupUnionExpression(residue) {
+    var atoms = residue && residue.atoms ? residue.atoms : [];
+    var parts = [];
+    for (var i = 0; i < atoms.length; i++) {
+      if (atoms[i] && atoms[i].expression) {
+        parts.push("(" + atoms[i].expression + ")");
+      }
+    }
+    return parts.length ? parts.join(" or ") : null;
+  }
+
+  /* 配体/离子层：非蛋白、非水、非核酸，并排除相互作用残基（它们已由棍棒显示） */
+  function ligandExpression(residues) {
+    var excluded = residueSelectorUnion(residues);
+    if (!excluded) return NON_POLYMER_EXPRESSION;
+    return "(" + NON_POLYMER_EXPRESSION + ") and not (" + excluded + ")";
+  }
+
+  function residueUnionExpression(residues) {
+    var parts = [];
+    for (var i = 0; i < residues.length; i++) {
+      if (residues[i] && residues[i].expression) {
+        parts.push("(" + residues[i].expression + ")");
+      }
+    }
+    return parts.length ? parts.join(" or ") : null;
+  }
+
+  function buildLigandLayer(residues) {
+    return buildScriptComponent(ligandExpression(residues), TAG_LIGAND,
+      "ligand").then(function (result) {
+      if (result.component) {
+        return addLayerRepresentation(result.component, ligandParams(),
+          TAG_LIGAND + "-repr");
+      }
+      if (result.ok) return null;
+      return buildPlainLigandLayer();
+    });
+  }
+
+  function buildPlainLigandLayer() {
+    return buildScriptComponent(NON_POLYMER_EXPRESSION, TAG_LIGAND, "ligand")
+      .then(function (result) {
+        if (result.component) {
+          return addLayerRepresentation(result.component, ligandParams(),
+            TAG_LIGAND + "-repr");
         }
-      }
+        if (result.ok) return null;
+        return buildStaticLayer(STATIC_LIGAND, "ligand", ligandParams())
+          .then(function () {
+            return buildStaticLayer(STATIC_ION, "ion", ligandParams());
+          });
+      });
+  }
+
+  /* ---------------- 图例 ---------------- */
+
+  function renderLegend(residues) {
+    if (!groupLegendEl) return;
+    while (groupLegendEl.firstChild) {
+      groupLegendEl.removeChild(groupLegendEl.firstChild);
     }
-    return null;
-  }
-
-  function locus(unit, indices) {
-    return { unit: unit, indices: indices };
-  }
-
-  function contactLoci(structure, contact) {
-    var first = unitOf(structure, contact[0]);
-    var second = unitOf(structure, contact[1]);
-    if (!first || !second) return null;
-    var elements = [];
-    if (first.unit === second.unit) {
-      elements.push(locus(first.unit,
-        new Int32Array([first.index, second.index])));
-    } else {
-      elements.push(locus(first.unit, new Int32Array([first.index])));
-      elements.push(locus(second.unit, new Int32Array([second.index])));
+    for (var i = 0; i < residues.length; i++) {
+      groupLegendEl.appendChild(legendItem(residues[i], i));
     }
-    return molstar.lib.structure.StructureElement.Loci(structure, elements);
+    if (residues.length) groupLegendEl.appendChild(legendNote());
   }
 
-  /* 小结构整条 Loci：unit 内局部序号 0..n-1，不做任何全局序号换算 */
-  function wholeStructureLoci(structure) {
-    if (!structure) return null;
-    var elements = [];
-    for (var i = 0; i < structure.units.length; i++) {
-      var unit = structure.units[i];
-      if (!unit.elements.length) continue;
-      elements.push(locus(unit, unitIndices(unit.elements.length)));
+  function legendItem(residue, index) {
+    var item = document.createElement("span");
+    item.className = GROUP_ITEM_CLASS;
+    var dot = document.createElement("span");
+    dot.className = GROUP_DOT_CLASS;
+    dot.style.backgroundColor = GROUP_COLORS[index % GROUP_COLORS.length];
+    var label = document.createElement("span");
+    label.className = GROUP_LABEL_CLASS;
+    label.textContent = residue && residue.label
+      ? residue.label : "group " + (index + 1);
+    item.appendChild(dot);
+    item.appendChild(label);
+    return item;
+  }
+
+  function legendNote() {
+    var note = document.createElement("span");
+    note.className = GROUP_NOTE_CLASS;
+    note.textContent = GROUP_COLOR_NOTE;
+    return note;
+  }
+
+  /* ---------------- 相机（只在首次载入后聚焦一次） ---------------- */
+
+  /* 三级回退：两端并集 → 两端各自合并 → 主结构整体；路径写进状态栏便于反馈 */
+  function focusInitially() {
+    var residues = data && data.residues ? data.residues : [];
+    return focusFromResidues(residues)
+      .then(function (path) { return path || focusFromEachResidue(residues); })
+      .then(function (path) { return path || focusWholeStructure(); })
+      .then(function (path) {
+        focusPath = path || "none";
+        if (!path) noteFailure("camera focus failed", "no loci");
+        lockCamera();
+        console.warn("[dii] focus:", focusPath);
+      });
+  }
+
+  function focusFromResidues(residues) {
+    return buildScriptComponent(residueUnionExpression(residues), TAG_FOCUS,
+      "focus").then(function (result) {
+      return applyFocusLoci(rootLociOf(componentStructure(result)),
+        "residues");
+    });
+  }
+
+  function focusFromEachResidue(residues) {
+    var merged = null;
+    var chain = Promise.resolve();
+    for (var i = 0; i < residues.length; i++) {
+      chain = chain.then(residueFocusStep(residues[i], i));
     }
-    if (!elements.length) return null;
-    return molstar.lib.structure.StructureElement.Loci(structure, elements);
-  }
-
-  function unitIndices(count) {
-    var indices = new Int32Array(count);
-    for (var i = 0; i < count; i++) indices[i] = i;
-    return indices;
-  }
-
-  /* 小结构逐原子 entries（contact_pdb ≤2 原子；a↔b 顺序不影响连线） */
-  function structureAtomEntries(structure) {
-    var entries = [];
-    for (var i = 0; i < structure.units.length; i++) {
-      var unit = structure.units[i];
-      for (var j = 0; j < unit.elements.length; j++) {
-        entries.push(locus(unit, new Int32Array([j])));
-      }
+    function residueFocusStep(residue, index) {
+      return function () {
+        if (!residue || !residue.expression) return null;
+        return buildScriptComponent(residue.expression,
+          TAG_FOCUS_ITEM + index, "focus " + (index + 1)
+        ).then(function (result) {
+          merged = unionLoci(merged,
+            rootLociOf(componentStructure(result)));
+          return null;
+        });
+      };
     }
-    return entries;
+    return chain.then(function () {
+      return applyFocusLoci(merged, "residues-each");
+    });
   }
 
-  /* camera manager 挂在 plugin 上（molstar.Viewer 实例不暴露 managers/setLayout） */
-  function cameraManager() {
-    var plugin = viewer && viewer.plugin;
-    return plugin && plugin.managers ? plugin.managers.camera : null;
+  function focusWholeStructure() {
+    return applyFocusLoci(wholeStructureLoci(rootStructure()), "structure");
+  }
+
+  function applyFocusLoci(loci, path) {
+    if (!loci || isLociEmpty(loci)) return null;
+    focusLoci(loci);
+    return path;
   }
 
   function focusLoci(loci) {
-    var camera = cameraManager();
+    var camera = viewer && viewer.plugin ? viewer.plugin.managers.camera : null;
     if (!camera || !loci) return;
     try {
       camera.focusLoci(loci);
     } catch (error) {
-      /* 相机聚焦失败不影响帧渲染，保留 Mol* 默认视角 */
+      noteFailure("camera focus failed", error);
     }
   }
 
-  function focusMainOverlay(payload, structure) {
-    if (!structure) return;
-    focusLoci(payload.contact ? contactLoci(structure, payload.contact)
-      : wholeStructureLoci(structure));
+  /* Mol* 在 manualReset 为 false 时每次 canvas commit 都会整场景重置相机，
+     会把这次聚焦覆盖掉；聚焦后锁住相机，后续帧切换就不再动它。 */
+  function lockCamera() {
+    var canvas = viewer && viewer.plugin ? viewer.plugin.canvas3d : null;
+    if (!canvas || typeof canvas.setProps !== "function") return;
+    try {
+      canvas.setProps({ camera: { manualReset: true } });
+    } catch (error) {
+      noteFailure("camera lock failed", error);
+    }
   }
 
-  function atomLoci(structure, atomIndex) {
-    var located = unitOf(structure, atomIndex);
-    if (!located) return null;
-    var elements = molstar.lib.structure.StructureElement;
-    return elements.Loci(structure, [locus(located.unit,
-      new Int32Array([located.index]))]);
+  /* ---------------- 逐帧：只换坐标帧 + 虚线 ---------------- */
+
+  function modelCell() {
+    var entry = structureEntry();
+    return entry && entry.model && entry.model.cell ? entry.model.cell : null;
+  }
+
+  function currentFrameIndex() {
+    var cell = modelCell();
+    if (!cell || !cell.obj) return null;
+    var info = molstar.lib.structure.Model.TrajectoryInfo.get(cell.obj.data);
+    if (info && typeof info.index === "number") return info.index;
+    var values = cell.params && cell.params.values;
+    if (values && typeof values.modelIndex === "number") {
+      return values.modelIndex;
+    }
+    return null;
+  }
+
+  /* 官方改帧方式：update model-from-trajectory 的 modelIndex（不碰结构） */
+  function applyMolstarFrame(frameIndex) {
+    if (!modelRef) {
+      noteFailure("model cell is missing", frameIndex);
+      return Promise.resolve();
+    }
+    var params = {};
+    params[MODEL_INDEX_PARAM] = frameIndex;
+    return viewer.plugin.state.updateTransform(viewer.plugin.state.data,
+      modelRef, params, MODEL_INDEX_LABEL).catch(function (error) {
+      noteFailure("frame switch failed", error);
+    });
+  }
+
+  function selectFrame(value) {
+    var target = clampFrame(value);
+    var seq = ++frameSeq;
+    frame = target;
+    highlightFrame(target);
+    updateFrameLabel(target);
+    if (!ready) return Promise.resolve();
+    return applyMolstarFrame(target)
+      .then(function () {
+        if (seq !== frameSeq) return null;
+        return updateContact(target);
+      })
+      .then(function () {
+        if (seq === frameSeq) appliedSeq = seq;
+        setStatus(statusText(), failures > 0);
+      });
+  }
+
+  function activeAt(value) {
+    var values = data && data.existence ? data.existence : null;
+    if (!values) return true;
+    return !!values[value];
+  }
+
+  function contactAt(value) {
+    if (data && data.contacts) {
+      return Promise.resolve(data.contacts[value] || null);
+    }
+    return fetchContact(value);
+  }
+
+  /* 先建新测量、成功后才删旧的：建失败时旧虚线保留，状态栏 contact: failed */
+  function updateContact(value) {
+    var seq = ++contactSeq;
+    if (!data || !activeAt(value)) return removeMeasurement();
+    return contactAt(value).then(function (contact) {
+      if (seq !== contactSeq || !contact) return null;
+      return buildContactMeasurement(contact);
+    }).then(function (next) {
+      if (!next) return null;
+      if (seq !== contactSeq) return dropMeasurement(next);
+      return installMeasurement(next);
+    }).catch(function (error) {
+      contactState = "failed";
+      noteFailure("contact overlay failed", error);
+    });
+  }
+
+  function buildContactMeasurement(contact) {
+    var residues = data && data.residues ? data.residues : [];
+    var first = groupAtomExpression(residues[contact[0]], contact[1]);
+    var second = groupAtomExpression(residues[contact[2]], contact[3]);
+    if (!first || !second) return null;
+    return Promise.all([
+      buildScriptComponent(first, TAG_CONTACT_A, "contact a"),
+      buildScriptComponent(second, TAG_CONTACT_B, "contact b")
+    ]).then(function (results) {
+      var left = rootLociOf(componentStructure(results[0]));
+      var right = rootLociOf(componentStructure(results[1]));
+      if (!left || !right) {
+        contactState = "failed";
+        console.warn("[dii] contact overlay failed: no root loci", contact);
+        return null;
+      }
+      return addDistance(left, right, contactLabel(contact));
+    });
+  }
+
+  function groupAtomExpression(residue, position) {
+    var atoms = residue && residue.atoms ? residue.atoms : [];
+    if (!(position >= 0 && position < atoms.length)) return null;
+    return atoms[position].expression || null;
+  }
+
+  function contactLabel(contact) {
+    var residues = data && data.residues ? data.residues : [];
+    var first = residues[contact[0]];
+    var second = residues[contact[2]];
+    var left = first && first.label ? first.label : "group " + contact[0];
+    var right = second && second.label ? second.label : "group " + contact[2];
+    return left + " ┄ " + right;
+  }
+
+  function componentStructure(result) {
+    var component = result ? result.component : null;
+    return component && component.data ? component.data : null;
   }
 
   function addDistance(first, second, text) {
@@ -533,302 +935,128 @@
       lineParams: { dashLength: DASH_LENGTH, linesSize: LINE_SIZE }
     };
     if (text) options.customText = text;
-    var measurement = viewer.plugin.managers.structure.measurement;
-    return measurement.addDistance(first, second, options).then(function (result) {
-      if (result) contacts.push(result);
-    });
-  }
-
-  /* 回退虚线：主结构 + payload.contact（旧行为） */
-  function drawContact(structure, contact, text) {
-    if (!structure || !contact) return Promise.resolve();
-    var first = atomLoci(structure, contact[0]);
-    var second = atomLoci(structure, contact[1]);
-    if (!first || !second) return Promise.resolve();
-    return addDistance(first, second, text);
-  }
-
-  /* 默认虚线：contact_pdb 的两个原子 + contact_label */
-  function addContactPdb(payload) {
-    var state = { loci: null, failed: false };
-    if (!payload.contact_pdb) return Promise.resolve(state);
-    return loadStructureCell(payload.contact_pdb).then(function (cell) {
-      return clearDefaultReprs(cell).then(function () {
-        var structure = structureDataOf(cell);
-        var atoms = structure ? structureAtomEntries(structure) : [];
-        if (atoms.length < 2) return state;
-        var elements = molstar.lib.structure.StructureElement;
-        var first = elements.Loci(structure, [atoms[0]]);
-        var second = elements.Loci(structure, [atoms[1]]);
-        return addDistance(first, second, contactText(payload)).then(function () {
-          state.loci = lociOf(structure, [atoms[0], atoms[1]]);
-          return state;
-        });
-      });
+    var measurementManager = viewer.plugin.managers.structure.measurement;
+    return Promise.resolve(measurementManager.addDistance(first, second,
+      options)).then(function (result) {
+      if (!result) {
+        contactState = "failed";
+        console.warn("[dii] contact overlay failed: distance not created");
+        return null;
+      }
+      return result;
     }).catch(function (error) {
-      console.warn("[dii] contact structure failed", error);
-      state.failed = true;
-      return state;
+      contactState = "failed";
+      noteFailure("distance failed", error);
+      return null;
     });
   }
 
-  function hexToInt(hex) {
-    return parseInt(String(hex).replace("#", ""), 16);
+  function installMeasurement(next) {
+    return removeMeasurement().then(function () {
+      measurement = next;
+      contactState = "ok";
+      return next;
+    });
   }
 
-  function groupColor(index) {
-    return GROUP_COLORS[index % GROUP_COLORS.length];
+  function dropMeasurement(cells) {
+    return deleteMeasurementCells(cells);
   }
 
-  function groupLabel(group, index) {
-    return group && group.label ? String(group.label) : "group " + (index + 1);
+  function removeMeasurement() {
+    var current = measurement;
+    measurement = null;
+    return deleteMeasurementCells(current);
   }
 
-  function bucketOf(buckets, unit) {
-    for (var i = 0; i < buckets.length; i++) {
-      if (buckets[i].unit === unit) return buckets[i];
-    }
-    var bucket = { unit: unit, indices: [] };
-    buckets.push(bucket);
-    return bucket;
-  }
-
-  /* 合并 entries 为一条 Loci：同一 unit 的原子必须合并成一条升序 indices */
-  function lociOf(structure, entries) {
-    var buckets = [];
-    for (var i = 0; i < entries.length; i++) {
-      var bucket = bucketOf(buckets, entries[i].unit);
-      var indices = entries[i].indices;
-      for (var j = 0; j < indices.length; j++) {
-        if (bucket.indices.indexOf(indices[j]) < 0) {
-          bucket.indices.push(indices[j]);
-        }
-      }
-    }
-    if (!buckets.length) return null;
-    var elements = [];
-    for (var k = 0; k < buckets.length; k++) {
-      elements.push(locus(buckets[k].unit, sortedIndices(buckets[k].indices)));
-    }
-    return molstar.lib.structure.StructureElement.Loci(structure, elements);
-  }
-
-  /* 回退路径：主结构的 groups.atoms 与 contact 同坐标系（旧行为，保留） */
-  function groupLoci(structure, atoms) {
-    if (!atoms || !atoms.length) return null;
-    var entries = [];
-    for (var i = 0; i < atoms.length; i++) {
-      var located = unitOf(structure, atoms[i]);
-      if (!located) continue;
-      entries.push(locus(located.unit, new Int32Array([located.index])));
-    }
-    return entries.length ? lociOf(structure, entries) : null;
-  }
-
-  /* Bundle.fromLoci 走 SortedArray，indices 必须升序 */
-  function sortedIndices(indices) {
-    indices.sort(function (left, right) { return left - right; });
-    return new Int32Array(indices);
-  }
-
-  function groupParams(index) {
-    return {
-      type: GROUP_TYPE,
-      typeParams: {
-        sizeFactor: GROUP_SIZE_FACTOR,
-        sizeAspectRatio: GROUP_SIZE_ASPECT
-      },
-      color: GROUP_COLOR_THEME,
-      colorParams: { value: hexToInt(groupColor(index)) }
-    };
-  }
-
-  /* addRepresentation 首参须是 cell/selector（裸 Loci 无法解析），因此先把 Loci
-     转成 StructureElement.Bundle 建一个临时 component；tryCreateComponent 是
-     async，必须等它给出的 selector，不能把 Promise 直接传给 addRepresentation。 */
-  function groupComponent(loci, selector, group, index) {
-    if (!loci) return Promise.resolve(null);
-    var bundle = molstar.lib.structure.StructureElement.Bundle.fromLoci(loci);
-    var spec = {
-      type: { name: GROUP_BUNDLE_TYPE, params: bundle },
-      nullIfEmpty: true,
-      label: groupLabel(group, index)
-    };
-    return Promise.resolve(viewer.plugin.builders.structure.tryCreateComponent(
-      selector, spec, GROUP_TAG_PREFIX + index));
-  }
-
-  function usableComponent(component) {
-    return !!(component && (component.cell || component.ref));
-  }
-
-  function addGroupRepr(loci, selector, group, index) {
-    return groupComponent(loci, selector, group, index)
-      .then(function (component) {
-        if (!usableComponent(component)) {
-          console.warn("[dii] group component failed", index);
-          return false;
-        }
-        var builders = viewer.plugin.builders.structure.representation;
-        return builders.addRepresentation(
-          component, groupParams(index), { tag: GROUP_TAG_PREFIX + index }
-        ).then(function (result) {
-          if (result) {
-            groupReprs.push({ component: component, representation: result });
-          }
-          return !!result;
-        });
+  function deleteMeasurementCells(cells) {
+    if (!cells || !ready) return Promise.resolve();
+    var builder = viewer.plugin.state.data.build();
+    if (cells.selection) builder.delete(refOf(cells.selection));
+    if (cells.representation) builder.delete(refOf(cells.representation));
+    return Promise.resolve(builder.commit({ canUndo: false }))
+      .catch(function (error) {
+        noteFailure("measurement cleanup failed", error);
       });
   }
 
-  function runGroupSteps(steps) {
-    var state = { failures: 0, added: 0 };
-    var chain = Promise.resolve();
-    for (var i = 0; i < steps.length; i++) {
-      chain = chain.then(groupStep(steps[i], i, state));
-    }
-    return chain.then(function () {
-      return { failed: state.failures > 0, added: state.added };
+  /* 原生轨迹控件（首帧/上一帧/下一帧）改帧后把当前帧同步回滑块与 existence 条；
+     滑块拖动（pendingTimer）或换帧未落地（frameSeq != appliedSeq）时避让。 */
+  function pollFrame() {
+    if (pendingTimer || frameSeq !== appliedSeq) return;
+    var index = currentFrameIndex();
+    if (index === null || index < 0 || index === frame) return;
+    frame = index;
+    highlightFrame(index);
+    updateFrameLabel(index);
+    updateContact(index).then(function () {
+      setStatus(statusText(), failures > 0);
     });
   }
 
-  function groupStep(step, index, state) {
-    return function () {
-      return Promise.resolve().then(step).then(function (ok) {
-        if (ok) {
-          state.added += 1;
-          return;
-        }
-        state.failures += 1;
-        console.warn("[dii] group representation failed", index);
-      }).catch(function (error) {
-        state.failures += 1;
-        console.warn("[dii] group component failed", index, error);
-      });
-    };
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollFrame, FRAME_POLL_MS);
   }
 
-  /* 默认路径：一条 highlight PDB = 一个基团，整条小结构加球棍 */
-  function addHighlightReprs(payload) {
-    var highlights = payload.highlights || [];
-    var steps = [];
-    for (var i = 0; i < highlights.length; i++) {
-      steps.push(highlightStep(highlights[i], i));
+  /* ---------------- existence 条即进度条：指针拖动/点选 + 键盘 ---------------- */
+
+  function requestFrame(value) {
+    frame = clampFrame(value);
+    highlightFrame(frame);
+    updateFrameLabel(frame);
+    if (pendingTimer) clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(function () {
+      pendingTimer = null;
+      selectFrame(frame);
+    }, DEBOUNCE_MS);
+  }
+
+  function frameFromPointer(event) {
+    var box = existenceBar.getBoundingClientRect();
+    var limit = frameLimit();
+    if (!box.width || !limit) return 0;
+    var ratio = (event.clientX - box.left) / box.width;
+    return clampFrame(Math.floor(ratio * limit));
+  }
+
+  function onPointerDown(event) {
+    if (!ready || !frameLimit()) return;
+    dragging = true;
+    if (existenceBar.setPointerCapture) {
+      existenceBar.setPointerCapture(event.pointerId);
     }
-    return runGroupSteps(steps).then(function (result) {
-      highlightGroups = result.added;
-      return result.failed;
-    });
+    requestFrame(frameFromPointer(event));
+    event.preventDefault();
   }
 
-  function highlightStep(highlight, index) {
-    return function () {
-      var pdb = highlight && highlight.pdb;
-      if (!pdb) {
-        console.warn("[dii] highlight group has no pdb", index);
-        return false;
-      }
-      return loadStructureCell(pdb).then(function (cell) {
-        var structure = structureDataOf(cell);
-        if (!structure) throw new Error("empty highlight structure");
-        return clearDefaultReprs(cell).then(function () {
-          return addGroupRepr(wholeStructureLoci(structure), cell, highlight, index);
-        });
-      });
-    };
+  function onPointerMove(event) {
+    if (!dragging) return;
+    requestFrame(frameFromPointer(event));
   }
 
-  /* 回退路径（highlights 缺失）：主结构 + groups.atoms + 旧 unitOf 定位 */
-  function addGroupReprs(payload) {
-    var groups = payload.groups || [];
-    var structure = groups.length ? structureData() : null;
-    var selector = groups.length ? structureSelector() : null;
-    if (!structure || !selector) return Promise.resolve(false);
-    var steps = [];
-    for (var i = 0; i < groups.length; i++) {
-      steps.push(groupReprStep(structure, selector, groups[i], i));
-    }
-    return runGroupSteps(steps).then(function (result) {
-      return result.failed;
-    });
-  }
-
-  function groupReprStep(structure, selector, group, index) {
-    return function () {
-      return addGroupRepr(groupLoci(structure, group.atoms), selector, group, index);
-    };
-  }
-
-  function renderGroupLegend(groups) {
-    if (!groupLegendEl) return;
-    while (groupLegendEl.firstChild) {
-      groupLegendEl.removeChild(groupLegendEl.firstChild);
-    }
-    for (var i = 0; i < groups.length; i++) {
-      var item = document.createElement("span");
-      item.className = GROUP_ITEM_CLASS;
-      var dot = document.createElement("span");
-      dot.className = GROUP_DOT_CLASS;
-      dot.style.backgroundColor = groupColor(i);
-      var label = document.createElement("span");
-      label.className = GROUP_LABEL_CLASS;
-      label.textContent = groupLabel(groups[i], i);
-      item.appendChild(dot);
-      item.appendChild(label);
-      groupLegendEl.appendChild(item);
+  function onPointerUp(event) {
+    if (!dragging) return;
+    dragging = false;
+    if (existenceBar.releasePointerCapture &&
+        existenceBar.hasPointerCapture &&
+        existenceBar.hasPointerCapture(event.pointerId)) {
+      existenceBar.releasePointerCapture(event.pointerId);
     }
   }
 
-  function copyShallow(source) {
-    var target = {};
-    for (var key in source) {
-      if (Object.prototype.hasOwnProperty.call(source, key)) {
-        target[key] = source[key];
-      }
-    }
-    return target;
+  function onFrameKey(event) {
+    var limit = frameLimit();
+    if (!limit) return;
+    if (event.key === "ArrowLeft") requestFrame(frame - 1);
+    else if (event.key === "ArrowRight") requestFrame(frame + 1);
+    else if (event.key === "Home") requestFrame(0);
+    else if (event.key === "End") requestFrame(limit - 1);
+    else return;
+    event.preventDefault();
   }
 
-  function toggleSequenceClass(hide) {
-    if (!host || !host.classList) return;
-    if (hide) {
-      host.classList.add(NO_SEQUENCE_CLASS);
-    } else {
-      host.classList.remove(NO_SEQUENCE_CLASS);
-    }
-  }
-
-  /* regionState.top 是 bundle 内隐藏序列区的布局键（见 molstar.js 的
-     layoutVisibilityClassName）；无该布局 API 时退回容器 CSS 类。 */
-  function applySequence(visible) {
-    var plugin = viewer && viewer.plugin;
-    var layout = plugin && plugin.layout;
-    var state = layout && layout.state;
-    if (!state || !state.regionState ||
-        typeof layout.updateProps !== "function") {
-      toggleSequenceClass(!visible);
-      return;
-    }
-    var regionState = copyShallow(state.regionState);
-    regionState.top = visible ? REGION_FULL : REGION_HIDDEN;
-    try {
-      layout.updateProps({ regionState: regionState });
-      toggleSequenceClass(false);
-    } catch (error) {
-      toggleSequenceClass(!visible);
-    }
-  }
-
-  function readJson(response) {
-    return response.json().then(function (data) {
-      if (!response.ok) {
-        var detail = data && (data.detail || data.error)
-          ? (data.detail || data.error) : "HTTP " + response.status;
-        throw new Error(String(detail));
-      }
-      return data;
-    });
-  }
+  /* ---------------- 序列开关 / 浏览 / 选择结构 ---------------- */
 
   function pickNative(input) {
     setStatus("waiting for file selection…", false);
@@ -836,8 +1064,8 @@
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: PICK_BODY
-    }).then(readJson).then(function (data) {
-      var path = data && data.path ? String(data.path) : "";
+    }).then(readJson).then(function (payload) {
+      var path = payload && payload.path ? String(payload.path) : "";
       if (!path) {
         setStatus("no file selected", false);
         return;
@@ -864,7 +1092,8 @@
 
   function onBrowseClick(event) {
     var button = event.currentTarget;
-    var input = document.getElementById(button.getAttribute(BROWSE_TARGET_ATTR));
+    var input = document.getElementById(
+      button.getAttribute(BROWSE_TARGET_ATTR));
     if (!input) return;
     var mode = button.getAttribute(BROWSE_MODE_ATTR);
     if (mode === BROWSE_PICKER) {
@@ -876,6 +1105,30 @@
     }
   }
 
+  function selectStructure(event) {
+    event.preventDefault();
+    var topology = topologyInput.value.trim();
+    var trajectoryPath = trajectoryInput.value.trim();
+    if (!topology || !trajectoryPath) {
+      setStatus("topology and trajectory are required", true);
+      return;
+    }
+    openButton.disabled = true;
+    setStatus("opening structure…", false);
+    var body = "topology=" + encodeURIComponent(topology) +
+      "&trajectory=" + encodeURIComponent(trajectoryPath);
+    fetch(SELECT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body
+    }).then(readJson).then(function () {
+      window.location.reload();
+    }).catch(function (error) {
+      openButton.disabled = false;
+      setStatus(error.message, true);
+    });
+  }
+
   function initViewer() {
     if (!window.molstar || !molstar.Viewer) {
       setStatus("Mol* viewer is not available", true);
@@ -884,70 +1137,18 @@
     molstar.Viewer.create(host, VIEWER_OPTIONS).then(function (instance) {
       viewer = instance;
       ready = true;
-      applySequence(!showSequence || showSequence.checked);
-      loadFrame(0);
+      return loadScene();
     }).catch(function (error) {
       setStatus("viewer init failed: " + error.message, true);
     });
   }
 
-  function selectStructure(event) {
-    event.preventDefault();
-    var topology = topologyInput.value.trim();
-    var trajectory = trajectoryInput.value.trim();
-    if (!topology || !trajectory) {
-      setStatus("topology and trajectory are required", true);
-      return;
-    }
-    openButton.disabled = true;
-    setStatus("opening structure…", false);
-    var body = "topology=" + encodeURIComponent(topology) +
-      "&trajectory=" + encodeURIComponent(trajectory);
-    fetch("/api/structure/select", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: body
-    }).then(function (response) {
-      return response.json().then(function (data) {
-        if (!response.ok) {
-          throw new Error(data && data.detail ? String(data.detail)
-            : "HTTP " + response.status);
-        }
-        return data;
-      });
-    }).then(function () {
-      window.location.reload();
-    }).catch(function (error) {
-      openButton.disabled = false;
-      setStatus(error.message, true);
-    });
-  }
-
-  if (slider) {
-    slider.addEventListener("input", function () {
-      var frame = parseInt(slider.value, 10);
-      if (isNaN(frame)) return;
-      updateFrameLabel(frame);
-      highlightFrame(frame);
-      if (pendingTimer) clearTimeout(pendingTimer);
-      pendingTimer = setTimeout(function () {
-        pendingTimer = null;
-        loadFrame(frame);
-      }, DEBOUNCE_MS);
-    });
-  }
-
-  if (showWater) {
-    showWater.addEventListener("change", function () {
-      clearCache();
-      if (ready) loadFrame(latestFrame);
-    });
-  }
-
-  if (showSequence) {
-    showSequence.addEventListener("change", function () {
-      applySequence(showSequence.checked);
-    });
+  if (existenceBar) {
+    existenceBar.addEventListener("pointerdown", onPointerDown);
+    existenceBar.addEventListener("pointermove", onPointerMove);
+    existenceBar.addEventListener("pointerup", onPointerUp);
+    existenceBar.addEventListener("pointercancel", onPointerUp);
+    existenceBar.addEventListener("keydown", onFrameKey);
   }
 
   for (var i = 0; i < browseButtons.length; i++) {
@@ -958,6 +1159,7 @@
 
   highlightFrame(0);
   if (cfg.has_structure) {
+    updateFrameLabel(0);
     initViewer();
   } else {
     setStatus("select topology and trajectory to load the structure", false);

@@ -1,29 +1,35 @@
 # -*- coding: utf-8 -*-
-"""3D 结构可视化纯函数层：打开拓扑/轨迹、导出单帧 PDB、一致性校验、接触对。"""
+"""3D 结构可视化纯函数层：打开拓扑/轨迹、导出拓扑 PDB、选择表达式、接触对。"""
 
-import io
 import threading
-import warnings
 from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Any, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import MDAnalysis as mda
 import numpy as np
 from MDAnalysis.lib.distances import calc_bonds
 
 STRUCTURE_CACHE_SIZE = 2
-FRAME_CACHE_SIZE = 8
 SAMPLE_ATOMS = 5
-PDB_FORMAT = "PDB"
-HIGHLIGHT_CHAINS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+CONTACT_FRAME_LIMIT = 5000
 PDB_RESID_DIGITS = 4
+PDB_SERIAL_DIGITS = 5
+PDB_END = "END"
+TAG_BASE = 100.0  # 打标原子的 B-factor 起点（第 k 个打标原子 = TAG_BASE + k）
+TAG_BAND = 0.25  # 选择表达式 B-factor 区间半宽
+NO_TAG = 0.0  # 未打标原子的 B-factor
+CHAIN_POOL = "ABCDEFGHJKLMNOPQRSTUVXYZ"  # 每个 segment 一个字母（不含 W/I）
+CHAIN_WATER = "W"
+CHAIN_ION = "I"
 PDB_ATOM_LINE = (
     "ATOM  {serial:5d} {name}{altloc}{resname:>3s} {chain}{resseq:4d}"
     "{icode}   {x:8.3f}{y:8.3f}{z:8.3f}{occupancy:6.2f}{temp_factor:6.2f}"
     "          {element:>2s}")
 WATER_RESIDUES = frozenset(
     {"SOL", "HOH", "WAT", "TIP3", "TIP4", "HO4", "HO5", "H2O"})
+ION_ELEMENTS = frozenset({
+    "NA", "K", "MG", "CA", "ZN", "FE", "MN", "CU", "CL", "BR", "I", "F",
+    "LI", "CO", "NI", "CD", "HG"})
 
 _UNIVERSES: "OrderedDict[Tuple[str, str], Any]" = OrderedDict()
 _UNIVERSE_LOCK = threading.Lock()
@@ -48,47 +54,184 @@ def load_universe(topology: str, trajectory: str) -> "mda.Universe":
     return universe
 
 
-def frame_pdb(universe: "mda.Universe", frame: int) -> str:
-    """第 frame 帧的 PDB 文本；有盒时回绕显示，原子顺序与 Universe 一致（索引映射前提）。"""
-    _check_frame(universe, frame)
+def topology_pdb(universe: "mda.Universe", interaction: Any = None,
+                 idx: Optional[int] = None) -> str:
+    """第 0 帧全原子 PDB 文本；该对原子打 B-factor 标记，不写 CONECT。"""
+    universe.trajectory[0]
+    tags = _tagged_factors(interaction, idx)
+    chains = residue_chains(universe)
+    atom_chains = [chains[int(index)] for index in universe.atoms.resindices]
+    positions = _wrapped_positions(universe, range(universe.atoms.n_atoms))
+    lines = [_atom_line(universe, serial, index, atom_chains[index],
+                        positions[index], tags.get(index, NO_TAG))
+             for index, serial in enumerate(
+                 range(1, universe.atoms.n_atoms + 1))]
+    return "\n".join(lines + [PDB_END]) + "\n"
+
+
+def residue_chains(universe: "mda.Universe") -> Dict[int, str]:
+    """残基索引 → chainID：每个 segment 一个唯一字母；水 W、单原子离子 I。"""
+    residues = universe.atoms.residues
+    resnames = [str(name).strip().upper() for name in residues.resnames]
+    counts = np.bincount(universe.atoms.resindices,
+                         minlength=len(resnames)).tolist()
+    letters = _segment_letters(residues)
+    elements = _first_atom_elements(universe, len(resnames))
+    return {index: _chain_letter(resnames[index], int(counts[index]),
+                                elements[index],
+                                letters[int(residues.segindices[index])])
+            for index in range(len(resnames))}
+
+
+def _segment_letters(residues: Any) -> List[str]:
+    """segment 索引 → chain 字母（按 segment 顺序从 CHAIN_POOL 取）。"""
+    n_segments = len(residues.segments)
+    if n_segments > len(CHAIN_POOL):
+        raise ValueError("too many segments for chain letters")
+    return list(CHAIN_POOL[:n_segments])
+
+
+def interaction_expressions(interaction: Any, idx: int,
+                            universe: "mda.Universe"
+                            ) -> Dict[str, List[Dict[str, Any]]]:
+    """该对的 Mol* 选择表达式（每组一条残基级、每原子一条 B-factor 区间）。
+
+    表达式只用 b 区间定位 topology_pdb 打标的原子，不依赖 chain/resi 编号。
+    """
+    tagged = _pair_atom_expressions(interaction, idx)
+    chains = residue_chains(universe)
+    residues: List[Dict[str, Any]] = []
+    position = 0
+    for group in interaction.groups[idx]:
+        rows = tagged[position:position + len(group.atoms)]
+        position += len(group.atoms)
+        residues.append(_group_expression(interaction, group, rows, universe,
+                                          chains))
+    return {"residues": residues}
+
+
+def frame_contacts(interaction: Any, idx: int, universe: "mda.Universe",
+                   limit: int = CONTACT_FRAME_LIMIT) -> Optional[List]:
+    """逐帧最近接触 [g1, a1, g2, a2]（无接触为 None）；超过 limit 帧返回 None。"""
+    n_frames = len(universe.trajectory)
+    if n_frames > limit:
+        return None
+    return [frame_contact(interaction, idx, universe, frame)
+            for frame in range(n_frames)]
+
+
+def frame_contact(interaction: Any, idx: int, universe: "mda.Universe",
+                  frame: int) -> Optional[List[int]]:
+    """单帧最近接触 [g1, a1, g2, a2]；该帧不活跃或无接触返回 None。"""
+    if not _frame_active(interaction, idx, universe, frame):
+        return None
     universe.trajectory[frame]
-    return _write_pdb(_display_copy(universe))
+    groups = interaction.groups[idx]
+    contact = closest_contact(universe, groups[0].atom_indices,
+                              groups[-1].atom_indices)
+    if contact is None:
+        return None
+    return [0, _atom_position(groups[0], contact[0]),
+            len(groups) - 1, _atom_position(groups[-1], contact[1])]
 
 
-def frame_view(universe: "mda.Universe", frame: int, hide_water: bool = False,
-               keep_atoms: FrozenSet[int] = frozenset()) -> Tuple[str, List[int]]:
-    """第 frame 帧的 PDB 文本与逐行全局原子索引（hide_water 剔除水，keep_atoms 恒保留）。"""
-    _check_frame(universe, frame)
-    universe.trajectory[frame]
-    shown = _shown_indices(universe, hide_water, keep_atoms)
-    display = _display_copy(universe)
-    return _write_pdb(display.atoms[shown] if hide_water else display), shown
+def _first_atom_elements(universe: "mda.Universe",
+                         n_residues: int) -> List[str]:
+    """每个残基首原子的元素（拓扑未提供元素列时全部为空串）。"""
+    try:
+        elements = [str(element).strip().upper()
+                    for element in universe.atoms.elements]
+    except (AttributeError, ValueError):
+        return [""] * n_residues
+    starts = np.searchsorted(universe.atoms.resindices,
+                             np.arange(n_residues))
+    return [elements[int(start)] for start in starts]
 
 
-def _check_frame(universe: "mda.Universe", frame: int) -> None:
-    """帧号校验（越界报 ValueError）。"""
+def _chain_letter(resname: str, atom_count: int, element: str,
+                  segment_letter: str) -> str:
+    """残基 chainID：水 W / 单原子金属或卤素 I / 其余取所属 segment 字母。"""
+    if resname in WATER_RESIDUES:
+        return CHAIN_WATER
+    if atom_count == 1 and element in ION_ELEMENTS:
+        return CHAIN_ION
+    return segment_letter
+
+
+def _pair_atoms(interaction: Any, idx: int) -> List[Any]:
+    """该对全部 group 原子（组序 + 组内序摊平，B-factor 打标序号即下标）。"""
+    return [atom for group in interaction.groups[idx] for atom in group.atoms]
+
+
+def _tagged_factors(interaction: Any,
+                    idx: Optional[int]) -> Dict[int, float]:
+    """该对原子的 global idx → B-factor 标记（无 interaction 时为空）。"""
+    if interaction is None or idx is None:
+        return {}
+    return {int(atom.atom_global_idx): TAG_BASE + position
+            for position, atom in enumerate(_pair_atoms(interaction, idx))}
+
+
+def _b_factor_expression(position: int) -> str:
+    """第 position 个打标原子的 B-factor 区间表达式。"""
+    return (f"b > {TAG_BASE + position - TAG_BAND:.2f} and "
+            f"b < {TAG_BASE + position + TAG_BAND:.2f}")
+
+
+def _pair_atom_expressions(interaction: Any,
+                           idx: int) -> List[Dict[str, str]]:
+    """该对全部原子的原子名与 B-factor 表达式（顺序 = 打标序）。"""
+    return [{"name": str(atom.atom_name),
+             "expression": _b_factor_expression(position)}
+            for position, atom in enumerate(_pair_atoms(interaction, idx))]
+
+
+def _group_expression(interaction: Any, group: Any,
+                      rows: List[Dict[str, str]],
+                      universe: "mda.Universe",
+                      chains: Dict[int, str]) -> Dict[str, Any]:
+    """单组：标签 + 残基选择器 + 是否水 + 残基级/逐原子表达式。"""
+    residue = _group_residue(universe, group)
+    return {"label": group_label(interaction, group, universe),
+            "residue_selector": _residue_selector(residue, chains),
+            "is_water": _is_water_residue(residue),
+            "expression": " or ".join(f"({row['expression']})"
+                                      for row in rows),
+            "atoms": rows}
+
+
+def _group_residue(universe: "mda.Universe", group: Any) -> Any:
+    """组首原子所在残基（组内原子视为同属一个残基）。"""
+    return universe.atoms[int(group.atoms[0].atom_global_idx)].residue
+
+
+def _residue_selector(residue: Any, chains: Dict[int, str]) -> str:
+    """残基级选择器：chain 取 residue_chains + auth resi（截断与 topology 一致）。"""
+    return (f"chain {chains[int(residue.resindex)]} and "
+            f"resi {_pdb_resid(int(residue.resid))}")
+
+
+def _is_water_residue(residue: Any) -> bool:
+    """残基是否为水（resname 在 WATER_RESIDUES 内）。"""
+    return str(residue.resname).strip().upper() in WATER_RESIDUES
+
+
+def _frame_active(interaction: Any, idx: int, universe: "mda.Universe",
+                  frame: int) -> bool:
+    """该帧在结构/轨迹范围内且该对相互作用存在。"""
     if not 0 <= frame < len(universe.trajectory):
-        raise ValueError(f"frame out of range: {frame}")
+        return False
+    if frame >= interaction.n_frames:
+        return False
+    return bool(interaction.existence[idx, frame])
 
 
-def _display_copy(universe: "mda.Universe") -> "mda.Universe":
-    """回绕坐标后的 Universe 副本（原 Universe 不变）。"""
-    display = universe.copy()
-    if universe.dimensions is not None:
-        display.atoms.positions = universe.atoms.wrap(inplace=False)
-    return display
-
-
-def _shown_indices(universe: "mda.Universe", hide_water: bool,
-                   keep_atoms: FrozenSet[int]) -> List[int]:
-    """保留原子的全局索引（升序；hide_water 时剔除水残基，keep_atoms 除外）。"""
-    indices = np.arange(universe.atoms.n_atoms)
-    if not hide_water:
-        return [int(index) for index in indices]
-    water = np.isin(universe.atoms.resnames, list(WATER_RESIDUES))
-    keep = np.zeros(len(indices), dtype=bool)
-    keep[[index for index in keep_atoms if 0 <= index < len(indices)]] = True
-    return [int(index) for index in indices[~water | keep]]
+def _atom_position(group: Any, global_index: int) -> int:
+    """全局原子索引在 group.atoms 中的位置（缺失为 -1）。"""
+    for position, atom in enumerate(group.atoms):
+        if int(atom.atom_global_idx) == int(global_index):
+            return position
+    return -1
 
 
 def involves_water(interaction: Any, idx: int) -> bool:
@@ -109,11 +252,6 @@ def group_label(interaction: Any, group: Any,
     if auth_id != group.residue_id:
         prefix += f" (PDB {auth_id})"
     return f"{prefix} · {group.group_type}"
-
-
-def _pdb_resid(resid: int) -> int:
-    """PDB resSeq 四列显示值（超长取低 4 位，与 MDAnalysis 写器一致）。"""
-    return int(str(int(resid))[-PDB_RESID_DIGITS:])
 
 
 def group_atoms(interaction: Any, idx: int) -> List[List[int]]:
@@ -142,48 +280,19 @@ def _atom_label(interaction: Any, group: Any, atom_index: int,
     return f"{label} {group.atoms[atom_index].atom_name}"
 
 
-@dataclass(frozen=True)
-class Highlight:
-    """单个基团的高亮小结构：组标签 + 仅含该组原子的 PDB 文本。"""
-
-    label: str
-    pdb: str
+def _pdb_resid(resid: int) -> int:
+    """PDB resSeq 四列显示值（超长取低 4 位，与 MDAnalysis 写器一致）。"""
+    return _pdb_truncate(resid, PDB_RESID_DIGITS)
 
 
-def highlights(interaction: Any, idx: int, universe: Any) -> List[Highlight]:
-    """该对每个基团一个独立小结构（第 position 组用第 position 个 chain ID）。"""
-    return [Highlight(label=group_label(interaction, group, universe),
-                      pdb=_group_pdb(universe, group, _chain_id(position)))
-            for position, group in enumerate(interaction.groups[idx])]
+def _pdb_serial(serial: int) -> int:
+    """PDB serial 五列显示值（超长取低 5 位，与 MDAnalysis 写器一致）。"""
+    return _pdb_truncate(serial, PDB_SERIAL_DIGITS)
 
 
-def contact_pdb(universe: Any,
-                contact: Optional[Tuple[int, int]]) -> Optional[str]:
-    """最近接触两个原子的 PDB 文本（两原子分别占 chain A/B）。"""
-    if not contact:
-        return None
-    return _atoms_pdb(universe, [(int(contact[0]), _chain_id(0)),
-                                 (int(contact[1]), _chain_id(1))])
-
-
-def _chain_id(position: int) -> str:
-    """第 position 个基团的 PDB chain ID（A/B/C…，超过 26 组循环）。"""
-    return HIGHLIGHT_CHAINS[position % len(HIGHLIGHT_CHAINS)]
-
-
-def _group_pdb(universe: Any, group: Any, chain: str) -> str:
-    """该基团全部原子的 PDB 文本（组内顺序 = group.atoms 顺序）。"""
-    return _atoms_pdb(universe, [(int(atom.atom_global_idx), chain)
-                                 for atom in group.atoms])
-
-
-def _atoms_pdb(universe: Any, rows: Sequence[Tuple[int, str]]) -> str:
-    """(全局原子索引, chain) 序列 → PDB 文本（坐标取当前帧并回绕）。"""
-    positions = _wrapped_positions(universe, [index for index, _ in rows])
-    lines = [_atom_line(universe, serial, index, chain,
-                        positions[serial - 1])
-             for serial, (index, chain) in enumerate(rows, start=1)]
-    return "\n".join(lines + ["END"]) + "\n"
+def _pdb_truncate(value: int, digits: int) -> int:
+    """PDB 定宽整数列（取低 digits 位）。"""
+    return int(str(int(value))[-digits:])
 
 
 def _wrapped_positions(universe: Any,
@@ -198,15 +307,15 @@ def _wrapped_positions(universe: Any,
 
 
 def _atom_line(universe: Any, serial: int, global_index: int, chain: str,
-               xyz: Any) -> str:
+               xyz: Any, temp_factor: float = NO_TAG) -> str:
     """单条 ATOM 记录（原子名/残基名/resSeq 来自 Universe 的 auth 编号）。"""
     atom = universe.atoms[global_index]
     return PDB_ATOM_LINE.format(
-        serial=serial, name=_pdb_atom_name(str(atom.name)), altloc=" ",
-        resname=_pdb_resname(atom.resname), chain=chain,
+        serial=_pdb_serial(serial), name=_pdb_atom_name(str(atom.name)),
+        altloc=" ", resname=_pdb_resname(atom.resname), chain=chain,
         resseq=_pdb_resid(int(atom.resid)), icode=" ",
         x=float(xyz[0]), y=float(xyz[1]), z=float(xyz[2]),
-        occupancy=1.0, temp_factor=0.0, element=_atom_element(atom))
+        occupancy=1.0, temp_factor=temp_factor, element=_atom_element(atom))
 
 
 def _pdb_atom_name(name: str) -> str:
@@ -224,19 +333,6 @@ def _pdb_resname(resname: Any) -> str:
 def _atom_element(atom: Any) -> str:
     """PDB 元素列（Universe 未提供时留空，查看器按原子名推断）。"""
     return str(getattr(atom, "element", "") or "")[:2]
-
-
-def _write_pdb(universe: "mda.Universe") -> str:
-    """把 Universe 当前帧写成 PDB 文本（不写 CONECT，序列号按 PDB 上限回绕）。"""
-    buffer = io.StringIO()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        writer = mda.Writer(buffer, n_atoms=universe.atoms.n_atoms,
-                            format=PDB_FORMAT, reindex=True, bonds=None)
-        writer.write(universe)
-        text = buffer.getvalue()
-        writer.close()
-    return text
 
 
 def alignment_errors(universe: "mda.Universe", interaction: Any) -> List[str]:

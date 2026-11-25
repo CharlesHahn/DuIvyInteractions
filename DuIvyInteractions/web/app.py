@@ -7,14 +7,14 @@ import math
 import secrets
 import threading
 import time
-from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -29,9 +29,8 @@ from ..visualizers import (
     pair_summary, parse_datasource, string_stats, type_summary,
 )
 from ..visualizers.structure import (
-    FRAME_CACHE_SIZE, Highlight, alignment_errors, closest_contact,
-    contact_label, contact_pdb, frame_view as structure_frame_view, group_atoms,
-    group_label, highlights, involves_water, load_universe,
+    alignment_errors, frame_contact, frame_contacts, interaction_expressions,
+    load_universe, topology_pdb,
 )
 from .fsbrowse import (
     BYTES_PER_KB, H5_SUFFIX, LIST_LIMIT, SIZE_DECIMALS, confine,
@@ -58,11 +57,10 @@ TOO_MANY_FAILURES = "too many failed attempts"
 FORBIDDEN_HOST = "forbidden host"
 UNSUPPORTED_PATH = "unsupported path (expect a directory or .h5 file)"
 STRUCTURE_NOT_SELECTED = "structure not selected"
+STRUCTURE_PAIR_REQUIRED = "type and idx required"
 STRUCTURE_SUFFIXES = frozenset({
     ".tpr", ".xtc", ".trr", ".gro", ".pdb", ".dcd", ".nc", ".itp", ".psf",
     ".prmtop", ".parm7", ".mol2"})
-SOLVENT_FULL = "full"
-SOLVENT_HIDE = "hide"
 PICK_DIR = "dir"
 PICK_FILE = "file"
 DATASET_KIND = "dataset"
@@ -85,8 +83,6 @@ STRUCTURE_CSP = (
     "connect-src 'self'")
 _AUTH_FAILURES: Dict[str, List[float]] = {}
 _AUTH_LOCK = threading.Lock()
-_FRAME_CACHE: "OrderedDict[Tuple[Any, ...], Tuple[str, List[int]]]" = OrderedDict()
-_FRAME_LOCK = threading.Lock()
 
 
 def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
@@ -331,7 +327,9 @@ def _register_api(app: FastAPI, state: Dict[str, Any],
     _register_csv_api(app, state)
     _register_list_api(app, browse_mode, root)
     _register_pick_api(app, browse_mode)
-    _register_structure_api(app, state, root)
+    _register_structure_select(app, state, root)
+    _register_structure_export(app, state)
+    _register_structure_contacts(app, state)
 
 
 def _register_matrix_api(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -481,9 +479,9 @@ def _param(request: Request, body: bytes, key: str, default: str) -> str:
     return _form_value(body, key) or request.query_params.get(key, default)
 
 
-def _register_structure_api(app: FastAPI, state: Dict[str, Any],
-                            root: str) -> None:
-    """3D 结构接口：选择结构 + 逐帧 PDB/接触对。"""
+def _register_structure_select(app: FastAPI, state: Dict[str, Any],
+                               root: str) -> None:
+    """选择结构并记录拓扑/轨迹路径。"""
 
     @app.post("/api/structure/select", response_model=None)
     async def select_structure(request: Request) -> Response:
@@ -492,10 +490,34 @@ def _register_structure_api(app: FastAPI, state: Dict[str, Any],
             _select_structure, state, root,
             _form_value(body, "topology"), _form_value(body, "trajectory"))
 
-    @app.get("/api/structure/view", response_model=None)
-    def api_structure_view(type: str = "", idx: int = 0, frame: int = 0,
-                           solvent: str = SOLVENT_FULL) -> Response:
-        return _structure_view(state, type, idx, frame, solvent)
+
+def _register_structure_export(app: FastAPI, state: Dict[str, Any]) -> None:
+    """拓扑 PDB（该对原子打 B-factor 标记）与原始轨迹文件。"""
+
+    @app.get("/api/structure/topology", response_model=None)
+    def api_structure_topology(type: str = "",
+                               idx: Optional[int] = None) -> Response:
+        return _topology_response(state, type, idx)
+
+    @app.get("/api/structure/trajectory", response_model=None)
+    def api_structure_trajectory() -> Response:
+        structure = _structure_or_400(state)
+        return FileResponse(structure["trajectory"],
+                            media_type="application/octet-stream")
+
+
+def _register_structure_contacts(app: FastAPI, state: Dict[str, Any]) -> None:
+    """选择表达式与逐帧接触对。"""
+
+    @app.get("/api/structure/interactions", response_model=None)
+    def api_structure_interactions(type: str = "",
+                                   idx: int = 0) -> Response:
+        return _interactions_response(state, type, idx)
+
+    @app.get("/api/structure/contact", response_model=None)
+    def api_structure_contact(type: str = "", idx: int = 0,
+                              frame: int = 0) -> Response:
+        return _contact_response(state, type, idx, frame)
 
 
 def _select_structure(state: Dict[str, Any], root: str, topology: str,
@@ -527,157 +549,112 @@ def _structure_path(root: str, path: str) -> Path:
     return confine(root, path)
 
 
-def _structure_view(state: Dict[str, Any], name: str, idx: int, frame: int,
-                    solvent: str = SOLVENT_FULL) -> Response:
-    """单帧视图响应：PDB 文本 + existence + 最近接触原子对 + 溶剂模式。"""
+def _structure_or_400(state: Dict[str, Any]) -> Dict[str, Any]:
+    """已选择的结构状态（未选择 → 400）。"""
     structure = state.get("structure")
     if not structure:
-        return JSONResponse({"detail": STRUCTURE_NOT_SELECTED},
-                            status_code=400)
+        raise HTTPException(status_code=400, detail=STRUCTURE_NOT_SELECTED)
+    return structure
+
+
+def _locked_topology(structure: Dict[str, Any], interaction: Interaction,
+                     idx: int) -> str:
+    """加锁生成带该对 B-factor 标记的拓扑 PDB 文本。"""
+    with structure["lock"]:
+        return topology_pdb(structure["universe"], interaction, idx)
+
+
+def _locked_contacts(structure: Dict[str, Any], interaction: Interaction,
+                     idx: int) -> Optional[List]:
+    """加锁逐帧计算接触对（超过 CONTACT_FRAME_LIMIT 时为 None）。"""
+    with structure["lock"]:
+        return frame_contacts(interaction, idx, structure["universe"])
+
+
+def _locked_contact(structure: Dict[str, Any], interaction: Interaction,
+                    idx: int, frame: int) -> Optional[List[int]]:
+    """加锁计算单帧接触对。"""
+    with structure["lock"]:
+        return frame_contact(interaction, idx, structure["universe"], frame)
+
+
+def _alignment_failure(structure: Dict[str, Any],
+                       interaction: Interaction) -> Optional[JSONResponse]:
+    """h5 与结构不一致时的 400 响应（一致为 None）。"""
+    errors = alignment_errors(structure["universe"], interaction)
+    if not errors:
+        return None
+    return JSONResponse({"detail": errors[0], "errors": errors},
+                        status_code=400)
+
+
+def _topology_response(state: Dict[str, Any], name: str,
+                       idx: Optional[int]) -> Response:
+    """该对打标后的拓扑 PDB（type/idx 缺失 → 400）。"""
+    structure = _structure_or_400(state)
+    if not name or idx is None:
+        raise HTTPException(status_code=400, detail=STRUCTURE_PAIR_REQUIRED)
+    interaction = _pair_interaction(state, name, idx)
+    failure = _alignment_failure(structure, interaction)
+    if failure:
+        return failure
+    return Response(_locked_topology(structure, interaction, idx),
+                    media_type="chemical/x-pdb")
+
+
+def _interactions_response(state: Dict[str, Any], name: str,
+                           idx: int) -> Response:
+    """该对 payload（h5 与结构不一致 → 400 含 errors 列表）。"""
+    structure = _structure_or_400(state)
+    interaction = _pair_interaction(state, name, idx)
+    failure = _alignment_failure(structure, interaction)
+    if failure:
+        return failure
+    return JSONResponse(_interactions_payload(structure, interaction, idx))
+
+
+def _interactions_payload(structure: Dict[str, Any], interaction: Interaction,
+                          idx: int) -> Dict[str, Any]:
+    """该对的帧数/存在性/选择表达式/逐帧接触对/原子数。"""
+    return {
+        "n_frames": structure["n_frames"],
+        "existence": [int(value) for value in interaction.existence[idx]],
+        "residues": interaction_expressions(
+            interaction, idx, structure["universe"])["residues"],
+        "contacts": _locked_contacts(structure, interaction, idx),
+        "n_atoms": structure["n_atoms"],
+    }
+
+
+def _contact_response(state: Dict[str, Any], name: str, idx: int,
+                      frame: int) -> Response:
+    """单帧接触对（一致性/帧号校验；越界 → 400/404）。"""
+    structure = _structure_or_400(state)
+    interaction = _pair_interaction(state, name, idx)
+    failure = _alignment_failure(structure, interaction)
+    if failure:
+        return failure
+    _check_frame(structure, interaction, frame)
+    contact = _locked_contact(structure, interaction, idx, frame)
+    return JSONResponse({"contact": contact})
+
+
+def _pair_interaction(state: Dict[str, Any], name: str,
+                      idx: int) -> Interaction:
+    """当前数据源中该类型第 idx 对（类型未知/对号越界 → 404）。"""
     _, interaction = _find_interaction(_source(state)[1], name)
     if not 0 <= idx < interaction.n_pairs:
         raise HTTPException(status_code=404,
                             detail=f"pair index out of range: {idx}")
+    return interaction
+
+
+def _check_frame(structure: Dict[str, Any], interaction: Interaction,
+                 frame: int) -> None:
+    """帧号在该结构与 interaction 的帧数范围内（越界 → 404）。"""
     if not 0 <= frame < structure["n_frames"] or frame >= interaction.n_frames:
         raise HTTPException(status_code=404,
                             detail=f"frame out of range: {frame}")
-    errors = alignment_errors(structure["universe"], interaction)
-    if errors:
-        return JSONResponse({"detail": errors[0], "errors": errors},
-                            status_code=400)
-    water = involves_water(interaction, idx)
-    mode = _solvent_mode(solvent, water)
-    active = bool(interaction.existence[idx, frame])
-    contact, group_views, contact_view = _pair_geometry(
-        structure, interaction, idx, frame, active)
-    text, shown = _frame_text(structure, frame, mode,
-                              _pair_atoms(interaction, idx))
-    rows = _shown_row_map(shown, mode)
-    return JSONResponse({
-        "frame": frame, "n_frames": structure["n_frames"], "active": active,
-        "existence": [int(value) for value in interaction.existence[idx]],
-        "contact": _shown_contact(contact, rows),
-        "groups": _shown_groups(interaction, idx, rows,
-                                structure["universe"]),
-        "highlights": [{"label": view.label, "pdb": view.pdb}
-                       for view in group_views],
-        "contact_pdb": contact_view,
-        "pdb": text,
-        "involves_water": water,
-        "solvent": mode,
-        "n_atoms_total": structure["n_atoms"],
-        "n_atoms_shown": len(shown),
-        "contact_label": _pair_contact_label(interaction, idx, contact,
-                                             structure["universe"]),
-    })
-
-
-def _solvent_mode(solvent: str, water: bool) -> str:
-    """实际生效的溶剂模式：仅当请求 hide 且该对与水无关时才隐藏水。"""
-    return SOLVENT_HIDE if solvent == SOLVENT_HIDE and not water else SOLVENT_FULL
-
-
-def _pair_atoms(interaction: Interaction, idx: int) -> FrozenSet[int]:
-    """该对全部基团原子的全局索引（保证标注原子出现在输出中）。"""
-    return frozenset(atom for group in interaction.groups[idx]
-                     for atom in group.atom_indices)
-
-
-def _pair_contact_label(interaction: Interaction, idx: int,
-                        contact: Optional[Tuple[int, int]],
-                        universe: Any) -> str:
-    """接触对标签：全局索引先换成组内位置（多基团只看首末基团）。"""
-    if contact is None:
-        return contact_label(interaction, idx, None, universe)
-    groups = interaction.groups[idx]
-    return contact_label(interaction, idx, (
-        _group_position(groups[0], contact[0]),
-        _group_position(groups[-1], contact[1])), universe)
-
-
-def _group_position(group: Any, global_index: int) -> int:
-    """全局原子索引在基团 atoms 中的位置（缺失时为 -1）。"""
-    for position, atom in enumerate(group.atoms):
-        if atom.atom_global_idx == global_index:
-            return position
-    return -1
-
-
-def _shown_groups(interaction: Interaction, idx: int,
-                  rows: Optional[Dict[int, int]],
-                  universe: Any) -> List[Dict[str, Any]]:
-    """该对每个基团的标签与展示行号原子（编号取 universe，原子与 contact 同映射）。"""
-    return [{"label": group_label(interaction, group, universe),
-             "atoms": _shown_atoms(indices, rows)}
-            for group, indices in zip(interaction.groups[idx],
-                                      group_atoms(interaction, idx))]
-
-
-def _shown_row_map(shown: List[int], mode: str) -> Optional[Dict[int, int]]:
-    """hide 模式下全局原子索引 → 展示行号；full 模式索引即行号，返回 None。"""
-    if mode == SOLVENT_FULL:
-        return None
-    return {index: row for row, index in enumerate(shown)}
-
-
-def _shown_atoms(indices: List[int],
-                 rows: Optional[Dict[int, int]]) -> List[int]:
-    """全局原子索引 → 展示行号（rows 为 None 时恒等；展示中缺失的原子跳过）。"""
-    if rows is None:
-        return [int(index) for index in indices]
-    return [rows[int(index)] for index in indices if int(index) in rows]
-
-
-def _shown_contact(contact: Optional[Tuple[int, int]],
-                   rows: Optional[Dict[int, int]]) -> Optional[List[int]]:
-    """把全局索引接触对映射为 PDB 展示行号（rows 为 None 时索引即行号）。"""
-    if not contact:
-        return None
-    if rows is None:
-        return [int(contact[0]), int(contact[1])]
-    if not all(int(index) in rows for index in contact):
-        return None
-    return [rows[int(index)] for index in contact]
-
-
-def _frame_text(structure: Dict[str, Any], frame: int,
-                mode: str = SOLVENT_FULL,
-                keep_atoms: FrozenSet[int] = frozenset()
-                ) -> Tuple[str, List[int]]:
-    """单帧 PDB 文本与展示索引（LRU 缓存，键含拓扑/轨迹/帧/溶剂模式）。"""
-    key = (structure["topology"], structure["trajectory"], frame, mode)
-    if mode == SOLVENT_HIDE:
-        key += (keep_atoms,)
-    with _FRAME_LOCK:
-        cached = _FRAME_CACHE.get(key)
-        if cached is not None:
-            _FRAME_CACHE.move_to_end(key)
-            return cached
-    with structure["lock"]:
-        text, shown = structure_frame_view(structure["universe"], frame,
-                                           hide_water=mode == SOLVENT_HIDE,
-                                           keep_atoms=keep_atoms)
-    with _FRAME_LOCK:
-        _FRAME_CACHE[key] = (text, shown)
-        _FRAME_CACHE.move_to_end(key)
-        while len(_FRAME_CACHE) > FRAME_CACHE_SIZE:
-            _FRAME_CACHE.popitem(last=False)
-    return text, shown
-
-
-def _pair_geometry(structure: Dict[str, Any], interaction: Interaction, idx: int,
-                   frame: int, active: bool
-                   ) -> Tuple[Optional[Tuple[int, int]], List[Highlight],
-                              Optional[str]]:
-    """同一帧内取最近接触对、各基团小结构与接触对小结构（只设置一次帧）。"""
-    groups = interaction.groups[idx]
-    universe = structure["universe"]
-    with structure["lock"]:
-        universe.trajectory[frame]
-        contact = (closest_contact(universe, groups[0].atom_indices,
-                                   groups[-1].atom_indices) if active else None)
-        return (contact, highlights(interaction, idx, universe),
-                contact_pdb(universe, contact))
 
 
 SORT_FIELDS = ("occupancy", "label", "index")
