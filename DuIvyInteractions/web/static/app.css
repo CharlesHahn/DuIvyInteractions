@@ -1195,3 +1195,13 @@ tr.clickable { cursor: pointer; }
 /* 左区收起（regionState.left = "collapsed"，来自 collapseLeftPanel）只保留
    32px 图标条：图标按钮与内容区都由 Mol* 自带样式控制，这里只加固左区宽度 */
 .structure-viewer .msp-layout-collapse-left .msp-layout-left { width: 32px; }
+
+/* 图例里的"判定为相互作用组"的原子名：纯文字，无任何 3D 视觉叠加 */
+.structure-group-atoms {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 标签与原子名两段文本按基线对齐（原规则是 center） */
+.structure-group-item { align-items: baseline; }

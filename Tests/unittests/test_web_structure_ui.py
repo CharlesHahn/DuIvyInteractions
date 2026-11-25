@@ -465,7 +465,7 @@ class TestNativeTrajectoryScript:
         assert "setPointerCapture" in down
 
     def test_group_legend_is_plain_text_list(self):
-        """图例不再有颜色含义：只列两个残基标签，无色点/组色说明。"""
+        """图例不再有颜色含义：残基标签 + 原子名两段纯文字，无色点/组色说明。"""
         text = _structure_js()
         assert "structure-group-note" not in text
         assert "structure-group-dot" not in text
@@ -476,6 +476,30 @@ class TestNativeTrajectoryScript:
         assert "GROUP_LABEL_CLASS" in item
         assert "dot" not in item
         assert "backgroundColor" not in item
+
+    def test_legend_lists_defined_group_atom_names(self):
+        """图例第二段列出"判定为相互作用组"的原子名（纯文字，无 3D 叠加）。"""
+        text = _structure_js()
+        item = _function_body(text, "legendItem")
+        assert "structure-group-atoms" in item
+        assert "atoms" in item
+        assert "LEGEND_ATOM_LIMIT" in item
+        assert "title" in item
+        assert "legendAtomNames(" in item and "legendAtomsText(" in item
+        assert "LEGEND_ATOM_LIMIT = 12" in text
+        names = _function_body(text, "legendAtomNames")
+        assert 'names.push(String(atoms[i].name))' in names
+        assert "sort" not in names
+        limit = _function_body(text, "legendAtomsText")
+        assert "names.slice(0, limit)" in limit
+        assert '" … (+"' in limit
+        assert "names.join(\", \")" in limit
+
+    def test_no_3d_overlay_techniques(self):
+        """3D 里不加 overpaint/emissive/3D label 等额外视觉层。"""
+        text = _structure_js()
+        for token in ("overpaint", "emissive", "label-3d"):
+            assert token not in text.lower(), token
 
     def test_frontend_scripts_avoid_innerhtml(self):
         for path in (STRUCTURE_JS, FILEPICK_JS):
@@ -589,6 +613,8 @@ class TestGroupLegendAndCss:
         assert ".structure-group-item" in text
         assert ".structure-group-dot" not in text
         assert ".structure-group-note" not in text
+        assert ".structure-group-atoms" in text
+        assert "font-family: var(--mono)" in text
         assert ".structure-existence span.active" in text
         assert "cursor: grab" in text
         assert "touch-action: none" in text

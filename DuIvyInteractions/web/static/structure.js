@@ -64,6 +64,7 @@
   var TAG_CONTACT_A = "dii-contact-a";
   var TAG_CONTACT_B = "dii-contact-b";
 
+  var LEGEND_ATOM_LIMIT = 12;      /* 图例里最多列出的原子名个数，其余用 (+N) */
   var GROUP_ITEM_CLASS = "structure-group-item";
   var GROUP_LABEL_CLASS = "structure-group-label";
   var STATUS_CLASS = "structure-status";
@@ -684,16 +685,39 @@
     }
   }
 
-  /* 图例只列两个残基的标签（不再有颜色含义，故不含色点） */
+  /* 图例：残基标签 + 判定为相互作用组的原子名（纯文字，3D 里不做任何叠加） */
   function legendItem(residue, index) {
     var item = document.createElement("span");
     item.className = GROUP_ITEM_CLASS;
+    var names = legendAtomNames(residue);
     var label = document.createElement("span");
     label.className = GROUP_LABEL_CLASS;
     label.textContent = residue && residue.label
       ? residue.label : "group " + (index + 1);
+    var atoms = document.createElement("span");
+    atoms.className = "structure-group-atoms";
+    atoms.textContent = legendAtomsText(names, LEGEND_ATOM_LIMIT);
+    item.title = names.join(", ");
     item.appendChild(label);
+    item.appendChild(atoms);
     return item;
+  }
+
+  /* 原子名顺序沿用后端（= h5 group.atoms 顺序），不排序 */
+  function legendAtomNames(residue) {
+    var atoms = residue && residue.atoms ? residue.atoms : [];
+    var names = [];
+    for (var i = 0; i < atoms.length; i++) {
+      if (atoms[i] && atoms[i].name) names.push(String(atoms[i].name));
+    }
+    return names;
+  }
+
+  function legendAtomsText(names, limit) {
+    if (!names.length) return "";
+    if (!limit || names.length <= limit) return names.join(", ");
+    return names.slice(0, limit).join(", ") +
+      " … (+" + (names.length - limit) + ")";
   }
 
   /* ---------------- 相机（只在首次载入后聚焦一次） ---------------- */
