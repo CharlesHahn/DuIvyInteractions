@@ -1174,21 +1174,7 @@ tr.clickable { cursor: pointer; }
   font-family: var(--mono);
 }
 
-.structure-group-dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
 .structure-group-label { white-space: nowrap; }
-
-/* 图例末尾说明：组色对应 3D 里更粗的同色基团原子棍棒（structure.js 末尾追加） */
-.structure-group-note {
-  color: var(--muted);
-  font-size: 12px;
-}
 
 /* 相互作用向量条兼作进度条：可拖动/点选/键盘换帧（structure.js 末尾追加） */
 .structure-existence {

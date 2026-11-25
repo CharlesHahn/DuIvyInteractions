@@ -334,13 +334,37 @@ class TestNativeTrajectoryScript:
     def test_script_uses_expression_loci_and_sticks(self):
         text = _structure_js()
         for token in ("fromExpression", "ball-and-stick", "sizeFactor",
-                      "sizeAspectRatio", "GROUP_COLORS",
-                      "tryCreateComponentStatic", "addRepresentation"):
+                      "sizeAspectRatio", "tryCreateComponentStatic",
+                      "addRepresentation"):
             assert token in text, token
-        assert "STICK_SIZE = 0.16" in text
-        assert "GROUP_STICK_SIZE = 0.18" in text
+        assert "RESIDUE_STICK_SIZE = 0.22" in text
         assert "STICK_ASPECT = 1.0" in text
         assert "LIGAND_SIZE = 0.28" in text
+
+    def test_residue_layer_is_single_element_colored_sticks(self):
+        """相互作用残基只有一层棍棒、用 Mol* 默认 element 配色（无第二层/统一色）。"""
+        text = _structure_js()
+        residue = _function_body(text, "buildResidueLayer")
+        assert "residueLayerExpression(residue)" in residue
+        assert "stickParams(RESIDUE_STICK_SIZE)" in residue
+        assert "buildLayer(" in residue
+        assert "and not (" not in residue
+        assert "color" not in residue
+        params = _function_body(text, "stickParams")
+        assert "type: STICK_TYPE" in params
+        assert "sizeFactor" in params and "sizeAspectRatio" in params
+        assert "color" not in params and "colorParams" not in params
+        for token in ("GROUP_COLORS", "GROUP_STICK_SIZE", "STICK_COLOR",
+                      "hexToInt", "buildResidueRest", "groupUnionExpression",
+                      "uniform", "colorParams"):
+            assert token not in text, token
+
+    def test_water_residue_layer_uses_atom_expression(self):
+        text = _structure_js()
+        helper = _function_body(text, "residueLayerExpression")
+        assert "isWaterResidue(residue)" in helper
+        assert "residue.expression" in helper
+        assert "residueSelector(residue)" in helper
 
     def test_mixed_layers_exclude_interaction_residues(self):
         """主干层不叠加：骨架/配体层都排除相互作用残基（它们改用棍棒显示）。"""
@@ -353,25 +377,14 @@ class TestNativeTrajectoryScript:
         assert "and not (" in lig
         assert "residueSelectorUnion(residues)" in lig
 
-    def test_residue_sticks_are_complementary_partitions(self):
-        """相互作用残基拆成互补两块：其余原子（灰）+ 定义基团原子（组色）。"""
+    def test_residue_selector_is_used_for_exclusion_lists(self):
+        """骨架/配体层的排除列表仍来自 residue_selector（Cartoon 分区不变）。"""
         text = _structure_js()
-        residue = _function_body(text, "buildResidueLayer")
-        assert "groupUnionExpression(residue)" in residue
-        assert "buildResidueRest(" in residue
-        assert "TAG_RESIDUE_ATOMS" in residue
-        rest = _function_body(text, "buildResidueRest")
-        assert "residueSelector(residue)" in rest
-        assert '") and not ("' in rest
-        assert "TAG_RESIDUE_REST" in rest
-        assert "STICK_COLOR" in rest
+        union = _function_body(text, "residueSelectorUnion")
+        assert '" or "' in union
+        assert "isWaterResidue(" in union
         selector = _function_body(text, "residueSelector")
         assert "residue_selector" in selector
-        union = _function_body(text, "residueSelectorUnion")
-        assert '") or ("' not in union
-        assert '" or "' in union
-        assert "STICK_SIZE = 0.16" in text and "GROUP_STICK_SIZE = 0.18" in text
-        assert "组色 = 定义基团原子；灰色 = 同残基其余原子" in text
 
     def test_script_uses_backend_expression_payload(self):
         text = _structure_js()
@@ -380,7 +393,6 @@ class TestNativeTrajectoryScript:
                       "/api/structure/trajectory", "existence"):
             assert token in text, token
         assert "groupAtomExpression" in text
-        assert "groupUnionExpression" in text
         assert "EXPRESSION_LANGUAGE = \"pymol\"" in text
 
     def test_topology_request_carries_type_and_idx(self):
@@ -394,23 +406,22 @@ class TestNativeTrajectoryScript:
         """表达式原样交给 Mol* 解析：脚本里不得出现按空格/关键字改写表达式的代码。"""
         text = _structure_js()
         assert 'params: { language: EXPRESSION_LANGUAGE, expression: expression }' in text
-        assert "groupUnionExpression(residue)" in _function_body(
+        assert "residueLayerExpression(residue)" in _function_body(
             text, "buildResidueLayer")
-        assert '") and not ("' in _function_body(text, "buildResidueRest")
         assert "residueSelector(residue)" in _function_body(
-            text, "buildResidueRest")
+            text, "residueLayerExpression")
         assert "POLYMER_EXPRESSION" in _function_body(text, "polymerExpression")
         for token in ("split(\" and", "replace(/chain", "parseExpression",
                       "resi \""):
             assert token not in text, token
 
-    def test_water_residues_skip_rest_partition(self):
-        """水残基选择器不唯一（resSeq 截断）：跳过"其余原子"层与排除列表。"""
+    def test_water_residues_avoid_ambiguous_selectors(self):
+        """水残基选择器不唯一（resSeq 截断）：残基层改用它自己的原子表达式。"""
         text = _structure_js()
         assert "is_water" in text
         helper = _function_body(text, "isWaterResidue")
         assert "is_water" in helper
-        assert "isWaterResidue(" in _function_body(text, "buildResidueRest")
+        assert "isWaterResidue(" in _function_body(text, "residueLayerExpression")
         assert "isWaterResidue(" in _function_body(text, "residueSelectorUnion")
 
     def test_script_polls_native_trajectory_controls(self):
@@ -453,13 +464,18 @@ class TestNativeTrajectoryScript:
         assert "requestFrame(frameFromPointer(event))" in down
         assert "setPointerCapture" in down
 
-    def test_group_legend_note_is_rendered(self):
+    def test_group_legend_is_plain_text_list(self):
+        """图例不再有颜色含义：只列两个残基标签，无色点/组色说明。"""
         text = _structure_js()
-        assert "structure-group-note" in text
-        assert "组色 = 定义基团原子" in text
+        assert "structure-group-note" not in text
+        assert "structure-group-dot" not in text
         body = _function_body(text, "renderLegend")
         assert "legendItem(" in body
-        assert "legendNote()" in body
+        assert "legendNote" not in body
+        item = _function_body(text, "legendItem")
+        assert "GROUP_LABEL_CLASS" in item
+        assert "dot" not in item
+        assert "backgroundColor" not in item
 
     def test_frontend_scripts_avoid_innerhtml(self):
         for path in (STRUCTURE_JS, FILEPICK_JS):
@@ -561,23 +577,18 @@ class TestGroupLegendAndCss:
         status_at = html.index('id="structureStatus"')
         assert legend_at < status_at
 
-    def test_structure_script_group_palette_is_npg(self):
+    def test_structure_script_has_no_group_palette(self):
         text = _structure_js()
-        match = re.search(r"GROUP_COLORS\s*=\s*\[([^\]]*)\]", text)
-        assert match, "missing GROUP_COLORS array"
-        assert re.findall(r"#[0-9a-fA-F]{6}", match.group(1)) == [
-            "#e64b35", "#3c5488", "#00a087", "#4dbbd5"]
-
-    def test_structure_script_residue_stick_color(self):
-        text = _structure_js()
-        assert 'STICK_COLOR = "#8491b4"' in text
+        for token in ("GROUP_COLORS", "GROUP_COLOR_NOTE", "hexToInt"):
+            assert token not in text, token
+        assert not re.findall(r"#[0-9a-fA-F]{6}", text)
 
     def test_css_has_group_legend_rules(self):
         text = APP_CSS.read_text(encoding="utf-8")
         assert ".structure-groups" in text
-        assert ".structure-group-dot" in text
-        assert "width: 8px" in text
-        assert ".structure-group-note" in text
+        assert ".structure-group-item" in text
+        assert ".structure-group-dot" not in text
+        assert ".structure-group-note" not in text
         assert ".structure-existence span.active" in text
         assert "cursor: grab" in text
         assert "touch-action: none" in text

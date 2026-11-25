@@ -44,23 +44,21 @@
   var STATIC_ION = "ion";
   var STICK_TYPE = "ball-and-stick";
   var CARTOON_TYPE = "cartoon";
-  var UNIFORM_THEME = "uniform";
 
-  var STICK_COLOR = "#8491b4";      /* 残基其余原子：中性灰蓝棍棒 */
-  var STICK_SIZE = 0.16;            /* 残基其余原子棍棒半径 */
-  var GROUP_STICK_SIZE = 0.18;      /* 定义基团原子：同层棍棒，略粗 */
+  /* 相互作用残基只有一层棍棒：sizeFactor 与 Mol* 原生 click-focus 目标残基
+     的 ball-and-stick（sizeFactor:.22 / sizeAspectRatio:.73）取同量级，
+     颜色不指定 → 用 ball-and-stick 的默认主题 element-symbol（元素配色） */
+  var RESIDUE_STICK_SIZE = 0.22;
   var STICK_ASPECT = 1.0;           /* 1.0 = 棍棒（无球） */
   var LIGAND_SIZE = 0.28;           /* 配体/离子球棍 */
   var DASH_LENGTH = 0.12;
   var LINE_SIZE = 0.06;
-  var GROUP_COLORS = ["#e64b35", "#3c5488", "#00a087", "#4dbbd5"];
   var DEBOUNCE_MS = 60;             /* 滑块拖动到换帧的防抖 */
   var FRAME_POLL_MS = 150;          /* 轮询 Mol* 原生轨迹控件的当前帧 */
 
   var TAG_POLYMER = "dii-polymer";
   var TAG_LIGAND = "dii-ligand";
-  var TAG_RESIDUE_REST = "dii-rest-";
-  var TAG_RESIDUE_ATOMS = "dii-atoms-";
+  var TAG_RESIDUE = "dii-residue-";
   var TAG_FOCUS = "dii-focus";
   var TAG_FOCUS_ITEM = "dii-focus-";
   var TAG_CONTACT_A = "dii-contact-a";
@@ -68,9 +66,6 @@
 
   var GROUP_ITEM_CLASS = "structure-group-item";
   var GROUP_LABEL_CLASS = "structure-group-label";
-  var GROUP_DOT_CLASS = "structure-group-dot";
-  var GROUP_NOTE_CLASS = "structure-group-note";
-  var GROUP_COLOR_NOTE = "组色 = 定义基团原子；灰色 = 同残基其余原子";
   var STATUS_CLASS = "structure-status";
   var STATUS_ERROR_CLASS = "structure-status error";
   var BROWSE_TARGET_ATTR = "data-target";
@@ -129,10 +124,6 @@
   function noteFailure(label, error) {
     failures += 1;
     console.warn("[dii] " + label, error);
-  }
-
-  function hexToInt(hex) {
-    return parseInt(String(hex).replace("#", ""), 16);
   }
 
   function readJson(response) {
@@ -538,15 +529,15 @@
     });
   }
 
-  function stickParams(sizeFactor, colorHex) {
+  /* 不传任何颜色参数：ball-and-stick 的 defaultColorTheme 是 element-symbol，
+     天然与 Mol* 原生棍棒（点击聚焦后那层）颜色一致 */
+  function stickParams(sizeFactor) {
     return {
       type: STICK_TYPE,
       typeParams: {
         sizeFactor: sizeFactor,
         sizeAspectRatio: STICK_ASPECT
-      },
-      color: UNIFORM_THEME,
-      colorParams: { value: hexToInt(colorHex) }
+      }
     };
   }
 
@@ -597,28 +588,25 @@
     };
   }
 
-  /* 同一残基的两块互不重叠棍棒：其余原子（灰）+ 定义基团原子（组色） */
+  /* 相互作用残基：整残基一层棍棒，元素配色（没有第二层、没有统一色） */
   function buildResidueLayer(residue, index) {
-    var atoms = groupUnionExpression(residue);
-    if (!atoms) return Promise.resolve(null);
-    var color = GROUP_COLORS[index % GROUP_COLORS.length];
+    var expression = residueLayerExpression(residue);
+    if (!expression) return Promise.resolve(null);
     var label = residue.label || "group " + (index + 1);
-    return buildResidueRest(residue, index, atoms, label).then(function () {
-      return buildLayer(atoms, TAG_RESIDUE_ATOMS + index, label + " atoms",
-        stickParams(GROUP_STICK_SIZE, color));
-    });
+    return buildLayer(expression, TAG_RESIDUE + index, label,
+      stickParams(RESIDUE_STICK_SIZE));
   }
 
-  function buildResidueRest(residue, index, atoms, label) {
-    if (isWaterResidue(residue)) return Promise.resolve(null);
-    var selector = residueSelector(residue);
-    if (!selector) return Promise.resolve(null);
-    var rest = "(" + selector + ") and not (" + atoms + ")";
-    return buildLayer(rest, TAG_RESIDUE_REST + index, label + " rest",
-      stickParams(STICK_SIZE, STICK_COLOR));
+  /* 水残基的 residue_selector 不唯一（resSeq 4 列截断），改用精确的原子并集 */
+  function residueLayerExpression(residue) {
+    if (isWaterResidue(residue)) {
+      return residue && residue.expression
+        ? String(residue.expression) : null;
+    }
+    return residueSelector(residue);
   }
 
-  /* 残基级选择器（后端 residue_selector），缺失时只画组内原子，不猜几何 */
+  /* 残基级选择器（后端 residue_selector）；缺失时该残基不建表示（不猜几何） */
   function residueSelector(residue) {
     return residue && residue.residue_selector
       ? String(residue.residue_selector) : null;
@@ -636,17 +624,6 @@
       if (isWaterResidue(residues[i])) continue;
       var selector = residueSelector(residues[i]);
       if (selector) parts.push("(" + selector + ")");
-    }
-    return parts.length ? parts.join(" or ") : null;
-  }
-
-  function groupUnionExpression(residue) {
-    var atoms = residue && residue.atoms ? residue.atoms : [];
-    var parts = [];
-    for (var i = 0; i < atoms.length; i++) {
-      if (atoms[i] && atoms[i].expression) {
-        parts.push("(" + atoms[i].expression + ")");
-      }
     }
     return parts.length ? parts.join(" or ") : null;
   }
@@ -705,29 +682,18 @@
     for (var i = 0; i < residues.length; i++) {
       groupLegendEl.appendChild(legendItem(residues[i], i));
     }
-    if (residues.length) groupLegendEl.appendChild(legendNote());
   }
 
+  /* 图例只列两个残基的标签（不再有颜色含义，故不含色点） */
   function legendItem(residue, index) {
     var item = document.createElement("span");
     item.className = GROUP_ITEM_CLASS;
-    var dot = document.createElement("span");
-    dot.className = GROUP_DOT_CLASS;
-    dot.style.backgroundColor = GROUP_COLORS[index % GROUP_COLORS.length];
     var label = document.createElement("span");
     label.className = GROUP_LABEL_CLASS;
     label.textContent = residue && residue.label
       ? residue.label : "group " + (index + 1);
-    item.appendChild(dot);
     item.appendChild(label);
     return item;
-  }
-
-  function legendNote() {
-    var note = document.createElement("span");
-    note.className = GROUP_NOTE_CLASS;
-    note.textContent = GROUP_COLOR_NOTE;
-    return note;
   }
 
   /* ---------------- 相机（只在首次载入后聚焦一次） ---------------- */
