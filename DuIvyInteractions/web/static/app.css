@@ -902,3 +902,305 @@ tr.clickable { cursor: pointer; }
 }
 
 .pt-legend-item { display: inline-flex; align-items: center; }
+
+/* ---------- 3D 结构视图 ---------- */
+.structure-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.structure-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 240px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.structure-field input {
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: 12.5px var(--mono);
+}
+.structure-field input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.structure-viewer {
+  position: relative;
+  width: 100%;
+  height: 560px;
+  margin-top: 4px;
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.structure-viewer > div { width: 100%; height: 100%; }
+.structure-frame-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.structure-frame-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.structure-frame-label { min-width: 120px; font-size: 12px; }
+.structure-existence {
+  height: 18px;
+  gap: 1px;
+  margin-top: 8px;
+  align-items: stretch;
+}
+.structure-existence span {
+  max-width: none;
+  min-height: 0;
+  border-radius: 1px;
+  background: var(--border);
+}
+.structure-existence span.on { background: var(--chart-primary); }
+.structure-existence span.current { outline: 2px solid var(--accent); outline-offset: 0; }
+.structure-status {
+  min-height: 18px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.structure-status.error { color: var(--danger); }
+
+/* ---------- 3D 结构视图工具栏（水/序列开关） ---------- */
+.structure-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+.structure-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.structure-toggle input { accent-color: var(--accent); }
+/* Mol* 布局 API 不可用时的序列区兜底隐藏 */
+.structure-viewer--no-sequence .msp-layout-top { display: none !important; }
+.structure-viewer--no-sequence .msp-layout-main { top: 0 !important; }
+
+/* ---------- 结构文件选择弹窗（filepick.js；picker 模式不渲染） ---------- */
+
+.filepick-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .42);
+}
+
+.filepick-panel {
+  display: flex;
+  flex-direction: column;
+  width: 720px;
+  max-width: 100%;
+  max-height: 78vh;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.filepick-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.filepick-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.filepick-close { padding: 4px 8px; font-size: 13px; line-height: 1; }
+
+.filepick-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 12px 16px;
+}
+
+.filepick-path-row { display: flex; align-items: center; gap: 8px; }
+
+.filepick-up, .filepick-go { flex: none; }
+
+.filepick-path-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: 12px var(--mono);
+}
+.filepick-path-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.filepick-current {
+  margin: 0;
+  min-height: 15px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.filepick-error {
+  padding: 7px 11px;
+  border: 1px solid #fecdca;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.filepick-note { margin: 0; font-size: 11.5px; color: var(--muted); }
+
+.filepick-list {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  scrollbar-width: thin;
+}
+
+.filepick-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 1px solid #f1f2f5;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.filepick-row:last-child { border-bottom: none; }
+.filepick-row:hover { background: #eef0f4; color: var(--text); }
+.filepick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.filepick-icon {
+  flex: none;
+  width: 14px;
+  color: var(--muted);
+  font-family: var(--mono);
+  text-align: center;
+}
+
+.filepick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.filepick-size {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.filepick-message {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.filepick-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 11px 16px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 640px) {
+  .filepick-modal { padding: 10px; }
+  .filepick-panel { max-height: 88vh; }
+}
+
+/* 未展开布局：viewer 容器自行容纳左侧 Controls/Components 面板与序列区 */
+.structure-viewer {
+  height: 620px;
+  position: relative;
+}
+
+/* 相互作用两端基团图例：色点对应 3D 里的球棍表示（structure.js 用 DOM API 填充） */
+.structure-groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.structure-groups:empty { display: none; }
+
+.structure-group-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+}
+
+.structure-group-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.structure-group-label { white-space: nowrap; }

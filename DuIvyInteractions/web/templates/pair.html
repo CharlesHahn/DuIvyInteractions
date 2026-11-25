@@ -8,6 +8,7 @@
     <p class="muted">pair {{ idx + 1 }} / {{ n_pairs }} · {{ n_frames }} frames{% if flags %} · flags: {{ flags | join(", ") }}{% endif %}</p>
   </div>
   <div class="actions">
+    <a class="btn btn-sm" href="/structure/{{ type | urlencode }}/{{ idx }}">3D view</a>
     {% if idx > 0 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx - 1 }}">‹ previous pair</a>{% endif %}
     {% if idx < n_pairs - 1 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx + 1 }}">next pair ›</a>{% endif %}
   </div>
