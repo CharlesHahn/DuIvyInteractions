@@ -26,7 +26,7 @@ from ..visualizers import (
     add_recent, aggregate_table, cell_values, export_table, fig_pair,
     frame_activity, frame_view, get_exporter, interaction_meta, load_recent,
     matrix_view, metric_stats, overview, pair_drilldown, pair_frames,
-    pair_summary, parse_datasource, string_stats, type_summary,
+    pair_summary, pair_types, parse_datasource, string_stats, type_summary,
 )
 from ..visualizers.structure import (
     alignment_errors, frame_contact, frame_contacts, interaction_expressions,
@@ -619,6 +619,7 @@ def _interactions_payload(structure: Dict[str, Any], interaction: Interaction,
     return {
         "n_frames": structure["n_frames"],
         "existence": [int(value) for value in interaction.existence[idx]],
+        "pt_types": pair_types(interaction, idx),
         "residues": interaction_expressions(
             interaction, idx, structure["universe"])["residues"],
         "contacts": _locked_contacts(structure, interaction, idx),
@@ -856,6 +857,7 @@ def _render_structure(request: Request, state: Dict[str, Any], name: str,
         "pair_label": get_exporter(interaction).get_pair_label(interaction,
                                                               idx),
         "existence": [int(value) for value in interaction.existence[idx]],
+        "pt_types": pair_types(interaction, idx),
         "topology": structure["topology"] if structure else "",
         "trajectory": structure["trajectory"] if structure else "",
         "n_atoms": structure["n_atoms"] if structure else 0,

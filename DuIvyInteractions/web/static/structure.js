@@ -145,6 +145,13 @@
     return cfg.existence || [];
   }
 
+  function typeValues() {
+    var types = data && data.pt_types ? data.pt_types : (cfg.pt_types || []);
+    var values = existenceValues();
+    if (values.length && types.length !== values.length) return [];
+    return types;
+  }
+
   function frameLimit() {
     var total = data && typeof data.n_frames === "number"
       ? data.n_frames : (cfg.n_frames || 0);
@@ -174,24 +181,33 @@
   function highlightFrame(value) {
     if (!existenceBar) return;
     var values = existenceValues();
+    var types = typeValues();
     var bars = existenceBar.children;
     for (var i = 0; i < bars.length; i++) {
-      bars[i].className = (values[i] ? "on" : "") +
+      var active = !!values[i];
+      var name = active ? types[i] : "";
+      bars[i].className = (active ? "on" : "") +
+        (name ? " pt-" + String(name).toLowerCase() : "") +
         (i === value ? " active" : "");
     }
     existenceBar.setAttribute("aria-valuenow", String(value));
   }
 
-  function renderExistence(values) {
+  function renderExistence(values, types) {
     if (!existenceBar || !values || !values.length) return;
+    if (types && types.length !== values.length) types = [];
     while (existenceBar.firstChild) {
       existenceBar.removeChild(existenceBar.firstChild);
     }
     for (var i = 0; i < values.length; i++) {
       var bar = document.createElement("span");
-      bar.className = values[i] ? "on" : "";
+      var active = !!values[i];
+      var name = active && types ? types[i] : "";
+      bar.className = (active ? "on" : "") +
+        (name ? " pt-" + String(name).toLowerCase() : "");
       bar.title = "frame " + i + ": " +
-        (values[i] ? "active" : "inactive");
+        (active ? "active" : "inactive") +
+        (name ? " (" + name + ")" : "");
       existenceBar.appendChild(bar);
     }
   }
@@ -247,7 +263,7 @@
   function fetchInteractions() {
     return fetch(interactionUrl()).then(readJson).then(function (payload) {
       data = payload || null;
-      renderExistence(data && data.existence);
+      renderExistence(data && data.existence, data && data.pt_types);
       updateFrameRange();
       renderLegend(data && data.residues ? data.residues : []);
       return data;

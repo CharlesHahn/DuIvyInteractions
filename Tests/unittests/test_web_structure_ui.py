@@ -172,15 +172,6 @@ class TestStructurePageDom:
         assert "http://" not in html
         assert "https://" not in html
 
-    def test_page_has_residue_number_hint(self, client):
-        html = _page(client)
-        assert "标签编号同时给出 h5 表格编号与 PDB auth 编号" in html
-        assert "TYR50 (PDB 51)" in html
-
-    def test_page_states_water_is_not_shown(self, client):
-        html = _page(client)
-        assert "水分子不显示" in html
-
 
 # ============================================================
 # 服务端文件弹窗（picker / server 两种模式）
@@ -440,12 +431,13 @@ class TestNativeTrajectoryScript:
 
     def test_existence_bar_and_slider_are_driven_by_payload(self):
         text = _structure_js()
-        assert "function renderExistence(" in text
-        assert "function highlightFrame(" in text
-        assert "function updateFrameRange(" in text
-        assert 'className = values[i] ? "on" : ""' in text
-        assert 'aria-valuenow' in text
-        assert '" active"' in text
+        for name in ("renderExistence", "highlightFrame", "updateFrameRange"):
+            assert "function %s(" % name in text
+        body = _function_body(text, "highlightFrame")
+        assert "typeValues()" in body
+        assert '" pt-" + String(name).toLowerCase()' in body
+        assert '" active"' in body
+        assert "aria-valuenow" in text
 
     def test_existence_bar_handles_pointer_and_keyboard(self):
         """向量条即进度条：指针拖动/点选 + 方向键/Home/End 换帧。"""

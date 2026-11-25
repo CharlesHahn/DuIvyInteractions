@@ -926,8 +926,9 @@ class TestInteractionsRoute:
         response = self._payload(numbered_client, numbered_pdb)
         assert response.status_code == 200
         data = response.json()
-        assert set(data) == {"n_frames", "existence", "residues",
+        assert set(data) == {"n_frames", "existence", "pt_types", "residues",
                              "contacts", "n_atoms"}
+        assert data["pt_types"] == []
         assert data["n_frames"] == 1
         assert data["existence"] == [1]
         assert data["n_atoms"] == len(NUMBERED_ATOMS)

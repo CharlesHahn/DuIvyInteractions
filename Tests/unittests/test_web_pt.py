@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Web 可视化 π-堆积 P/T 类型分色与 meta 悬停的单元测试（合成数据，不依赖轨迹）。"""
 
+import json
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -10,7 +12,8 @@ from fastapi.testclient import TestClient
 
 from DuIvyInteractions.core.datas import AtomData, Group, Interaction
 from DuIvyInteractions.io.h5 import save_interactions
-from DuIvyInteractions.visualizers import fig_pair, matrix_view, pair_drilldown
+from DuIvyInteractions.visualizers import (
+    fig_pair, matrix_view, pair_drilldown, pair_types)
 from DuIvyInteractions.visualizers import figures
 from DuIvyInteractions.visualizers.data import MAX_SERIES_POINTS, PT_METRIC, PT_TYPES
 from DuIvyInteractions.visualizers.figures import PT_COLORS, TYPE_RANGE
@@ -22,6 +25,7 @@ PT_EXISTENCE = [[1, 1, 1, 1, 1, 0], [1, 0, 1, 1, 0, 1]]
 PT_VALUES = [["P", "P", "T", "T", "N", "N"], ["N", "N", "P", "P", "T", "T"]]
 TEMPLATE = Path(figures.__file__).parent.parent / "web" / "templates" / "type.html"
 MATRIX_JS = Path(figures.__file__).parent.parent / "web" / "static" / "matrix.js"
+APP_CSS = Path(figures.__file__).parent.parent / "web" / "static" / "app.css"
 NPG_PALETTE = frozenset({
     "#e64b35", "#4dbbd5", "#00a087", "#3c5488", "#f39b7f",
     "#8491b4", "#91d1c2", "#dc0000", "#7e6148"})  # ggsci scale_color_npg 9 色
@@ -154,6 +158,39 @@ def pt_only_client(tmp_path) -> TestClient:
                             follow_redirects=False)
     assert resp.status_code == 303
     return test_client
+
+
+class TestStructurePtBar:
+    """3D 结构页的 π-堆积类型向量条。"""
+
+    def test_pair_types_returns_raw_frames(self, pi_interaction):
+        assert pair_types(pi_interaction, 0) == PT_VALUES[0]
+
+    def test_pair_types_empty_without_metric(self, plain_interaction):
+        assert pair_types(plain_interaction, 0) == []
+
+    def test_pair_types_out_of_range(self, pi_interaction):
+        assert pair_types(pi_interaction, 99) == []
+
+    def test_structure_page_colors_pt_frames(self, client):
+        html = client.get("/structure/pi_stacking/0").text
+        assert 'class="on pt-p"' in html
+        assert 'class="on pt-t"' in html
+        assert "pt-legend" in html
+        match = re.search(
+            r'<script id="structureConfig"[^>]*>(.*?)</script>', html, re.S)
+        assert match and json.loads(match.group(1))["pt_types"] == PT_VALUES[0]
+
+    def test_structure_page_without_pt_has_no_legend(self, client):
+        html = client.get("/structure/hydrogen_bond/0").text
+        assert "pt-legend" not in html and "pt-p" not in html
+
+    def test_structure_bar_colors_match_figures(self):
+        css = APP_CSS.read_text(encoding="utf-8")
+        for name, color in PT_COLORS.items():
+            rule = ".structure-existence span.on.pt-%s { background: %s; }" % (
+                name.lower(), color)
+            assert rule in css
 
 
 class TestMatrixTyped:

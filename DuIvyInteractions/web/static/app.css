@@ -967,6 +967,9 @@ tr.clickable { cursor: pointer; }
   background: var(--border);
 }
 .structure-existence span.on { background: var(--chart-primary); }
+.structure-existence span.on.pt-p { background: #3c5488; }
+.structure-existence span.on.pt-t { background: #e64b35; }
+.structure-existence span.on.pt-n { background: #8491b4; }
 .structure-existence span.current { outline: 2px solid var(--accent); outline-offset: 0; }
 .structure-status {
   min-height: 18px;

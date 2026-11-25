@@ -35,12 +35,19 @@
   </div>
   {# 进度条并入相互作用向量条：可直接拖动/点选/键盘换帧（structure.js 处理指针与键盘） #}
   <div class="bars structure-existence" id="existenceBar" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="{{ [(n_frames | default(0)) - 1, 0] | max }}" aria-valuenow="0" aria-label="interaction frames">
-    {% for value in existence | default([], true) %}<span class="{% if value %}on{% endif %}" title="frame {{ loop.index0 }}: {{ 'active' if value else 'inactive' }}"></span>{% endfor %}
+    {% for value in existence | default([], true) %}
+    {% set pt = pt_types[loop.index0] if pt_types and (pt_types | length) == (existence | length) else "" %}
+    <span class="{% if value %}on{% endif %}{% if value and pt %} pt-{{ pt | lower }}{% endif %}" title="frame {{ loop.index0 }}: {{ 'active' if value else 'inactive' }}{% if value and pt %} ({{ pt }}){% endif %}"></span>
+    {% endfor %}
   </div>
+  {% if pt_types and (pt_types | length) == (existence | length) %}
+  <div class="pt-legend">
+    <span class="pt-legend-item"><span class="pt-dot" style="background: #3c5488"></span>P</span>
+    <span class="pt-legend-item"><span class="pt-dot" style="background: #e64b35"></span>T</span>
+  </div>
+  {% endif %}
   <div class="structure-groups" id="groupLegend"></div>
   <div class="structure-status" id="structureStatus"></div>
-  <p class="hint">标签编号同时给出 h5 表格编号与 PDB auth 编号：如 TYR50 (PDB 51)；两者相同时只显示一个。</p>
-  <p class="hint">轨迹一次载入（拓扑 PDB + 原始轨迹文件），帧切换只换坐标帧，不重建结构、不移动相机；水分子不显示；相互作用残基以棍棒显示，组色为本页图例里定义的基团原子。</p>
 </div>
 
 {% if (browse_mode | default('picker')) == "server" %}
@@ -69,7 +76,7 @@
 </div>
 {% endif %}
 
-<script id="structureConfig" type="application/json">{{ {"type": type, "idx": idx, "n_frames": n_frames | default(0), "has_structure": has_structure | default(false), "existence": existence | default([], true), "trajectory": trajectory | default("")} | tojson }}</script>
+<script id="structureConfig" type="application/json">{{ {"type": type, "idx": idx, "n_frames": n_frames | default(0), "has_structure": has_structure | default(false), "existence": existence | default([], true), "pt_types": pt_types | default([]), "trajectory": trajectory | default("")} | tojson }}</script>
 {% endblock %}
 
 {% block scripts %}

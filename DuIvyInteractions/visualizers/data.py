@@ -273,6 +273,15 @@ def pair_drilldown(interaction: Interaction, idx: int) -> Dict:
     return data
 
 
+def pair_types(interaction: Interaction, idx: int) -> List[str]:
+    """逐帧 π-堆积类型（无该指标或越界时返回空列表）。"""
+    if PT_METRIC not in interaction.metrics:
+        return []
+    if not 0 <= idx < interaction.n_pairs:
+        return []
+    return np.asarray(interaction.metrics[PT_METRIC][idx]).astype(str).tolist()
+
+
 def _types(interaction: Interaction, idx: int,
            edges: Optional[np.ndarray]) -> Dict:
     """π-堆积类型序列（超长时取活跃帧桶内众数），与 times 等长。"""
