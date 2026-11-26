@@ -1415,3 +1415,80 @@ tr.clickable { cursor: pointer; }
   .run-recent-output { display: none; }
 }
 
+/* ---------- 宽屏自适应（追加覆盖，不改上方既有规则） ---------- */
+
+/* 内容区铺满可用宽度：覆盖上方 .content 的 1280px 上限 */
+.content { max-width: none; }
+
+/* 超宽屏可读性：纯数据表格容器给宽松上限；矩阵画布与 3D viewer 不受此限 */
+.content .table-wrap { max-width: 1600px; }
+
+/* 3D viewer 随窗口自适应：620px 作为不支持 min() 的旧浏览器回退值，随后被响应式高度覆盖 */
+.structure-viewer {
+  width: 100%;
+  height: 620px;
+  height: min(72vh, 820px);
+  position: relative;
+}
+.structure-viewer > div { width: 100%; height: 100%; }
+
+/* ---------- 品牌色：DuIvy 经典配色（DIT.mplstyle axes.prop_cycle 前两位） ---------- */
+
+.brand-mark {
+  background: linear-gradient(135deg, #38A7D0, #F67088);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  text-shadow: 0 1px 2px rgba(20, 26, 38, .45), 0 0 1px rgba(20, 26, 38, .35);
+}
+
+/* ---------- 顶栏数据集 chips：多批次横向滚动（不换行、不挤压右侧按钮） ---------- */
+
+.ds-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 46vw;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.ds-chips::-webkit-scrollbar { height: 4px; }
+.ds-chips::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+form.ds-chip { flex: none; max-width: 34vw; margin: 0; }
+.ds-count {
+  flex: none;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+.ds-remove {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: 13px/16px var(--mono);
+  cursor: pointer;
+}
+.ds-remove:hover { background: var(--danger-soft); color: var(--danger); }
+.ds-clear { flex: none; margin: 0; }
+
+@media (max-width: 900px) {
+  .ds-chips { max-width: 40vw; }
+  form.ds-chip { max-width: 26vw; }
+}
+

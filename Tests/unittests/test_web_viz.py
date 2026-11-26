@@ -512,7 +512,7 @@ class TestRoutes:
 
     def test_type_page_links_back_to_source(self, client):
         html = client.get("/type/hydrogen_bond").text
-        assert "change data source" in html
+        assert "add data source" in html
         assert "data-kind" not in html
 
     def test_type_page_panels(self, client):

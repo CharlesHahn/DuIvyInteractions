@@ -9,7 +9,7 @@ import os
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import h5py
 import numpy as np
@@ -86,6 +86,24 @@ def _unique_name(base: str, filename: str,
         key = f"{base}@{filename}~{index}"
         index += 1
     return key
+
+
+def merge_batches(batches: Sequence[Sequence[Tuple[str, str, Interaction]]]
+                  ) -> List[Tuple[str, str, Interaction]]:
+    """按批次顺序合并 items；跨批次重名时用 _unique_name 追加 @文件名/序号。
+
+    首批显示名已由 parse_datasource 保证批内唯一，原样透传。
+    """
+    merged: List[Tuple[str, str, Interaction]] = []
+    for position, batch in enumerate(batches):
+        if position == 0:
+            merged.extend(batch)
+            continue
+        for _, h5_path, interaction in batch:
+            key = _unique_name(interaction.interaction_type,
+                               Path(h5_path).name, merged)
+            merged.append((key, h5_path, interaction))
+    return merged
 
 
 def type_summary(items: List[Tuple[str, str, Interaction]]) -> List[Dict]:

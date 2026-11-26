@@ -10,7 +10,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import (
-    Any, AsyncIterator, Callable, Dict, List, Optional, Tuple)
+    Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Tuple)
 from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, HTTPException, Request
@@ -30,6 +30,7 @@ from ..visualizers import (
     matrix_view, metric_stats, overview, pair_drilldown, pair_frames,
     pair_summary, pair_types, parse_datasource, string_stats, type_summary,
 )
+from ..visualizers.data import merge_batches
 from ..visualizers.structure import (
     alignment_errors, interaction_expressions, load_universe, topology_pdb,
 )
@@ -98,8 +99,8 @@ def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
                allowed_hosts: Optional[List[str]] = None) -> FastAPI:
     """创建 FastAPI 应用（数据源状态 = 服务端内存，单用户）。"""
     manager = JobManager(root=root)
-    state: Dict[str, Any] = {"source": None, "structure": None,
-                             "jobs": manager}
+    state: Dict[str, Any] = {"sources": [], "batch_items": {}, "items": [],
+                             "structure": None, "jobs": manager}
     app = FastAPI(title="DII Web", docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=_job_lifespan(manager))
     app.state.jobs = manager
@@ -259,6 +260,16 @@ def _register_home(app: FastAPI, state: Dict[str, Any], browse_mode: str,
         body = await request.body()
         return await run_in_threadpool(_select, state,
                                        _form_value(body, "path"), root)
+
+    @app.post("/select/remove")
+    async def select_remove(request: Request) -> Response:
+        body = await request.body()
+        return await run_in_threadpool(_remove_batch, state,
+                                       _form_value(body, "path"))
+
+    @app.post("/select/clear")
+    async def select_clear() -> Response:
+        return await run_in_threadpool(_clear_batches, state)
 
 
 def _register_detail(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -722,8 +733,49 @@ def _form_value(body: bytes, key: str) -> str:
     return values.get(key, [""])[0]
 
 
+def _batch_key(path: str) -> str:
+    """批次键：绝对解析路径（同一路径的不同写法视为同一批次）。"""
+    return str(Path(path).expanduser().resolve())
+
+
+def _add_batch(state: Dict[str, Any], path: str,
+               items: List[Tuple[str, str, Interaction]]) -> None:
+    """按路径追加/原位替换一个批次，并重建合并 items。"""
+    key = _batch_key(path)
+    if key not in state["batch_items"]:
+        state["sources"].append({"path": key, "name": Path(key).name})
+    state["batch_items"][key] = items
+    state["items"] = _merge_sources(state)
+
+
+def _merge_sources(state: Dict[str, Any]) -> List[Tuple[str, str, Interaction]]:
+    """按批次顺序合并当前全部批次的 items（跨批次重名自动去重）。"""
+    return merge_batches([state["batch_items"][source["path"]]
+                          for source in state["sources"]])
+
+
+def _remove_batch(state: Dict[str, Any], path: str) -> RedirectResponse:
+    """移除一个批次并跳回总览；未载入的路径带回提示。"""
+    key = _batch_key(path)
+    if key not in state["batch_items"]:
+        return _select_error(f"batch not loaded: {path}")
+    del state["batch_items"][key]
+    state["sources"] = [source for source in state["sources"]
+                        if source["path"] != key]
+    state["items"] = _merge_sources(state)
+    return RedirectResponse("/", status_code=303)
+
+
+def _clear_batches(state: Dict[str, Any]) -> RedirectResponse:
+    """清空全部批次并跳回总览。"""
+    state["sources"] = []
+    state["batch_items"] = {}
+    state["items"] = []
+    return RedirectResponse("/", status_code=303)
+
+
 def _select(state: Dict[str, Any], path: str, root: str = "") -> RedirectResponse:
-    """解析数据源并跳回总览；失败或跳过文件时带回提示（不静默）。"""
+    """追加一个数据源批次并跳回总览；同路径重选替换该批次。"""
     if not path.strip():
         return _select_error("no path provided")
     try:
@@ -736,7 +788,7 @@ def _select(state: Dict[str, Any], path: str, root: str = "") -> RedirectRespons
         return _select_error(str(e))
     if not items:
         return _select_error(f"no usable .h5 found: {path}")
-    state["source"] = (path, items)
+    _add_batch(state, str(target), items)
     add_recent(path)
     loaded = len({h5 for _, h5, _ in items})
     return _loaded_redirect(_source_files(str(target)), loaded)
@@ -780,24 +832,46 @@ def _source_files(path: str) -> int:
     return 0
 
 
-def _source(state: Dict[str, Any]) -> Any:
-    """当前数据源 (路径, items)；未载入时为 ("", [])。"""
-    source = state.get("source")
-    return source if source else ("", [])
+def _source(state: Dict[str, Any]
+            ) -> Tuple[str, List[Tuple[str, str, Interaction]]]:
+    """当前数据源的组合标签与合并 items；未载入时为 ("", [])。"""
+    sources = state.get("sources") or []
+    if not sources:
+        return "", []
+    paths = [source["path"] for source in sources]
+    return (paths[0] if len(paths) == 1 else " + ".join(paths)), state["items"]
 
 
-def _nav_source(path: str, items: Any, active_type: str = "") -> Dict[str, Any]:
-    """导航上下文（侧栏类型列表 + 当前数据源）。"""
+def _batch_summaries(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """导航用批次摘要：路径、名称与该批次的类型条数。"""
+    return [{"path": source["path"], "name": source["name"],
+             "n_types": len(state["batch_items"][source["path"]])}
+            for source in state["sources"]]
+
+
+def _ds_name(batches: Sequence[Dict[str, Any]]) -> str:
+    """顶栏数据源名：单批次用批名，多批次为首批名 + 其余数量。"""
+    if len(batches) == 1:
+        return batches[0]["name"]
+    return f"{batches[0]['name']} +{len(batches) - 1}"
+
+
+def _nav_source(path: str, items: List[Tuple[str, str, Interaction]],
+                active_type: str = "",
+                batches: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    """导航上下文（侧栏类型列表 + 当前数据源与批次）。"""
     return {"types": type_summary(items),
             "datasource": path or None,
-            "ds_name": Path(path).name if path else "",
+            "ds_name": _ds_name(batches) if batches
+            else (Path(path).name if path else ""),
+            "batches": list(batches),
             "active_type": active_type}
 
 
 def _nav(state: Dict[str, Any], active_type: str = "") -> Dict[str, Any]:
     """按当前状态生成导航上下文。"""
     path, items = _source(state)
-    return _nav_source(path, items, active_type)
+    return _nav_source(path, items, active_type, _batch_summaries(state))
 
 
 def _find_interaction(items: Any, name: str) -> Tuple[str, Interaction]:
@@ -816,7 +890,7 @@ def _render_index(request: Request, state: Dict[str, Any], error: str,
         "title": "overview", "cards": overview(items),
         "recent": load_recent(), "error": error, "warning": warn,
         "browse_mode": browse_mode,
-        **_nav_source(path, items),
+        **_nav_source(path, items, batches=_batch_summaries(state)),
     })
 
 
@@ -836,7 +910,7 @@ def _render_type(request: Request, state: Dict[str, Any], name: str, search: str
         "meta": interaction_meta(it, h5_path),
         "stats": metric_stats(it), "string_stats": string_stats(it),
         "activity": frame_activity(it), "table": table,
-        **_nav_source(path, items, name),
+        **_nav_source(path, items, name, _batch_summaries(state)),
     })
 
 
@@ -854,7 +928,7 @@ def _render_pair(request: Request, state: Dict[str, Any], name: str,
         "pair_label": data["pair_label"], "meta": data["groups"],
         "summary": pair_summary(it, idx), "downsampled": data["downsampled"],
         "flags": sorted(it.flags), "figure": fig_pair(data),
-        **_nav_source(path, items, name),
+        **_nav_source(path, items, name, _batch_summaries(state)),
     })
 
 
@@ -885,7 +959,7 @@ def _render_structure(request: Request, state: Dict[str, Any], name: str,
         "trajectory": structure["trajectory"] if structure else "",
         "n_atoms": structure["n_atoms"] if structure else 0,
         "browse_mode": browse_mode,
-        **_nav_source(path, items, name),
+        **_nav_source(path, items, name, _batch_summaries(state)),
     })
     response.headers["Content-Security-Policy"] = STRUCTURE_CSP
     return response

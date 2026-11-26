@@ -9,13 +9,29 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/"><span class="brand-mark">DII</span><span>DuIvy Interactions</span></a>
-  {% if ds_name %}
+  <a class="brand" href="/"><span class="brand-mark">DII</span><span>DuIvyInteractions</span></a>
+  {% if batches is defined and batches %}
+  <div class="ds-chips">
+    {% for b in batches %}
+    <form class="ds-chip" method="post" action="/select/remove">
+      <input type="hidden" name="path" value="{{ b.path }}">
+      <span class="dot"></span><span class="ds-name" title="{{ b.path }}">{{ b.name }}</span>
+      <span class="ds-count">{{ b.n_types }}</span>
+      <button type="submit" class="ds-remove" aria-label="remove">×</button>
+    </form>
+    {% endfor %}
+    {% if batches | length > 1 %}
+    <form class="ds-clear" method="post" action="/select/clear">
+      <button type="submit" class="btn btn-ghost btn-sm">clear all</button>
+    </form>
+    {% endif %}
+  </div>
+  {% elif ds_name %}
   <div class="ds-chip" title="{{ datasource }}"><span class="dot"></span><span class="ds-name">{{ ds_name }}</span></div>
   {% endif %}
   <div class="topbar-spacer"></div>
   {% if ds_name and title != "overview" %}
-  <a class="btn btn-ghost btn-sm" href="/">change data source</a>
+  <a class="btn btn-ghost btn-sm" href="/">add data source</a>
   {% endif %}
 </header>
 <div class="layout">
