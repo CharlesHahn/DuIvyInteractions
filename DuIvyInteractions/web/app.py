@@ -24,6 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 
 from ..core.datas import Interaction
+from ..io.h5 import RunMeta, RunRecord, load_run_meta
 from ..visualizers import (
     add_recent, aggregate_table, cell_values, export_table, fig_pair,
     frame_activity, frame_view, get_exporter, interaction_meta, load_recent,
@@ -71,6 +72,14 @@ FORBIDDEN_HOST = "forbidden host"
 UNSUPPORTED_PATH = "unsupported path (expect a directory or .h5 file)"
 STRUCTURE_NOT_SELECTED = "structure not selected"
 STRUCTURE_PAIR_REQUIRED = "type and idx required"
+# 3D 页自动载入：h5 的 run/ 组记录不可用时的 reason（前端据此提示并回退手选）
+AUTO_NO_RUN_META = "no-run-meta"      # h5 没有 run/ 组
+AUTO_FILE_MISSING = "missing"         # 记录的文件不存在
+AUTO_FILE_CHANGED = "changed"         # 记录的文件大小与指纹不符
+AUTO_DETAIL_NO_RUN_META = "no run metadata in this h5"
+AUTO_DETAIL_FILE_MISSING = "recorded file is missing"
+AUTO_DETAIL_FILE_CHANGED = "recorded file changed"
+AUTO_SOURCE_RUN = "run"               # 成功响应里的来源标记
 STRUCTURE_SUFFIXES = frozenset({
     ".tpr", ".xtc", ".trr", ".gro", ".pdb", ".dcd", ".nc", ".itp", ".psf",
     ".prmtop", ".parm7", ".mol2"})
@@ -412,6 +421,7 @@ def _register_api(app: FastAPI, state: Dict[str, Any],
     _register_list_api(app, browse_mode, root)
     _register_pick_api(app, browse_mode)
     _register_structure_select(app, state, root)
+    _register_structure_auto(app, state, root)
     _register_structure_export(app, state)
     _register_structure_interactions(app, state)
     _register_run_api(app, state)
@@ -641,6 +651,17 @@ def _register_structure_select(app: FastAPI, state: Dict[str, Any],
             _form_value(body, "topology"), _form_value(body, "trajectory"))
 
 
+def _register_structure_auto(app: FastAPI, state: Dict[str, Any],
+                             root: str) -> None:
+    """按 h5 的 run/ 记录自动载入结构（3D 页首次打开时前端尝试）。"""
+
+    @app.post("/api/structure/auto", response_model=None)
+    async def auto_structure(request: Request) -> Response:
+        body = await request.body()
+        return await run_in_threadpool(_auto_structure, state, root,
+                                       _form_value(body, "type"))
+
+
 def _register_structure_export(app: FastAPI, state: Dict[str, Any]) -> None:
     """拓扑 PDB（该对原子打 B-factor 标记）与原始轨迹文件。"""
 
@@ -688,11 +709,17 @@ def _select_structure(state: Dict[str, Any], root: str, topology: str,
                       trajectory: str) -> Response:
     """打开并记录结构（会话版本号自增，供前端 URL 变体使用）。"""
     try:
-        top_path = _structure_path(root, topology)
-        traj_path = _structure_path(root, trajectory)
-        universe = load_universe(str(top_path), str(traj_path))
+        payload = _install_structure(state, _structure_path(root, topology),
+                                     _structure_path(root, trajectory))
     except ValueError as error:
-        return JSONResponse({"detail": str(error)}, status_code=400)
+        return _structure_bad_request(error)
+    return JSONResponse(payload)
+
+
+def _install_structure(state: Dict[str, Any], top_path: Path,
+                       traj_path: Path) -> Dict[str, Any]:
+    """打开结构并写入会话状态（失败抛 ValueError，版本号自增）。"""
+    universe = load_universe(str(top_path), str(traj_path))
     structure = {
         "topology": str(top_path), "trajectory": str(traj_path),
         "universe": universe, "n_atoms": int(universe.atoms.n_atoms),
@@ -703,9 +730,86 @@ def _select_structure(state: Dict[str, Any], root: str, topology: str,
     state["structure_version"] = int(state.get("structure_version", 0)) + 1
     structure["version"] = state["structure_version"]
     state["structure"] = structure
-    return JSONResponse({"ok": True, "n_atoms": structure["n_atoms"],
-                         "n_frames": structure["n_frames"],
-                         "has_box": structure["has_box"]})
+    return {"ok": True, "n_atoms": structure["n_atoms"],
+            "n_frames": structure["n_frames"],
+            "has_box": structure["has_box"]}
+
+
+def _structure_bad_request(error: ValueError) -> JSONResponse:
+    """结构路径/打开失败 → 400（select 与 auto 共用）。"""
+    return JSONResponse({"detail": str(error)}, status_code=400)
+
+
+def _auto_structure(state: Dict[str, Any], root: str,
+                    name: str) -> Response:
+    """按 h5 的 run/ 记录自动载入结构（无记录/文件缺失或变更 → 409）。"""
+    h5_path, _ = _find_interaction(_source(state)[1], name)
+    record = load_run_meta(h5_path)
+    if record is None:
+        return _no_run_meta_conflict()
+    try:
+        top_path, traj_path = _recorded_paths(root, record)
+    except ValueError as error:
+        return _structure_bad_request(error)
+    conflict = _fingerprint_conflict(record, top_path, traj_path)
+    if conflict:
+        return conflict
+    try:
+        payload = _install_structure(state, top_path, traj_path)
+    except ValueError as error:
+        return _structure_bad_request(error)
+    return _auto_payload(payload, top_path, traj_path)
+
+
+def _recorded_paths(root: str, record: RunRecord) -> Tuple[Path, Path]:
+    """run/ 记录的拓扑/轨迹路径（同样受 root 限制）。"""
+    return (_structure_path(root, record.meta.topology),
+            _structure_path(root, record.meta.trajectory))
+
+
+def _fingerprint_conflict(record: RunRecord, top_path: Path,
+                          traj_path: Path) -> Optional[JSONResponse]:
+    """记录文件缺失/大小不符 → 409 响应（一致为 None）。"""
+    if not (top_path.is_file() and traj_path.is_file()):
+        return _auto_conflict(AUTO_FILE_MISSING, AUTO_DETAIL_FILE_MISSING,
+                              top_path, traj_path)
+    if (_size_changed(top_path, record.topology_size)
+            or _size_changed(traj_path, record.trajectory_size)):
+        return _auto_conflict(AUTO_FILE_CHANGED, AUTO_DETAIL_FILE_CHANGED,
+                              top_path, traj_path)
+    return None
+
+
+def _size_changed(path: Path, recorded: int) -> bool:
+    """记录了大小时才比较（h5 未记录指纹时记为 -1，视为未记录）。"""
+    if recorded <= 0:
+        return False
+    try:
+        return path.stat().st_size != recorded
+    except OSError:
+        return True
+
+
+def _auto_conflict(reason: str, detail: str, top_path: Path,
+                   traj_path: Path) -> JSONResponse:
+    """409：记录的结构不可用（返回路径供前端预填输入框）。"""
+    return JSONResponse({"detail": detail, "reason": reason,
+                         "topology": str(top_path),
+                         "trajectory": str(traj_path)}, status_code=409)
+
+
+def _no_run_meta_conflict() -> JSONResponse:
+    """409：该 h5 没有 run/ 溯源组。"""
+    return JSONResponse({"detail": AUTO_DETAIL_NO_RUN_META,
+                         "reason": AUTO_NO_RUN_META}, status_code=409)
+
+
+def _auto_payload(payload: Dict[str, Any], top_path: Path,
+                  traj_path: Path) -> JSONResponse:
+    """自动载入成功响应（附来源标记与记录路径）。"""
+    return JSONResponse({**payload, "source": AUTO_SOURCE_RUN,
+                         "topology": str(top_path),
+                         "trajectory": str(traj_path)})
 
 
 def _structure_path(root: str, path: str) -> Path:
@@ -1081,7 +1185,7 @@ def _render_pair(request: Request, state: Dict[str, Any], name: str,
     view=3d 时同一页面改为 3D 区块（与 curves 视图共享帧号）。
     """
     path, items = _source(state)
-    _, it = _find_interaction(items, name)
+    h5_path, it = _find_interaction(items, name)
     if not 0 <= idx < it.n_pairs:
         raise HTTPException(status_code=404, detail=f"pair index out of range: {idx}")
     view = _pair_view(view)
@@ -1097,7 +1201,7 @@ def _render_pair(request: Request, state: Dict[str, Any], name: str,
         **_nav_source(path, items, name, _batch_summaries(state)),
     }
     if view == PAIR_VIEW_3D:
-        context.update(_structure_context(state, it, idx))
+        context.update(_structure_context(state, it, idx, h5_path))
         context["frame"] = _clamp_frame(context["frame"], context["n_frames"])
     response = TEMPLATES.TemplateResponse(request, "pair.html", context)
     if view == PAIR_VIEW_3D:
@@ -1111,9 +1215,10 @@ def _get_interaction(state: Dict[str, Any], name: str) -> Interaction:
 
 
 def _structure_context(state: Dict[str, Any], interaction: Interaction,
-                       idx: int) -> Dict[str, Any]:
+                       idx: int, h5_path: str = "") -> Dict[str, Any]:
     """3D 视图上下文：结构状态 + existence 条 + 基团标签（pair/旧页共用）。"""
     structure = state.get("structure")
+    run_meta = _pair_run_meta(h5_path)
     return {
         "n_frames": structure["n_frames"] if structure
         else interaction.n_frames,
@@ -1126,7 +1231,29 @@ def _structure_context(state: Dict[str, Any], interaction: Interaction,
         "trajectory": structure["trajectory"] if structure else "",
         "n_atoms": structure["n_atoms"] if structure else 0,
         "structure_version": structure["version"] if structure else 0,
+        "run_meta": run_meta,
+        "auto_attempt": structure is None and run_meta is not None,
     }
+
+
+def _pair_run_meta(h5_path: str) -> Optional[Dict[str, Any]]:
+    """当前 pair 所属 h5 的 run/ 元信息（无 h5 / 无 run/ → None）。"""
+    if not h5_path:
+        return None
+    try:
+        record = load_run_meta(h5_path)
+    except OSError:
+        return None
+    return _run_meta_payload(record.meta) if record else None
+
+
+def _run_meta_payload(meta: RunMeta) -> Dict[str, Any]:
+    """3D 页展示用的 run/ 字段（argv/interactions 转列表）。"""
+    return {"topology": meta.topology, "trajectory": meta.trajectory,
+            "ff": meta.ff, "strategy": meta.strategy,
+            "created_at": meta.created_at, "dii_version": meta.dii_version,
+            "argv": list(meta.argv),
+            "interactions": list(meta.interactions)}
 
 
 def _render_run(request: Request, state: Dict[str, Any], browse_mode: str,

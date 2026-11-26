@@ -64,4 +64,17 @@
 </div>
 {% endif %}
 
-<script id="structureConfig" type="application/json">{{ {"type": type, "idx": idx, "frame": frame | default(0), "n_frames": n_frames | default(0), "has_structure": has_structure | default(false), "structure_version": structure_version | default(0), "existence": existence | default([], true), "pt_types": pt_types | default([]), "trajectory": trajectory | default("")} | tojson }}</script>
+<script id="structureConfig" type="application/json">{
+  "type": {{ type | tojson }},
+  "idx": {{ idx | default(0) }},
+  "frame": {{ frame | default(0) }},
+  "n_frames": {{ n_frames | default(0) }},
+  "has_structure": {{ "true" if has_structure | default(false) else "false" }},
+  "structure_version": {{ structure_version | default(0) }},
+  "existence": {{ existence | default([], true) | tojson }},
+  "pt_types": {{ pt_types | default([]) | tojson }},
+  "trajectory": {{ trajectory | default("") | tojson }},
+  "auto_url": "/api/structure/auto",
+  "run_meta": {{ run_meta | tojson if run_meta else "null" }},
+  "auto_attempt": {{ "true" if auto_attempt else "false" }}
+}</script>

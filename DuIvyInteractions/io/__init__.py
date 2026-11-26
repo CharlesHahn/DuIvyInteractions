@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """io - 结果文件读写（Interaction 数据的序列化/反序列化）。"""
 
-from .h5 import save_interactions, save_interactions_atomic, load_interactions
+from .h5 import (
+    RunMeta, RunRecord, load_run_meta, save_run_group,
+    save_interactions, save_interactions_atomic, load_interactions,
+)
 from .interaction_exporter import InteractionExporter
 from .hydrogen_bond_exporter import HydrogenBondExporter
 from .saltbridge_exporter import SaltBridgeExporter
@@ -26,6 +29,7 @@ EXPORTER_CLASSES = {
 
 __all__ = [
     "save_interactions", "save_interactions_atomic", "load_interactions",
+    "RunMeta", "RunRecord", "save_run_group", "load_run_meta",
     "InteractionExporter", "HydrogenBondExporter", "SaltBridgeExporter",
     "PiStackingExporter", "PiCationExporter", "HalogenBondExporter",
     "HydrophobicExporter", "MetalCoordinationExporter", "WaterBridgeExporter",
