@@ -4,7 +4,8 @@
 缓存：/static/* 必须每次使用前向服务器校验（no-cache），避免浏览器启发式缓存
 旧 JS 导致类型页矩阵空白。
 Y 轴：active pairs per frame 与 occupancy distribution 两图左侧标注柱高计数
-（顶 = 最大值，中 = 一半向下取整，底 = 0）。
+（顶 = 最大值，中 = 一半向下取整，底 = 0）；轴标题（active pairs / pairs）
+竖排写在 Y 轴旁，不写进 panel 标题；柱子按比例填满绘图区宽度。
 """
 
 import re
@@ -25,10 +26,13 @@ APP_CSS = REPO_ROOT / "DuIvyInteractions" / "web" / "static" / "app.css"
 STATIC_ASSETS = ("matrix.js", "app.css", "structure.js")
 CACHE_CONTROL = "no-cache"
 YAXIS_RE = re.compile(r'<div class="bars-yaxis"[^>]*>(.*?)</div>', re.S)
+YAXIS_TITLE_RE = re.compile(
+    r'<div class="bars-yaxis-title"[^>]*>(.*?)</div>', re.S)
 SPAN_RE = re.compile(r"<span>([^<]*)</span>")
 INTEGER_RE = re.compile(r"^\d+$")
 PLOT_MARKUP = 'class="bars-plot"'
 YAXIS_MARKUP = 'class="bars-yaxis"'
+YAXIS_TITLE_MARKUP = 'class="bars-yaxis-title"'
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +107,11 @@ def _yaxis_blocks(html: str):
     return [SPAN_RE.findall(block) for block in YAXIS_RE.findall(html)]
 
 
+def _yaxis_titles(html: str):
+    """两处 bars-yaxis-title 的文本（active pairs / pairs）。"""
+    return [text.strip() for text in YAXIS_TITLE_RE.findall(html)]
+
+
 # ============================================================
 # 缓存头：/static/* 每次校验；其它响应不因此改变
 # ============================================================
@@ -155,6 +164,11 @@ class TestBarsYAxis:
         html = _type_page(client).text
         assert html.count(PLOT_MARKUP) == 2
         assert html.count(YAXIS_MARKUP) == 2
+        assert html.count(YAXIS_TITLE_MARKUP) == 2
+
+    def test_yaxis_titles_sit_beside_axes(self, client):
+        assert _yaxis_titles(_type_page(client).text) == ["active pairs",
+                                                          "pairs"]
 
     def test_activity_yaxis_values(self, client, interaction):
         blocks = _yaxis_blocks(_type_page(client).text)
@@ -190,10 +204,11 @@ class TestBarsYAxis:
         assert ("<span>0%</span><span>50%</span><span>100%</span>"
                 in html)
 
-    def test_titles_state_the_unit(self, client):
+    def test_titles_do_not_inline_axis_unit(self, client):
         html = _type_page(client).text
-        assert "active pairs per frame (y: active pairs)" in html
-        assert "occupancy distribution (y: pairs)" in html
+        assert "active pairs per frame" in html
+        assert "occupancy distribution · %d pairs" % N_PAIRS in html
+        assert "(y:" not in html
 
 
 # ============================================================
@@ -208,13 +223,24 @@ class TestAxisCss:
 
     def test_bars_plot_rule(self, css):
         assert ".bars-plot {" in css
-        assert "grid-template-columns: 42px 1fr;" in css
+        assert "grid-template-columns: 16px 42px 1fr;" in css
+
+    def test_bars_yaxis_title_rule(self, css):
+        assert ".bars-yaxis-title {" in css
+        assert "writing-mode: vertical-rl" in css
 
     def test_bars_yaxis_rule(self, css):
         assert ".bars-yaxis {" in css
 
     def test_bars_axis_padding_rule(self, css):
-        assert ".bars-axis { padding-left: 48px; }" in css
+        assert ".bars-axis { padding-left: 70px; }" in css
+
+    def test_big_bars_fill_plot_width(self, css):
+        rules = re.findall(r"\.bars\.big span\s*\{([^}]*)\}", css)
+        assert rules, "missing .bars.big span rule"
+        final_rule = rules[-1]
+        assert "flex: 1 1 0" in final_rule
+        assert "max-width: none" in final_rule
 
     def test_mini_axis_alignment_restored(self, css):
         assert ".bars.mini + .bars-axis," in css

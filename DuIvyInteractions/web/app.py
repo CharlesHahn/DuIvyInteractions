@@ -30,7 +30,9 @@ from ..visualizers import (
     matrix_view, metric_stats, overview, pair_drilldown, pair_frames,
     pair_summary, pair_types, parse_datasource, string_stats, type_summary,
 )
-from ..visualizers.data import merge_batches
+# 聚合表首屏与 /api/rows 复用同一行组装/单位函数，避免两套格式化逻辑漂移。
+from ..visualizers.data import (
+    TABLE_PAGE_SIZE, _columns, _table_rows, _units, merge_batches)
 from ..visualizers.structure import (
     alignment_errors, interaction_expressions, load_universe, topology_pdb,
 )
@@ -47,6 +49,11 @@ from .picker import pick_directory, pick_file
 _WEB_DIR = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 FRAME_LIMIT_MAX = 2000  # 帧检查器单次最多返回的活跃对数
+ROWS_LIMIT_MIN = 1      # /api/rows 单次最少返回行数
+ROWS_LIMIT_MAX = 200    # /api/rows 单次最多返回行数
+ROWS_OFFSET_MIN = 0     # /api/rows 起始行号下限
+ROWS_DEFAULT_LIMIT = TABLE_PAGE_SIZE  # 首屏与聚合表分页大小一致
+CELL_DASH = "—"         # 聚合表空值占位（与页面渲染一致）
 TOKEN_COOKIE = "dii_token"
 SERVER_BROWSE_HINT = ("native picker unavailable on this host; "
                       "use the server folder browser")
@@ -393,6 +400,7 @@ def _register_api(app: FastAPI, state: Dict[str, Any],
                   browse_mode: str, root: str) -> None:
     """JSON 数据接口。"""
     _register_matrix_api(app, state)
+    _register_rows_api(app, state)
     _register_cell_api(app, state)
     _register_pair_api(app, state)
     _register_csv_api(app, state)
@@ -415,6 +423,71 @@ def _register_matrix_api(app: FastAPI, state: Dict[str, Any]) -> None:
         return _guard(lambda: matrix_view(
             _get_interaction(state, name), search,
             _clamp_occupancy(min_occupancy), sort_by, sort_dir))
+
+
+def _register_rows_api(app: FastAPI, state: Dict[str, Any]) -> None:
+    """聚合表行窗口接口（前端 load more 按需取数，不整页刷新）。"""
+
+    @app.get("/api/rows/{name}", response_model=None)
+    def api_rows(name: str, search: str = "", min_occupancy: str = "0",
+                 sort_by: str = "occupancy", sort_dir: str = "desc",
+                 offset: str = "", limit: str = "") -> Dict[str, Any]:
+        sort_by, sort_dir = _parse_sort(sort_by, sort_dir)
+        interaction = _get_interaction(state, name)
+        return _guard(lambda: _rows_view(
+            interaction, search, _parse_occupancy(min_occupancy), sort_by,
+            sort_dir, _parse_int(offset, ROWS_OFFSET_MIN),
+            _parse_int(limit, ROWS_DEFAULT_LIMIT)))
+
+
+def _rows_view(interaction: Interaction, search: str, min_occupancy: float,
+               sort_by: str, sort_dir: str, offset: int,
+               limit: int) -> Dict[str, Any]:
+    """聚合表行窗口：与 /type 聚合表共用行组装与单元格格式化。"""
+    rows = _table_rows(interaction, search, sort_by, sort_dir, min_occupancy)
+    offset, limit = _clamp_rows_window(offset, limit)
+    columns = _columns(interaction)
+    return {"offset": offset, "limit": limit, "total": len(rows),
+            "columns": columns, "units": _units(interaction),
+            "rows": [_rows_entry(row, columns)
+                     for row in rows[offset:offset + limit]]}
+
+
+def _clamp_rows_window(offset: int, limit: int) -> Tuple[int, int]:
+    """行窗口钳制：offset 不为负，limit 落在 [ROWS_LIMIT_MIN, ROWS_LIMIT_MAX]。"""
+    return (max(offset, ROWS_OFFSET_MIN),
+            min(max(limit, ROWS_LIMIT_MIN), ROWS_LIMIT_MAX))
+
+
+def _parse_int(raw: str, default: int) -> int:
+    """整数查询参数：空/非法值回落 default（随后由行窗口钳制）。"""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _rows_entry(row: Dict[str, Any], columns: List[str]) -> Dict[str, Any]:
+    """单个 pair 的行窗口条目（values 与 columns 逐列对齐）。"""
+    return {"idx": row["index"], "label": row["pair_label"],
+            "values": [_cell_text(column, row[column]) for column in columns]}
+
+
+def _attach_display_cells(table: Dict[str, Any]) -> Dict[str, Any]:
+    """给聚合表首屏行补显示文本（与 /api/rows 使用同一格式化）。"""
+    table["cells"] = [[_cell_text(column, row[column])
+                       for column in table["columns"]]
+                      for row in table["rows"]]
+    return table
+
+
+def _cell_text(column: str, value: Any) -> str:
+    """聚合表单元格文本：占有率/flags 百分比，avg/std 保留三位小数。"""
+    if column == "occupancy" or column.startswith("flag_"):
+        return CELL_DASH if value == "" else f"{float(value) * 100:.1f}%"
+    if column.startswith("avg_") or column.startswith("std_"):
+        return CELL_DASH if value == "" else f"{float(value):.3f}"
+    return "" if value is None else str(value)
 
 
 def _register_cell_api(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -969,7 +1042,8 @@ def _render_type(request: Request, state: Dict[str, Any], name: str, search: str
     path, items = _source(state)
     h5_path, it = _find_interaction(items, name)
     clamped = _clamp_occupancy(min_occupancy)
-    table = aggregate_table(it, search, sort_by, sort_dir, page, clamped)
+    table = _attach_display_cells(
+        aggregate_table(it, search, sort_by, sort_dir, page, clamped))
     return TEMPLATES.TemplateResponse(request, "type.html", {
         "title": name, "type": name, "search": search,
         "min_occupancy": clamped,
@@ -979,6 +1053,8 @@ def _render_type(request: Request, state: Dict[str, Any], name: str, search: str
         "meta": interaction_meta(it, h5_path),
         "stats": metric_stats(it), "string_stats": string_stats(it),
         "activity": frame_activity(it), "table": table,
+        "rows_limit": ROWS_DEFAULT_LIMIT,
+        "rows_offset": (table["page"] - 1) * TABLE_PAGE_SIZE,
         **_nav_source(path, items, name, _batch_summaries(state)),
     })
 
@@ -1036,25 +1112,6 @@ def _structure_context(state: Dict[str, Any], interaction: Interaction,
         "trajectory": structure["trajectory"] if structure else "",
         "n_atoms": structure["n_atoms"] if structure else 0,
     }
-
-
-def _render_structure(request: Request, state: Dict[str, Any], name: str,
-                      idx: int, browse_mode: str) -> HTMLResponse:
-    """3D 独立页渲染器（旧模板回归用；线上路由已 302 到 pair 3D 视图）。"""
-    path, items = _source(state)
-    _, interaction = _find_interaction(items, name)
-    if not 0 <= idx < interaction.n_pairs:
-        raise HTTPException(status_code=404,
-                            detail=f"pair index out of range: {idx}")
-    context: Dict[str, Any] = {
-        "title": "structure", "type": name, "idx": idx, "frame": 0,
-        "browse_mode": browse_mode,
-        **_structure_context(state, interaction, idx),
-        **_nav_source(path, items, name, _batch_summaries(state)),
-    }
-    response = TEMPLATES.TemplateResponse(request, "structure.html", context)
-    response.headers["Content-Security-Policy"] = STRUCTURE_CSP
-    return response
 
 
 def _render_run(request: Request, state: Dict[str, Any], browse_mode: str,

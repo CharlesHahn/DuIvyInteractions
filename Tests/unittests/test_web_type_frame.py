@@ -20,7 +20,8 @@ STATIC_DIR = REPO_ROOT / "DuIvyInteractions" / "web" / "static"
 TEMPLATE_DIR = REPO_ROOT / "DuIvyInteractions" / "web" / "templates"
 MATRIX_CONFIG_RE = re.compile(
     r'<script id="matrixConfig" type="application/json">(.*?)</script>', re.S)
-FRAME_NUMBER_RE = re.compile(r'id="frameNumber">([^<]*)<')
+FRAME_INPUT_RE = re.compile(
+    r'<input[^>]*id="frameInput"[^>]*value="([^"]*)"')
 
 
 @pytest.fixture(autouse=True)
@@ -83,9 +84,9 @@ def _type_page(client, query: str = ""):
     return client.get("/type/hydrogen_bond" + query)
 
 
-def _html_frame_number(html: str) -> int:
-    match = FRAME_NUMBER_RE.search(html)
-    assert match, "frameNumber element missing from type page"
+def _html_frame_input(html: str) -> int:
+    match = FRAME_INPUT_RE.search(html)
+    assert match, "frameInput element missing from type page"
     return int(match.group(1))
 
 
@@ -108,25 +109,25 @@ class TestFrameQuery:
     def test_default_frame_is_zero(self, client):
         response = _type_page(client)
         assert response.status_code == 200
-        assert _html_frame_number(response.text) == 0
+        assert _html_frame_input(response.text) == 0
         assert _html_matrix_cfg(response.text)["frame"] == 0
 
     def test_explicit_frame_is_rendered(self, client):
         response = _type_page(client, "?frame=5")
         assert response.status_code == 200
-        assert _html_frame_number(response.text) == 5
+        assert _html_frame_input(response.text) == 5
         assert _html_matrix_cfg(response.text)["frame"] == 5
 
     def test_frame_above_range_clamped_to_last(self, client):
         response = _type_page(client, "?frame=99999")
         assert response.status_code == 200
-        assert _html_frame_number(response.text) == FRAMES - 1
+        assert _html_frame_input(response.text) == FRAMES - 1
         assert _html_matrix_cfg(response.text)["frame"] == FRAMES - 1
 
     def test_negative_frame_clamped_to_zero(self, client):
         response = _type_page(client, "?frame=-3")
         assert response.status_code == 200
-        assert _html_frame_number(response.text) == 0
+        assert _html_frame_input(response.text) == 0
         assert _html_matrix_cfg(response.text)["frame"] == 0
 
     def test_non_integer_frame_rejected_with_422(self, client):
@@ -143,7 +144,7 @@ class TestFrameQuery:
                     "&sort_by=index&sort_dir=asc&page=1")
         assert response.status_code == 200
         cfg = _html_matrix_cfg(response.text)
-        assert _html_frame_number(response.text) == 7
+        assert _html_frame_input(response.text) == 7
         assert cfg["frame"] == 7
         assert cfg["search"] == "LYS"
         assert cfg["min_occupancy"] == 0.2
@@ -156,7 +157,7 @@ class TestFrameQuery:
                           str(directory / "hydrogen_bond.h5"))
         response = _type_page(_client_for(directory), "?frame=99")
         assert response.status_code == 200
-        assert _html_frame_number(response.text) == 0
+        assert _html_frame_input(response.text) == 0
         assert _html_matrix_cfg(response.text)["frame"] == 0
 
 
@@ -173,7 +174,8 @@ class TestTypeTemplate:
 
     def test_frame_inspector_elements_present(self, client):
         html = _type_page(client).text
-        assert 'id="frameNumber"' in html
+        assert 'id="frameInput"' in html
+        assert 'id="framePrev"' in html and 'id="frameNext"' in html
         assert 'id="frameInfo"' in html
         assert 'id="frameBody"' in html
 
@@ -198,9 +200,9 @@ class TestTypeTemplate:
         assert cfg["n_frames"] == FRAMES
         assert cfg["type"] == "hydrogen_bond"
 
-    def test_template_declares_frame_number_literal(self):
+    def test_template_declares_frame_input(self):
         template = (TEMPLATE_DIR / "type.html").read_text(encoding="utf-8")
-        assert '<span id="frameNumber">{{ frame }}</span>' in template
+        assert '<input id="frameInput"' in template
         assert '"frame": frame' in template
 
 
@@ -230,9 +232,9 @@ class TestMatrixJs:
         assert "cfg.frame" in source
         assert "loadFrame(initialFrame())" in source
 
-    def test_frame_number_is_synced(self):
+    def test_frame_input_is_synced(self):
         source = _js_source()
-        assert 'frameNumber.textContent = frame' in source
+        assert "if (frameInput) frameInput.value = frame;" in source
 
     def test_axis_acts_as_column_header_hot_zone(self):
         source = _js_source()

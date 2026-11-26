@@ -210,18 +210,3 @@ class TestSidebarTree:
             assert "side-batch" not in html
             assert "ds-chip" not in html
             assert "ds-chips" not in html
-
-
-# ============================================================
-# 历史 chips 样式（样式表只追加不删，保留回归）
-# ============================================================
-
-
-class TestLegacyChipCss:
-    def test_chips_scroller_degrades_to_horizontal_scroll(self, css):
-        """历史 .ds-chips 规则仍在：单行横向滚动（不换行），按钮不被挤压。"""
-        base = [rule for rule in _rules(css, ".ds-chips")
-                if "display: flex" in rule]
-        assert base, "missing flex .ds-chips rule"
-        assert "overflow-x: auto" in base[0]
-        assert "max-width: 46vw" in base[0]

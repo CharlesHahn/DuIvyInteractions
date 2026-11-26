@@ -87,7 +87,13 @@
 
 <div class="panel">
   <div class="frame-head">
-    <h2>frame <span id="frameNumber">{{ frame }}</span></h2>
+    <h2>frame
+      <input id="frameInput" type="number" min="0" max="{{ n_frames - 1 if n_frames else 0 }}" value="{{ frame }}"{% if not n_frames %} disabled{% endif %}>
+      <span class="muted">/ {{ n_frames - 1 if n_frames else 0 }}</span></h2>
+    <span class="frame-nav">
+      <button class="btn btn-sm" id="framePrev"{% if frame <= 0 %} disabled{% endif %}>‹ prev</button>
+      <button class="btn btn-sm" id="frameNext"{% if not n_frames or frame >= n_frames - 1 %} disabled{% endif %}>next ›</button>
+    </span>
     <span id="frameInfo" class="muted"></span>
   </div>
   <div id="frameBody" class="frame-body muted">loading…</div>
@@ -96,21 +102,20 @@
 <div class="panel">
   <div class="section-head compact">
     <h2>aggregates · {{ table.total }} pairs</h2>
-    <span class="muted">page {{ table.page }} / {{ table.pages }}</span>
+    <span id="rowsInfo" class="muted">showing {{ rows_offset + table.rows | length }} of {{ table.total }}</span>
   </div>
   {% if table.rows %}
   <div class="table-wrap short">
     <table>
       <thead><tr>{% for col in table.columns %}{% set base = col[4:] if (col.startswith("avg_") or col.startswith("std_")) else "" %}<th>{{ col }}{% if base and table.units.get(base) %} ({{ table.units[base] }}){% endif %}</th>{% endfor %}</tr></thead>
-      <tbody>
+      <tbody id="rowsBody">
       {% for row in table.rows %}
+      {% set cells = table.cells[loop.index0] %}
       <tr>
         {% for col in table.columns %}
         <td>
           {% if col == "pair_label" %}<a class="pair-link" href="/pair/{{ type | urlencode }}/{{ row["index"] }}">{{ row[col] }}</a>
-          {% elif col == "occupancy" or col.startswith("flag_") %}{{ "%.1f%%" | format(row[col] * 100) if row[col] != "" else "—" }}
-          {% elif col.startswith("avg_") or col.startswith("std_") %}{{ "%.3f" | format(row[col]) if row[col] != "" else "—" }}
-          {% else %}{{ row[col] }}{% endif %}
+          {% else %}{{ cells[loop.index0] }}{% endif %}
         </td>
         {% endfor %}
       </tr>
@@ -118,23 +123,23 @@
       </tbody>
     </table>
   </div>
-  {% if table.pages > 1 %}
-  <div class="pager">
-    {% if table.page > 1 %}<a class="btn btn-sm" href="/type/{{ type | urlencode }}?search={{ search | urlencode }}&min_occupancy={{ min_occupancy }}&sort_by={{ sort_by | urlencode }}&sort_dir={{ sort_dir }}&page={{ table.page - 1 }}">‹ previous</a>{% endif %}
-    <span class="spacer"></span>
-    {% if table.page < table.pages %}<a class="btn btn-sm" href="/type/{{ type | urlencode }}?search={{ search | urlencode }}&min_occupancy={{ min_occupancy }}&sort_by={{ sort_by | urlencode }}&sort_dir={{ sort_dir }}&page={{ table.page + 1 }}">next ›</a>{% endif %}
+  <div id="rowsMore" class="rows-more">
+    <button class="btn btn-sm" id="rowsMoreBtn">load more ({{ table.total - table.rows | length }} remaining)</button>
+    <span id="rowsStatus" class="muted rows-status"></span>
   </div>
-  {% endif %}
   {% else %}
   <p class="muted">no pairs match the current filter</p>
   {% endif %}
+  {% set rows_cfg = {"url": "/api/rows/" ~ (type | urlencode), "type": type, "search": search, "min_occupancy": min_occupancy, "sort_by": sort_by, "sort_dir": sort_dir, "total": table.total, "limit": rows_limit, "offset": rows_offset} %}
+  <script id="rowsConfig" type="application/json">{{ rows_cfg | tojson }}</script>
 </div>
 
 <div class="panel">
-  <h2>active pairs per frame (y: active pairs){% if activity | length < n_frames %} <span class="muted">· {{ activity | length }} buckets, max per bucket</span>{% endif %}</h2>
+  <h2>active pairs per frame{% if activity | length < n_frames %} <span class="muted">· {{ activity | length }} buckets, max per bucket</span>{% endif %}</h2>
   {% if activity %}
   {% set act_top = activity | max %}
   <div class="bars-plot">
+    <div class="bars-yaxis-title">active pairs</div>
     <div class="bars-yaxis" aria-hidden="true">
       <span>{{ act_top }}</span><span>{{ (act_top / 2) | round(0, "floor") | int }}</span><span>0</span>
     </div>
@@ -147,10 +152,11 @@
 </div>
 
 <div class="panel">
-  <h2>occupancy distribution (y: pairs) · {{ meta.n_pairs }} pairs</h2>
+  <h2>occupancy distribution · {{ meta.n_pairs }} pairs</h2>
   {% if meta.n_pairs and n_frames %}
   {% set occ_top = meta.occupancy.hist | max %}
   <div class="bars-plot">
+    <div class="bars-yaxis-title">pairs</div>
     <div class="bars-yaxis" aria-hidden="true">
       <span>{{ occ_top }}</span><span>{{ (occ_top / 2) | round(0, "floor") | int }}</span><span>0</span>
     </div>
@@ -213,4 +219,4 @@
 <script id="matrixConfig" type="application/json">{{ matrix_cfg | tojson }}</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/matrix.js"></script>{% endblock %}
+{% block scripts %}<script src="/static/matrix.js"></script><script src="/static/rows.js"></script>{% endblock %}

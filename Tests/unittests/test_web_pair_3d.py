@@ -18,7 +18,6 @@ WEB_DIR = Path(__file__).resolve().parents[2] / "DuIvyInteractions" / "web"
 TEMPLATES_DIR = WEB_DIR / "templates"
 STRUCTURE_JS = WEB_DIR / "static" / "structure.js"
 PAIR_TEMPLATE = TEMPLATES_DIR / "pair.html"
-STRUCTURE_TEMPLATE = TEMPLATES_DIR / "structure.html"
 PARTIAL_TEMPLATE = TEMPLATES_DIR / "_structure_view.html"
 
 FRAMES = 12
@@ -310,10 +309,9 @@ class TestPartialTemplate:
     def test_partial_exists(self):
         assert PARTIAL_TEMPLATE.is_file()
 
-    def test_both_templates_include_partial(self):
-        for template in (PAIR_TEMPLATE, STRUCTURE_TEMPLATE):
-            text = template.read_text(encoding="utf-8")
-            assert '{% include "_structure_view.html" %}' in text, template
+    def test_pair_template_includes_partial(self):
+        text = PAIR_TEMPLATE.read_text(encoding="utf-8")
+        assert '{% include "_structure_view.html" %}' in text, PAIR_TEMPLATE
 
     def test_partial_keeps_viewer_dom_ids(self):
         text = PARTIAL_TEMPLATE.read_text(encoding="utf-8")
@@ -323,14 +321,14 @@ class TestPartialTemplate:
                            "trajectoryInput", "openStructure"):
             assert 'id="%s"' % element_id in text, element_id
 
-    def test_structure_template_renders_standalone(self):
+    def test_partial_template_renders_standalone(self):
         from DuIvyInteractions.web.app import TEMPLATES
 
-        html = TEMPLATES.get_template("structure.html").render(
+        html = TEMPLATES.get_template("_structure_view.html").render(
             title="structure", ds_name="", datasource="", types=[],
             active_type=None, type=TYPE, idx=0, pair_label="pair 1",
             n_atoms=4, n_frames=1, has_structure=False, existence=[1],
             topology="", trajectory="", browse_mode="picker")
         assert 'id="molstarViewer"' in html
         assert 'id="structureConfig"' in html
-        assert "structure not selected" in html
+        assert "no structure" in html

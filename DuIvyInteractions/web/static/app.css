@@ -100,29 +100,6 @@ code {
   box-shadow: var(--shadow-sm);
 }
 
-.ds-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  max-width: 42vw;
-  padding: 5px 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text-2);
-  font-size: 12px;
-  box-shadow: var(--shadow-sm);
-}
-.ds-chip .dot { background: #22c55e; }
-.ds-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--mono);
-}
-
 .topbar-spacer { flex: 1; }
 
 /* ---------- 布局 ---------- */
@@ -139,15 +116,6 @@ code {
   padding: 18px 12px;
   background: var(--surface-2);
   border-right: 1px solid var(--border);
-}
-
-.side-title {
-  margin: 0 0 8px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--muted);
 }
 
 .side-item {
@@ -282,28 +250,6 @@ code {
 
 /* ---------- 首页 ---------- */
 
-.hero {
-  max-width: 640px;
-  margin: 48px auto 0;
-  padding: 40px 32px;
-  text-align: center;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  box-shadow: var(--shadow-lg);
-}
-.hero-icon {
-  display: grid;
-  place-items: center;
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 18px;
-  border-radius: 16px;
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.hero h1 { font-size: 22px; margin-bottom: 8px; }
-.hero > p { margin: 0 auto 22px; max-width: 470px; color: var(--text-2); font-size: 13.5px; }
 .hint { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); }
 
 .source-form {
@@ -451,7 +397,7 @@ code {
 }
 .bars span:hover { filter: brightness(.85); }
 .bars.mini span { background: var(--chart-primary); }
-.bars.big span { background: var(--chart-secondary); }
+.bars.big span { flex: 1 1 0; max-width: none; background: var(--chart-secondary); }
 .bars.bars-occupancy span { background: var(--chart-primary); }
 .bars-axis {
   display: flex;
@@ -695,7 +641,6 @@ tr.clickable { cursor: pointer; }
 @media (max-width: 900px) {
   .sidebar { display: none; }
   .content { padding: 20px 18px 48px; }
-  .ds-chip { max-width: 30vw; }
   .matrix-head { flex-direction: column; }
   .matrix-wrap { height: 420px; }
   .stats-table { display: block; overflow-x: auto; }
@@ -1442,56 +1387,6 @@ tr.clickable { cursor: pointer; }
   text-shadow: 0 1px 2px rgba(20, 26, 38, .45), 0 0 1px rgba(20, 26, 38, .35);
 }
 
-/* ---------- 顶栏数据集 chips：多批次横向滚动（不换行、不挤压右侧按钮） ---------- */
-
-.ds-chips {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  max-width: 46vw;
-  padding: 2px 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
-}
-.ds-chips::-webkit-scrollbar { height: 4px; }
-.ds-chips::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
-form.ds-chip { flex: none; max-width: 34vw; margin: 0; }
-.ds-count {
-  flex: none;
-  min-width: 16px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-family: var(--mono);
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-}
-.ds-remove {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--muted);
-  font: 13px/16px var(--mono);
-  cursor: pointer;
-}
-.ds-remove:hover { background: var(--danger-soft); color: var(--danger); }
-.ds-clear { flex: none; margin: 0; }
-
-@media (max-width: 900px) {
-  .ds-chips { max-width: 40vw; }
-  form.ds-chip { max-width: 26vw; }
-}
-
 /* ---------- 极简外壳（P0）：起始屏 / 数据集分块 / 侧栏数据集树 ---------- */
 
 .start-screen {
@@ -1687,9 +1582,18 @@ form.ds-chip { flex: none; max-width: 34vw; margin: 0; }
 
 .bars-plot {
   display: grid;
-  grid-template-columns: 42px 1fr;
+  grid-template-columns: 16px 42px 1fr;
   align-items: stretch;
   gap: 6px;
+}
+.bars-yaxis-title {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 10px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .bars-yaxis {
   display: flex;
@@ -1701,7 +1605,34 @@ form.ds-chip { flex: none; max-width: 34vw; margin: 0; }
   font-family: var(--mono);
   padding-top: 2px;
 }
-.bars-axis { padding-left: 48px; }
+.bars-axis { padding-left: 70px; }
 /* 无 Y 轴的迷你柱状图（总览占用率、指标分布表）保持原有轴对齐 */
 .bars.mini + .bars-axis,
 .hist-cell .bars-axis { padding-left: 0; }
+
+/* ---------- 帧导航（frame number input / prev / next） ---------- */
+
+.frame-head h2 { display: inline-flex; align-items: center; gap: 6px; }
+.frame-head #frameInput {
+  width: 68px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+.frame-head #frameInput:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.frame-nav { display: inline-flex; align-items: center; gap: 6px; }
+.frame-nav .btn:disabled { opacity: .45; cursor: default; }
+
+/* ---------- aggregates 按需加载（load more） ---------- */
+
+.rows-more { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.rows-status { font-size: 12px; }
+.rows-status.error { color: var(--danger); }

@@ -13,7 +13,9 @@
   var slider = document.getElementById("frameSlider");
   var frameInfo = document.getElementById("frameInfo");
   var frameBody = document.getElementById("frameBody");
-  var frameNumber = document.getElementById("frameNumber");
+  var frameInput = document.getElementById("frameInput");
+  var framePrev = document.getElementById("framePrev");
+  var frameNext = document.getElementById("frameNext");
   var viewStartInput = document.getElementById("viewStart");
   var viewEndInput = document.getElementById("viewEnd");
   var applyWindowBtn = document.getElementById("applyWindow");
@@ -481,6 +483,7 @@
   }
 
   function showNoFrames() {
+    syncFrameNav(0);
     frameInfo.textContent = "no frames in this h5";
     frameBody.textContent = "no frames in this h5";
   }
@@ -494,11 +497,41 @@
     draw();
   }
 
+  function clampFrame(value) {
+    if (nFrames <= 0) return 0;
+    if (!isFinite(value)) return selectedFrame;
+    return Math.min(Math.max(Math.round(value), 0), nFrames - 1);
+  }
+
+  // 帧导航控件与矩阵列头选帧共用同一 selectedFrame，任何入口后同步四态
+  function syncFrameNav(frame) {
+    if (frameInput) frameInput.value = frame;
+    if (framePrev) framePrev.disabled = frame <= 0;
+    if (frameNext) frameNext.disabled = !nFrames || frame >= nFrames - 1;
+  }
+
+  function stepFrame(delta) {
+    var frame = selectedFrame + delta;
+    if (frame < 0 || frame >= nFrames) return;
+    loadFrame(frame);
+  }
+
+  function commitFrameInput() {
+    if (!frameInput) return;
+    var frame = clampFrame(parseInt(frameInput.value, 10));
+    if (frame === selectedFrame) {
+      frameInput.value = selectedFrame;
+      return;
+    }
+    loadFrame(frame);
+  }
+
   function loadFrame(frame, limit) {
     var seq = ++frameSeq;
+    frame = clampFrame(frame);
     selectedFrame = frame;
     if (slider) slider.value = frame;
-    if (frameNumber) frameNumber.textContent = frame;
+    syncFrameNav(frame);
     ensureWindow(frame);
     draw();
     frameInfo.textContent = "frame " + frame + " · loading…";
@@ -644,6 +677,27 @@
         loadFrame(parseInt(slider.value, 10));
       }, 80);
     });
+  }
+  if (framePrev) {
+    framePrev.addEventListener("click", function () { stepFrame(-1); });
+  }
+  if (frameNext) {
+    frameNext.addEventListener("click", function () { stepFrame(1); });
+  }
+  if (frameInput) {
+    frameInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitFrameInput();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        stepFrame(-1);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        stepFrame(1);
+      }
+    });
+    frameInput.addEventListener("blur", commitFrameInput);
   }
   window.addEventListener("resize", resize);
   resize();
