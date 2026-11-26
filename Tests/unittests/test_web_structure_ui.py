@@ -219,7 +219,7 @@ class TestNativeTrajectoryScript:
                       "isBinary: true", "frameIndex"):
             assert token in text, token
         call = _function_body(text, "loadTrajectoryOnce")
-        for token in ("MODEL_KIND", "coordinates-url", "TRAJECTORY_URL",
+        for token in ("MODEL_KIND", "coordinates-url", "trajectoryUrl(",
                       "trajectoryFormat()"):
             assert token in call, token
         assert 'MODEL_KIND = "model-data"' in text

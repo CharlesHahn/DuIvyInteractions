@@ -97,14 +97,18 @@ SECURITY_HEADERS = {
         "connect-src 'self'"),
 }
 # Mol* viewer bundle 在加载期使用 new Function；仅 3D 页需要 'unsafe-eval'。
+# Mol* 内置 WASM 以 base64 data: URL 经 fetch 载入 → connect-src 需放行 data:。
 STRUCTURE_CSP = (
     "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
     "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-    "connect-src 'self'")
+    "connect-src 'self' data:")
 # 静态资源必须每次使用前向服务器校验：/static/* 由 StaticFiles 提供 ETag 与
 # Last-Modified，未变更时回 304；若缺此头，浏览器启发式缓存会长期沿用旧 JS。
 STATIC_PREFIX = "/static/"
 STATIC_CACHE_CONTROL = "no-cache"
+# 拓扑/轨迹按当前会话的结构动态生成，响应不得进入浏览器或代理缓存：
+# 复用上一次会话的轨迹文件会让 Mol* 报 element count mismatch。
+SESSION_CACHE_CONTROL = "no-store"
 CACHE_CONTROL_HEADER = "Cache-Control"
 _AUTH_FAILURES: Dict[str, List[float]] = {}
 _AUTH_LOCK = threading.Lock()
@@ -115,7 +119,8 @@ def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
     """创建 FastAPI 应用（数据源状态 = 服务端内存，单用户）。"""
     manager = JobManager(root=root)
     state: Dict[str, Any] = {"sources": [], "batch_items": {}, "items": [],
-                             "structure": None, "jobs": manager}
+                             "structure": None, "structure_version": 0,
+                             "jobs": manager}
     app = FastAPI(title="DII Web", docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=_job_lifespan(manager))
     app.state.jobs = manager
@@ -648,7 +653,8 @@ def _register_structure_export(app: FastAPI, state: Dict[str, Any]) -> None:
     def api_structure_trajectory() -> Response:
         structure = _structure_or_400(state)
         return FileResponse(structure["trajectory"],
-                            media_type="application/octet-stream")
+                            media_type="application/octet-stream",
+                            headers=_session_cache_headers())
 
 
 def _register_structure_interactions(app: FastAPI,
@@ -680,7 +686,7 @@ def _register_run_api(app: FastAPI, state: Dict[str, Any]) -> None:
 
 def _select_structure(state: Dict[str, Any], root: str, topology: str,
                       trajectory: str) -> Response:
-    """打开并记录结构；两个路径先受 root 限制。"""
+    """打开并记录结构（会话版本号自增，供前端 URL 变体使用）。"""
     try:
         top_path = _structure_path(root, topology)
         traj_path = _structure_path(root, trajectory)
@@ -694,6 +700,8 @@ def _select_structure(state: Dict[str, Any], root: str, topology: str,
         "has_box": universe.dimensions is not None,
         "lock": threading.Lock(),
     }
+    state["structure_version"] = int(state.get("structure_version", 0)) + 1
+    structure["version"] = state["structure_version"]
     state["structure"] = structure
     return JSONResponse({"ok": True, "n_atoms": structure["n_atoms"],
                          "n_frames": structure["n_frames"],
@@ -713,6 +721,11 @@ def _structure_or_400(state: Dict[str, Any]) -> Dict[str, Any]:
     if not structure:
         raise HTTPException(status_code=400, detail=STRUCTURE_NOT_SELECTED)
     return structure
+
+
+def _session_cache_headers() -> Dict[str, str]:
+    """会话相关响应的缓存头（拓扑/轨迹共用）。"""
+    return {CACHE_CONTROL_HEADER: SESSION_CACHE_CONTROL}
 
 
 def _locked_topology(structure: Dict[str, Any], interaction: Interaction,
@@ -743,7 +756,8 @@ def _topology_response(state: Dict[str, Any], name: str,
     if failure:
         return failure
     return Response(_locked_topology(structure, interaction, idx),
-                    media_type="chemical/x-pdb")
+                    media_type="chemical/x-pdb",
+                    headers=_session_cache_headers())
 
 
 def _interactions_response(state: Dict[str, Any], name: str,
@@ -1111,6 +1125,7 @@ def _structure_context(state: Dict[str, Any], interaction: Interaction,
         "topology": structure["topology"] if structure else "",
         "trajectory": structure["trajectory"] if structure else "",
         "n_atoms": structure["n_atoms"] if structure else 0,
+        "structure_version": structure["version"] if structure else 0,
     }
 
 
