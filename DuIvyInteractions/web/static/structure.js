@@ -21,7 +21,6 @@
   var TOPOLOGY_URL = "/api/structure/topology";
   var TRAJECTORY_URL = "/api/structure/trajectory";
   var INTERACTIONS_URL = "/api/structure/interactions";
-  var CONTACT_URL = "/api/structure/contact";
   var SELECT_URL = "/api/structure/select";
   var PICK_ENDPOINT = "/api/pick";
   var PICK_BODY = "mode=file&kind=structure";
@@ -61,8 +60,7 @@
   var TAG_RESIDUE = "dii-residue-";
   var TAG_FOCUS = "dii-focus";
   var TAG_FOCUS_ITEM = "dii-focus-";
-  var TAG_CONTACT_A = "dii-contact-a";
-  var TAG_CONTACT_B = "dii-contact-b";
+  var TAG_MEASURE = "dii-measure-";
 
   var LEGEND_ATOM_LIMIT = 12;      /* 图例里最多列出的原子名个数，其余用 (+N) */
   var GROUP_ITEM_CLASS = "structure-group-item";
@@ -105,10 +103,9 @@
   var modelRef = null;          /* model-from-trajectory 的 ref（改帧用） */
   var data = null;              /* /api/structure/interactions 的 JSON */
   var frame = 0;
-  var measurement = null;       /* 当前唯一一条虚线测量 {selection, representation} */
-  var contactState = "";        /* 状态栏：contact: ok|failed */
+  var measurements = [];        /* 当前帧的虚线测量 [{selection, representation}] */
   var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
-  var contactSeq = 0;
+  var measureSeq = 0;
   var frameSeq = 0;             /* 已请求的换帧序号（滑块） */
   var appliedSeq = 0;           /* 已完成的换帧序号（轮询据此避让） */
   var failures = 0;
@@ -227,7 +224,6 @@
                  "trajectory loaded"];
     var residues = data && data.residues ? data.residues : [];
     if (residues.length) parts.push(residues.length + " groups");
-    if (contactState) parts.push("contact: " + contactState);
     if (focusPath) parts.push("focus: " + focusPath);
     if (failures) parts.push(failures + " warnings");
     return parts.join(" · ");
@@ -244,11 +240,6 @@
   function topologyUrl() {
     return TOPOLOGY_URL + "?type=" + encodeURIComponent(cfg.type) +
       "&idx=" + cfg.idx;
-  }
-
-  function contactUrl(value) {
-    return CONTACT_URL + "?type=" + encodeURIComponent(cfg.type) +
-      "&idx=" + cfg.idx + "&frame=" + value;
   }
 
   function fetchTopologyText() {
@@ -270,15 +261,6 @@
     }).catch(function (error) {
       noteFailure("interaction data failed", error);
       data = null;
-      return null;
-    });
-  }
-
-  function fetchContact(value) {
-    return fetch(contactUrl(value)).then(readJson).then(function (payload) {
-      return payload && payload.contact ? payload.contact : null;
-    }).catch(function (error) {
-      noteFailure("contact request failed", error);
       return null;
     });
   }
@@ -858,7 +840,7 @@
     return applyMolstarFrame(target)
       .then(function () {
         if (seq !== frameSeq) return null;
-        return updateContact(target);
+        return updateMeasurements(target);
       })
       .then(function () {
         if (seq === frameSeq) appliedSeq = seq;
@@ -872,63 +854,82 @@
     return !!values[value];
   }
 
-  function contactAt(value) {
-    if (data && data.contacts) {
-      return Promise.resolve(data.contacts[value] || null);
-    }
-    return fetchContact(value);
-  }
-
-  /* 先建新测量、成功后才删旧的：建失败时旧虚线保留，状态栏 contact: failed */
-  function updateContact(value) {
-    var seq = ++contactSeq;
-    if (!data || !activeAt(value)) return removeMeasurement();
-    return contactAt(value).then(function (contact) {
-      if (seq !== contactSeq || !contact) return null;
-      return buildContactMeasurement(contact);
-    }).then(function (next) {
+  /* 每条虚线连两个基团的几何中心：把"该基团全部原子"的 Loci 交给 addDistance，
+     Mol* 的 StructureSelectionsDistance3D 自己取包围球球心并测中心距 */
+  function updateMeasurements(value) {
+    var seq = ++measureSeq;
+    if (!data || !activeAt(value)) return replaceMeasurements([]);
+    return buildMeasurements().then(function (next) {
       if (!next) return null;
-      if (seq !== contactSeq) return dropMeasurement(next);
-      return installMeasurement(next);
+      if (seq !== measureSeq) return dropMeasurements(next);
+      return replaceMeasurements(next);
     }).catch(function (error) {
-      contactState = "failed";
-      noteFailure("contact overlay failed", error);
+      noteFailure("distance overlay failed", error);
     });
   }
 
-  function buildContactMeasurement(contact) {
-    var residues = data && data.residues ? data.residues : [];
-    var first = groupAtomExpression(residues[contact[0]], contact[1]);
-    var second = groupAtomExpression(residues[contact[2]], contact[3]);
-    if (!first || !second) return null;
-    return Promise.all([
-      buildScriptComponent(first, TAG_CONTACT_A, "contact a"),
-      buildScriptComponent(second, TAG_CONTACT_B, "contact b")
-    ]).then(function (results) {
-      var left = rootLociOf(componentStructure(results[0]));
-      var right = rootLociOf(componentStructure(results[1]));
-      if (!left || !right) {
-        contactState = "failed";
-        console.warn("[dii] contact overlay failed: no root loci", contact);
+  /* 先按组取 root Loci，再按相邻段画线（水桥 3 组 → 2 段） */
+  function buildMeasurements() {
+    var groups = data && data.residues ? data.residues : [];
+    var pairs = segmentPairs(groups.length);
+    if (!pairs.length) return Promise.resolve([]);
+    var loci = [];
+    var chain = Promise.resolve();
+    for (var i = 0; i < groups.length; i++) {
+      chain = chain.then(groupLociStep(groups, i, loci));
+    }
+    return chain.then(function () { return drawSegments(loci, pairs); });
+  }
+
+  function groupLociStep(groups, index, loci) {
+    return function () {
+      var residue = groups[index];
+      var expression = residue && residue.expression
+        ? String(residue.expression) : null;
+      if (!expression) return null;
+      return buildScriptComponent(expression, TAG_MEASURE + index,
+        "measure " + (index + 1)).then(function (result) {
+        loci[index] = rootLociOf(componentStructure(result));
         return null;
-      }
-      return addDistance(left, right, contactLabel(contact));
+      });
+    };
+  }
+
+  /* 相邻基团两两成段：2 组 → 1 段；水桥 3 组 → 2 段 */
+  function segmentPairs(count) {
+    var pairs = [];
+    for (var i = 0; i + 1 < count; i++) pairs.push([i, i + 1]);
+    return pairs;
+  }
+
+  function drawSegments(loci, pairs) {
+    var drawn = [];
+    var chain = Promise.resolve();
+    for (var i = 0; i < pairs.length; i++) {
+      chain = chain.then(segmentStep(loci, pairs[i], i, drawn));
+    }
+    return chain.then(function () {
+      return drawn.length ? drawn : null;
     });
   }
 
-  function groupAtomExpression(residue, position) {
-    var atoms = residue && residue.atoms ? residue.atoms : [];
-    if (!(position >= 0 && position < atoms.length)) return null;
-    return atoms[position].expression || null;
+  /* 只有第一段带 customText（= pair_label）；水桥第二段留给 Mol* 显示距离 */
+  function segmentStep(loci, pair, index, drawn) {
+    return function () {
+      var first = loci[pair[0]];
+      var second = loci[pair[1]];
+      if (!first || !second) return null;
+      var text = index === 0 ? pairLabel() : "";
+      return addDistance(first, second, text).then(function (result) {
+        if (result) drawn.push(result);
+        return null;
+      });
+    };
   }
 
-  function contactLabel(contact) {
-    var residues = data && data.residues ? data.residues : [];
-    var first = residues[contact[0]];
-    var second = residues[contact[2]];
-    var left = first && first.label ? first.label : "group " + contact[0];
-    var right = second && second.label ? second.label : "group " + contact[2];
-    return left + " ┄ " + right;
+  /* 与表格/CSV 完全一致的相互作用名，逐字使用（不做任何拼接） */
+  function pairLabel() {
+    return data && data.pair_label ? String(data.pair_label) : "";
   }
 
   function componentStructure(result) {
@@ -944,42 +945,33 @@
     var measurementManager = viewer.plugin.managers.structure.measurement;
     return Promise.resolve(measurementManager.addDistance(first, second,
       options)).then(function (result) {
-      if (!result) {
-        contactState = "failed";
-        console.warn("[dii] contact overlay failed: distance not created");
-        return null;
-      }
-      return result;
+      if (!result) console.warn("[dii] distance not created");
+      return result || null;
     }).catch(function (error) {
-      contactState = "failed";
       noteFailure("distance failed", error);
       return null;
     });
   }
 
-  function installMeasurement(next) {
-    return removeMeasurement().then(function () {
-      measurement = next;
-      contactState = "ok";
-      return next;
-    });
+  function replaceMeasurements(next) {
+    var stale = measurements;
+    measurements = next || [];
+    return deleteMeasurementCells(stale);
   }
 
-  function dropMeasurement(cells) {
+  function dropMeasurements(cells) {
     return deleteMeasurementCells(cells);
   }
 
-  function removeMeasurement() {
-    var current = measurement;
-    measurement = null;
-    return deleteMeasurementCells(current);
-  }
-
   function deleteMeasurementCells(cells) {
-    if (!cells || !ready) return Promise.resolve();
+    if (!cells || !cells.length || !ready) return Promise.resolve();
     var builder = viewer.plugin.state.data.build();
-    if (cells.selection) builder.delete(refOf(cells.selection));
-    if (cells.representation) builder.delete(refOf(cells.representation));
+    for (var i = 0; i < cells.length; i++) {
+      if (cells[i].selection) builder.delete(refOf(cells[i].selection));
+      if (cells[i].representation) {
+        builder.delete(refOf(cells[i].representation));
+      }
+    }
     return Promise.resolve(builder.commit({ canUndo: false }))
       .catch(function (error) {
         noteFailure("measurement cleanup failed", error);
@@ -995,7 +987,7 @@
     frame = index;
     highlightFrame(index);
     updateFrameLabel(index);
-    updateContact(index).then(function () {
+    updateMeasurements(index).then(function () {
       setStatus(statusText(), failures > 0);
     });
   }

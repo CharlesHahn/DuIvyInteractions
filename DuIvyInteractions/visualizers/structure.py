@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""3D 结构可视化纯函数层：打开拓扑/轨迹、导出拓扑 PDB、选择表达式、接触对。"""
+"""3D 结构可视化纯函数层：打开拓扑/轨迹、导出拓扑 PDB、选择表达式。"""
 
 import threading
 from collections import OrderedDict
@@ -7,11 +7,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import MDAnalysis as mda
 import numpy as np
-from MDAnalysis.lib.distances import calc_bonds
 
 STRUCTURE_CACHE_SIZE = 2
 SAMPLE_ATOMS = 5
-CONTACT_FRAME_LIMIT = 5000
 PDB_RESID_DIGITS = 4
 PDB_SERIAL_DIGITS = 5
 PDB_END = "END"
@@ -110,31 +108,6 @@ def interaction_expressions(interaction: Any, idx: int,
     return {"residues": residues}
 
 
-def frame_contacts(interaction: Any, idx: int, universe: "mda.Universe",
-                   limit: int = CONTACT_FRAME_LIMIT) -> Optional[List]:
-    """逐帧最近接触 [g1, a1, g2, a2]（无接触为 None）；超过 limit 帧返回 None。"""
-    n_frames = len(universe.trajectory)
-    if n_frames > limit:
-        return None
-    return [frame_contact(interaction, idx, universe, frame)
-            for frame in range(n_frames)]
-
-
-def frame_contact(interaction: Any, idx: int, universe: "mda.Universe",
-                  frame: int) -> Optional[List[int]]:
-    """单帧最近接触 [g1, a1, g2, a2]；该帧不活跃或无接触返回 None。"""
-    if not _frame_active(interaction, idx, universe, frame):
-        return None
-    universe.trajectory[frame]
-    groups = interaction.groups[idx]
-    contact = closest_contact(universe, groups[0].atom_indices,
-                              groups[-1].atom_indices)
-    if contact is None:
-        return None
-    return [0, _atom_position(groups[0], contact[0]),
-            len(groups) - 1, _atom_position(groups[-1], contact[1])]
-
-
 def _first_atom_elements(universe: "mda.Universe",
                          n_residues: int) -> List[str]:
     """每个残基首原子的元素（拓扑未提供元素列时全部为空串）。"""
@@ -214,24 +187,6 @@ def _residue_selector(residue: Any, chains: Dict[int, str]) -> str:
 def _is_water_residue(residue: Any) -> bool:
     """残基是否为水（resname 在 WATER_RESIDUES 内）。"""
     return str(residue.resname).strip().upper() in WATER_RESIDUES
-
-
-def _frame_active(interaction: Any, idx: int, universe: "mda.Universe",
-                  frame: int) -> bool:
-    """该帧在结构/轨迹范围内且该对相互作用存在。"""
-    if not 0 <= frame < len(universe.trajectory):
-        return False
-    if frame >= interaction.n_frames:
-        return False
-    return bool(interaction.existence[idx, frame])
-
-
-def _atom_position(group: Any, global_index: int) -> int:
-    """全局原子索引在 group.atoms 中的位置（缺失为 -1）。"""
-    for position, atom in enumerate(group.atoms):
-        if int(atom.atom_global_idx) == int(global_index):
-            return position
-    return -1
 
 
 def involves_water(interaction: Any, idx: int) -> bool:
@@ -379,22 +334,3 @@ def _atom_type(atom: Any) -> str:
         return str(atom.type)
     except (AttributeError, ValueError):
         return ""
-
-
-def closest_contact(universe: "mda.Universe",
-                    group1_atoms: Sequence[int],
-                    group2_atoms: Sequence[int]) -> Optional[Tuple[int, int]]:
-    """当前帧下两组原子的最近接触原子对（global idx），任一组为空返回 None。"""
-    first, second = list(group1_atoms), list(group2_atoms)
-    if not first or not second:
-        return None
-    coords1 = universe.atoms[first].positions
-    coords2 = universe.atoms[second].positions
-    best: Optional[Tuple[float, int, int]] = None
-    for row, coord in enumerate(coords1):
-        targets = np.broadcast_to(coord, coords2.shape)
-        distances = calc_bonds(targets, coords2, box=universe.dimensions)
-        column = int(distances.argmin())
-        if best is None or distances[column] < best[0]:
-            best = (float(distances[column]), row, column)
-    return int(first[best[1]]), int(second[best[2]])

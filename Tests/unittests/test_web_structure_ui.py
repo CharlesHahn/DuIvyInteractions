@@ -296,7 +296,7 @@ class TestNativeTrajectoryScript:
         to_root = _function_body(text, "toRootLoci")
         assert "rootStructure()" in to_root
         assert "Loci.remap(" in to_root
-        assert "rootLociOf(" in _function_body(text, "buildContactMeasurement")
+        assert "rootLociOf(" in _function_body(text, "groupLociStep")
         assert "rootLociOf(" in _function_body(text, "focusFromResidues")
         assert "wholeStructureLoci(componentStructure" not in text
 
@@ -309,18 +309,39 @@ class TestNativeTrajectoryScript:
         assert "tryCreateComponent(structureRef" in text
         assert "tryCreateComponentStatic(structureRef" in text
 
-    def test_contact_builds_new_measurement_before_removing_old(self):
+    def test_measurements_built_before_removing_old(self):
+        """先建新测量、成功后整批替换旧的（建失败时旧虚线保留）。"""
         text = _structure_js()
-        update = _function_body(text, "updateContact")
-        build_at = update.index("buildContactMeasurement(")
-        install_at = update.index("installMeasurement(")
-        assert build_at < install_at
-        assert "removeMeasurement()" in _function_body(text, "installMeasurement")
-        active_path = update[update.index("contactAt("):build_at]
-        assert "removeMeasurement" not in active_path
-        assert 'contactState = "failed"' in text
-        assert 'contactState = "ok"' in text
-        assert '"contact: " + contactState' in _function_body(text, "statusText")
+        update = _function_body(text, "updateMeasurements")
+        assert "if (!data || !activeAt(value)) return replaceMeasurements([]);" in update
+        build_at = update.index("return buildMeasurements(")
+        replace_at = update.index("return replaceMeasurements(next)")
+        assert build_at < replace_at
+        assert "dropMeasurements(next)" in update
+        replace = _function_body(text, "replaceMeasurements")
+        assert "deleteMeasurementCells(stale)" in replace
+        stale = _function_body(text, "deleteMeasurementCells")
+        assert "cells[i].selection" in stale and "cells[i].representation" in stale
+        assert "contactState" not in text
+        assert '"contact: "' not in _function_body(text, "statusText")
+
+    def test_measurements_use_group_centers_and_pair_label(self):
+        """虚线连基团几何中心（整组原子的 Loci），文字用后端 pair_label 逐字。"""
+        text = _structure_js()
+        assert "pair_label" in text
+        assert "addDistance" in text
+        center = _function_body(text, "groupLociStep")
+        assert "residue.expression" in center
+        assert "rootLociOf(" in center
+        step = _function_body(text, "segmentStep")
+        assert "addDistance(first, second, text)" in step
+        assert 'index === 0 ? pairLabel() : ""' in step
+        label = _function_body(text, "pairLabel")
+        assert "data.pair_label" in label
+        assert "customText" in _function_body(text, "addDistance")
+        pairs = _function_body(text, "segmentPairs")
+        assert "i + 1 < count" in pairs
+        assert "i, i + 1" in pairs
 
     def test_script_uses_expression_loci_and_sticks(self):
         text = _structure_js()
@@ -379,11 +400,13 @@ class TestNativeTrajectoryScript:
 
     def test_script_uses_backend_expression_payload(self):
         text = _structure_js()
-        for token in ("residues", "contacts", "/api/structure/interactions",
-                      "/api/structure/contact", "/api/structure/topology",
+        for token in ("residues", "/api/structure/interactions",
+                      "/api/structure/topology",
                       "/api/structure/trajectory", "existence"):
             assert token in text, token
-        assert "groupAtomExpression" in text
+        for token in ("api/structure/contact", "contacts", "fetchContact",
+                      "contactAt", "groupAtomExpression", "contactState"):
+            assert token not in text, token
         assert "EXPRESSION_LANGUAGE = \"pymol\"" in text
 
     def test_topology_request_carries_type_and_idx(self):

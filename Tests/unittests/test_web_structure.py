@@ -14,11 +14,11 @@ import numpy as np
 import pytest
 
 from DuIvyInteractions.core.datas import AtomData, Group, Interaction
-from DuIvyInteractions.io.h5 import save_interactions
+from DuIvyInteractions.io.h5 import load_interactions, save_interactions
+from DuIvyInteractions.visualizers import get_exporter
 from DuIvyInteractions.visualizers.structure import (
-    CONTACT_FRAME_LIMIT, SAMPLE_ATOMS, STRUCTURE_CACHE_SIZE, WATER_RESIDUES,
-    alignment_errors, closest_contact, contact_label, frame_contact,
-    frame_contacts, group_atoms, group_label, interaction_expressions,
+    SAMPLE_ATOMS, STRUCTURE_CACHE_SIZE, WATER_RESIDUES, alignment_errors,
+    contact_label, group_atoms, group_label, interaction_expressions,
     involves_water, load_universe, residue_chains, topology_pdb,
 )
 from DuIvyInteractions.web.picker import FILE_TYPES, pick_file
@@ -64,6 +64,7 @@ NUMBERED_ATOMS = [("CZ", (0.0, 0.0, 0.0), "C", "TYR", 51, "A"),
 D927_DIR = Path(__file__).resolve().parents[1] / "test_MD_case_amber"
 D927_TOPOLOGY = D927_DIR / "md.tpr"
 D927_TRAJECTORY = D927_DIR / "md1ns.xtc"
+H5_DATA_DIR = Path(__file__).resolve().parents[1] / "interaction_h5data"
 PDB_LINE_WIDTH = 78
 
 
@@ -156,19 +157,6 @@ def _single(interaction_type: str, groups) -> Interaction:
                        existence=existence,
                        metrics={"distance": np.full((1, 1), 3.0)},
                        times=np.zeros(1))
-
-
-def _framed(active) -> Interaction:
-    """多帧的单对相互作用（existence 按 active 序列）。"""
-    frames = len(active)
-    groups = [(_group(0, "H_donor", [_atom(0, "N1", "N"),
-                                     _atom(1, "H1", "H")]),
-               _group(1, "H_acceptor", [_atom(2, "O1", "O"),
-                                        _atom(3, "O2", "O")]))]
-    return Interaction(interaction_type="hydrogen_bond", groups=groups,
-                       existence=np.array([list(active)], dtype=bool),
-                       metrics={"distance": np.full((1, frames), 3.0)},
-                       times=np.zeros(frames))
 
 
 def _protein_interaction() -> Interaction:
@@ -409,9 +397,6 @@ class TestConstants:
         assert STRUCTURE_CACHE_SIZE == 2
         assert SAMPLE_ATOMS == 5
 
-    def test_contact_frame_limit(self):
-        assert CONTACT_FRAME_LIMIT == 5000
-
     def test_water_residue_constant_covers_common_names(self):
         assert {"SOL", "HOH", "WAT", "TIP3", "TIP4", "HO4", "HO5",
                 "H2O"} <= WATER_RESIDUES
@@ -477,24 +462,6 @@ class TestAlignmentErrors:
             metrics={"distance": np.full((1, 1), 3.0)},
             times=np.zeros(1))
         assert alignment_errors(universe, interaction) == []
-
-
-class TestClosestContact:
-
-    def test_returns_nearest_pair(self, universe):
-        assert closest_contact(universe, [0, 1], [2, 3]) == (1, 2)
-
-    def test_empty_group_returns_none(self, universe):
-        assert closest_contact(universe, [], [2, 3]) is None
-        assert closest_contact(universe, [0], []) is None
-
-    def test_uses_minimum_image(self, tmp_path):
-        atoms = [("A1", (9.5, 0.0, 0.0), "C"),
-                 ("B1", (0.5, 0.0, 0.0), "O"),
-                 ("C1", (5.0, 0.0, 0.0), "N")]
-        path = _write_pdb(tmp_path / "pbc.pdb", atoms)
-        universe = load_universe(str(path), str(path))
-        assert closest_contact(universe, [0], [1, 2]) == (0, 1)
 
 
 class TestTopologyPdb:
@@ -744,56 +711,6 @@ class TestInteractionExpressions:
                        for other_low, other_high in others)
 
 
-class TestFrameContacts:
-    """逐帧最近接触对 [g1, a1, g2, a2]。"""
-
-    def test_one_entry_per_frame(self, multi_universe):
-        rows = frame_contacts(_framed([True, False]), 0, multi_universe)
-        assert len(rows) == len(multi_universe.trajectory) == 2
-
-    def test_active_frame_matches_closest_contact(self, multi_universe):
-        interaction = _framed([True, False])
-        rows = frame_contacts(interaction, 0, multi_universe)
-        first, second = interaction.groups[0]
-        expected = closest_contact(multi_universe, first.atom_indices,
-                                   second.atom_indices)
-        assert rows[0] == [0, _position(first, expected[0]),
-                           1, _position(second, expected[1])]
-        contacts = [first.atoms[rows[0][1]], second.atoms[rows[0][3]]]
-        assert [atom.atom_name for atom in contacts] == [
-            multi_universe.atoms[index].name for index in expected]
-
-    def test_inactive_frame_is_none(self, multi_universe):
-        rows = frame_contacts(_framed([True, False]), 0, multi_universe)
-        assert rows[0] is not None and rows[1] is None
-
-    def test_over_limit_returns_none(self, multi_universe):
-        interaction = _framed([True, False])
-        assert frame_contacts(interaction, 0, multi_universe,
-                              limit=1) is None
-        assert frame_contacts(interaction, 0, multi_universe,
-                              limit=2) is not None
-
-    def test_single_frame_contact_uses_first_and_last_group(self, bridge_universe):
-        interaction = _water_bridge_interaction()
-        row = frame_contact(interaction, 0, bridge_universe, 0)
-        expected = closest_contact(bridge_universe, [2, 3], [4, 5])
-        assert row == [0, _position(interaction.groups[0][0], expected[0]),
-                       2, _position(interaction.groups[0][2], expected[1])]
-
-    def test_single_frame_out_of_range_is_none(self, universe):
-        assert frame_contact(_interaction(), 0, universe, 3) is None
-
-
-def _position(group, global_index: int) -> int:
-    """全局原子索引在 group.atoms 中的位置（测试侧独立实现）。"""
-    return [atom.atom_global_idx for atom in group.atoms].index(global_index)
-
-
-# ============================================================
-# 路由
-# ============================================================
-
 class TestStructureSelect:
 
     def test_select_reports_structure_size(self, client, pdb_file):
@@ -926,13 +843,13 @@ class TestInteractionsRoute:
         response = self._payload(numbered_client, numbered_pdb)
         assert response.status_code == 200
         data = response.json()
-        assert set(data) == {"n_frames", "existence", "pt_types", "residues",
-                             "contacts", "n_atoms"}
+        assert set(data) == {"pair_label", "n_frames", "existence",
+                             "pt_types", "residues", "n_atoms"}
+        assert "contacts" not in data
         assert data["pt_types"] == []
         assert data["n_frames"] == 1
         assert data["existence"] == [1]
         assert data["n_atoms"] == len(NUMBERED_ATOMS)
-        assert data["contacts"] == [[0, 0, 1, 0]]
 
     def test_payload_carries_expressions(self, numbered_client, numbered_pdb):
         data = self._payload(numbered_client, numbered_pdb).json()
@@ -966,41 +883,38 @@ class TestInteractionsRoute:
         assert response.json()["detail"] == "structure not selected"
 
 
-class TestContactRoute:
+class TestPairLabel:
+    """pair_label 必须与导出器给表格/CSV 的名字逐字一致。"""
 
-    def test_single_frame_contact(self, numbered_client, numbered_pdb):
+    def test_pair_label_matches_exporter_for_synthetic_pair(
+            self, numbered_client, numbered_pdb):
         _open_structure(numbered_client, numbered_pdb)
-        response = numbered_client.get(
-            "/api/structure/contact",
-            params={"type": "pi_stacking", "idx": 0, "frame": 0})
-        assert response.status_code == 200
-        assert response.json() == {"contact": [0, 0, 1, 0]}
+        data = numbered_client.get(
+            "/api/structure/interactions",
+            params={"type": "pi_stacking", "idx": 0}).json()
+        interaction = _numbered_interaction()
+        assert data["pair_label"] == get_exporter(
+            interaction).get_pair_label(interaction, 0)
 
-    def test_inactive_frame_returns_null(self, tmp_path, pdb_file):
-        directory = tmp_path / "inactive_contact"
-        directory.mkdir()
-        save_interactions([_interaction(active=False)],
-                          str(directory / "hydrogen_bond.h5"))
+    def test_pair_label_matches_exporter_for_real_h5(self):
         client = _client()
-        client.post("/select", data={"path": str(directory)})
-        _open_structure(client, pdb_file)
-        data = client.get("/api/structure/contact",
-                          params={"type": "hydrogen_bond", "idx": 0,
-                                  "frame": 0}).json()
-        assert data == {"contact": None}
+        client.post("/select", data={"path": str(H5_DATA_DIR)})
+        client.post("/api/structure/select",
+                    data={"topology": str(D927_TOPOLOGY),
+                          "trajectory": str(D927_TRAJECTORY)})
+        data = client.get("/api/structure/interactions",
+                          params={"type": "pi_stacking", "idx": 0}).json()
+        interaction = load_interactions(
+            str(H5_DATA_DIR / "pi_stacking.h5"))[0]
+        assert data["pair_label"] == get_exporter(
+            interaction).get_pair_label(interaction, 0)
 
-    def test_frame_out_of_range_returns_404(self, client, pdb_file):
-        _open_structure(client, pdb_file)
-        response = client.get("/api/structure/contact",
-                              params={"type": "hydrogen_bond", "idx": 0,
-                                      "frame": 5})
+    def test_contact_route_is_removed(self):
+        # 拼接旧路径，避免"旧路由已删除"的检索残留（代码里不应再出现该字面量）
+        removed_path = "/api/structure/" + "contact"
+        response = _client().get(removed_path,
+                                 params={"type": "pi_stacking", "idx": 0})
         assert response.status_code == 404
-
-    def test_without_selection_returns_400(self, client):
-        response = client.get("/api/structure/contact",
-                              params={"type": "hydrogen_bond", "idx": 0})
-        assert response.status_code == 400
-        assert response.json()["detail"] == "structure not selected"
 
 
 class TestStructurePage:

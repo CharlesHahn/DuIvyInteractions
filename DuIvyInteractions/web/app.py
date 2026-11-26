@@ -29,8 +29,7 @@ from ..visualizers import (
     pair_summary, pair_types, parse_datasource, string_stats, type_summary,
 )
 from ..visualizers.structure import (
-    alignment_errors, frame_contact, frame_contacts, interaction_expressions,
-    load_universe, topology_pdb,
+    alignment_errors, interaction_expressions, load_universe, topology_pdb,
 )
 from .fsbrowse import (
     BYTES_PER_KB, H5_SUFFIX, LIST_LIMIT, SIZE_DECIMALS, confine,
@@ -329,7 +328,7 @@ def _register_api(app: FastAPI, state: Dict[str, Any],
     _register_pick_api(app, browse_mode)
     _register_structure_select(app, state, root)
     _register_structure_export(app, state)
-    _register_structure_contacts(app, state)
+    _register_structure_interactions(app, state)
 
 
 def _register_matrix_api(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -506,18 +505,14 @@ def _register_structure_export(app: FastAPI, state: Dict[str, Any]) -> None:
                             media_type="application/octet-stream")
 
 
-def _register_structure_contacts(app: FastAPI, state: Dict[str, Any]) -> None:
-    """选择表达式与逐帧接触对。"""
+def _register_structure_interactions(app: FastAPI,
+                                     state: Dict[str, Any]) -> None:
+    """相互作用元信息（pair_label/pt_types/选择表达式）。"""
 
     @app.get("/api/structure/interactions", response_model=None)
     def api_structure_interactions(type: str = "",
                                    idx: int = 0) -> Response:
         return _interactions_response(state, type, idx)
-
-    @app.get("/api/structure/contact", response_model=None)
-    def api_structure_contact(type: str = "", idx: int = 0,
-                              frame: int = 0) -> Response:
-        return _contact_response(state, type, idx, frame)
 
 
 def _select_structure(state: Dict[str, Any], root: str, topology: str,
@@ -564,20 +559,6 @@ def _locked_topology(structure: Dict[str, Any], interaction: Interaction,
         return topology_pdb(structure["universe"], interaction, idx)
 
 
-def _locked_contacts(structure: Dict[str, Any], interaction: Interaction,
-                     idx: int) -> Optional[List]:
-    """加锁逐帧计算接触对（超过 CONTACT_FRAME_LIMIT 时为 None）。"""
-    with structure["lock"]:
-        return frame_contacts(interaction, idx, structure["universe"])
-
-
-def _locked_contact(structure: Dict[str, Any], interaction: Interaction,
-                    idx: int, frame: int) -> Optional[List[int]]:
-    """加锁计算单帧接触对。"""
-    with structure["lock"]:
-        return frame_contact(interaction, idx, structure["universe"], frame)
-
-
 def _alignment_failure(structure: Dict[str, Any],
                        interaction: Interaction) -> Optional[JSONResponse]:
     """h5 与结构不一致时的 400 响应（一致为 None）。"""
@@ -615,29 +596,17 @@ def _interactions_response(state: Dict[str, Any], name: str,
 
 def _interactions_payload(structure: Dict[str, Any], interaction: Interaction,
                           idx: int) -> Dict[str, Any]:
-    """该对的帧数/存在性/选择表达式/逐帧接触对/原子数。"""
+    """该对的标签/帧数/存在性/键型/选择表达式/原子数。"""
     return {
+        "pair_label": get_exporter(interaction).get_pair_label(interaction,
+                                                               idx),
         "n_frames": structure["n_frames"],
         "existence": [int(value) for value in interaction.existence[idx]],
         "pt_types": pair_types(interaction, idx),
         "residues": interaction_expressions(
             interaction, idx, structure["universe"])["residues"],
-        "contacts": _locked_contacts(structure, interaction, idx),
         "n_atoms": structure["n_atoms"],
     }
-
-
-def _contact_response(state: Dict[str, Any], name: str, idx: int,
-                      frame: int) -> Response:
-    """单帧接触对（一致性/帧号校验；越界 → 400/404）。"""
-    structure = _structure_or_400(state)
-    interaction = _pair_interaction(state, name, idx)
-    failure = _alignment_failure(structure, interaction)
-    if failure:
-        return failure
-    _check_frame(structure, interaction, frame)
-    contact = _locked_contact(structure, interaction, idx, frame)
-    return JSONResponse({"contact": contact})
 
 
 def _pair_interaction(state: Dict[str, Any], name: str,
@@ -648,14 +617,6 @@ def _pair_interaction(state: Dict[str, Any], name: str,
         raise HTTPException(status_code=404,
                             detail=f"pair index out of range: {idx}")
     return interaction
-
-
-def _check_frame(structure: Dict[str, Any], interaction: Interaction,
-                 frame: int) -> None:
-    """帧号在该结构与 interaction 的帧数范围内（越界 → 404）。"""
-    if not 0 <= frame < structure["n_frames"] or frame >= interaction.n_frames:
-        raise HTTPException(status_code=404,
-                            detail=f"frame out of range: {frame}")
 
 
 SORT_FIELDS = ("occupancy", "label", "index")
