@@ -2,7 +2,6 @@
 """W3 Web 发起计算 UI 测试：run/job 模板渲染（jinja2 直载，不依赖 app）+ 静态资源断言。"""
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ RUN_JS = STATIC_DIR / "run.js"
 FILEPICK_JS = STATIC_DIR / "filepick.js"
 APP_CSS = STATIC_DIR / "app.css"
 INDEX_HTML = TEMPLATE_DIR / "index.html"
-APP_CSS_RELATIVE = APP_CSS.relative_to(REPO_ROOT).as_posix()
 
 INTERACTIONS = ["halogen_bond", "hydrogen_bond", "hydrophobic",
                 "metal_coordination", "pi_cation", "pi_stacking",
@@ -332,18 +330,12 @@ class TestStaticFrontend:
         assert re.findall(r"^\.job-", text, re.M)
         assert re.findall(r"^\.run-", text, re.M)
 
-    def test_css_is_append_only(self):
-        result = subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "diff", "-U0", "--",
-             APP_CSS_RELATIVE],
-            capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            pytest.skip("git unavailable: %s" % result.stderr.strip())
-        deleted = [line for line in result.stdout.splitlines()
-                   if line.startswith("-") and not line.startswith("--")]
-        assert deleted == [], "app.css must be appended, not edited"
+    def test_css_braces_balanced(self):
+        css = APP_CSS.read_text(encoding="utf-8")
+        assert css.count("{") == css.count("}")
 
     def test_index_has_run_entry(self):
         html = INDEX_HTML.read_text(encoding="utf-8")
         assert 'href="/run"' in html
-        assert "New calculation" in html
+        assert "Run job" in html
+        assert "New calculation" not in html

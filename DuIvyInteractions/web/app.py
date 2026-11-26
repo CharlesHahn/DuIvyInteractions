@@ -30,7 +30,9 @@ from ..visualizers import (
     matrix_view, metric_stats, overview, pair_drilldown, pair_frames,
     pair_summary, pair_types, parse_datasource, string_stats, type_summary,
 )
-from ..visualizers.data import merge_batches
+# 聚合表首屏与 /api/rows 复用同一行组装/单位函数，避免两套格式化逻辑漂移。
+from ..visualizers.data import (
+    TABLE_PAGE_SIZE, _columns, _table_rows, _units, merge_batches)
 from ..visualizers.structure import (
     alignment_errors, interaction_expressions, load_universe, topology_pdb,
 )
@@ -47,6 +49,11 @@ from .picker import pick_directory, pick_file
 _WEB_DIR = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 FRAME_LIMIT_MAX = 2000  # 帧检查器单次最多返回的活跃对数
+ROWS_LIMIT_MIN = 1      # /api/rows 单次最少返回行数
+ROWS_LIMIT_MAX = 200    # /api/rows 单次最多返回行数
+ROWS_OFFSET_MIN = 0     # /api/rows 起始行号下限
+ROWS_DEFAULT_LIMIT = TABLE_PAGE_SIZE  # 首屏与聚合表分页大小一致
+CELL_DASH = "—"         # 聚合表空值占位（与页面渲染一致）
 TOKEN_COOKIE = "dii_token"
 SERVER_BROWSE_HINT = ("native picker unavailable on this host; "
                       "use the server folder browser")
@@ -75,6 +82,9 @@ RUN_LOG_LINES = 300  # 任务页最多展示的日志尾部行数
 ELAPSED_DECIMALS = 1  # 页面/JSON 中秒数保留的小数位
 JOB_NOT_FOUND = "job not found"
 CANNOT_CANCEL = "job is not running"
+PAIR_VIEW_CURVES = "curves"
+PAIR_VIEW_3D = "3d"
+PAIR_VIEWS = (PAIR_VIEW_CURVES, PAIR_VIEW_3D)
 # base.html / index.html 存在内联脚本且不在本次授权范围内，故允许 inline
 # script；若将来把内联脚本外置，可收紧为 script-src 'self'。
 SECURITY_HEADERS = {
@@ -87,10 +97,19 @@ SECURITY_HEADERS = {
         "connect-src 'self'"),
 }
 # Mol* viewer bundle 在加载期使用 new Function；仅 3D 页需要 'unsafe-eval'。
+# Mol* 内置 WASM 以 base64 data: URL 经 fetch 载入 → connect-src 需放行 data:。
 STRUCTURE_CSP = (
     "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
     "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-    "connect-src 'self'")
+    "connect-src 'self' data:")
+# 静态资源必须每次使用前向服务器校验：/static/* 由 StaticFiles 提供 ETag 与
+# Last-Modified，未变更时回 304；若缺此头，浏览器启发式缓存会长期沿用旧 JS。
+STATIC_PREFIX = "/static/"
+STATIC_CACHE_CONTROL = "no-cache"
+# 拓扑/轨迹按当前会话的结构动态生成，响应不得进入浏览器或代理缓存：
+# 复用上一次会话的轨迹文件会让 Mol* 报 element count mismatch。
+SESSION_CACHE_CONTROL = "no-store"
+CACHE_CONTROL_HEADER = "Cache-Control"
 _AUTH_FAILURES: Dict[str, List[float]] = {}
 _AUTH_LOCK = threading.Lock()
 
@@ -100,7 +119,8 @@ def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
     """创建 FastAPI 应用（数据源状态 = 服务端内存，单用户）。"""
     manager = JobManager(root=root)
     state: Dict[str, Any] = {"sources": [], "batch_items": {}, "items": [],
-                             "structure": None, "jobs": manager}
+                             "structure": None, "structure_version": 0,
+                             "jobs": manager}
     app = FastAPI(title="DII Web", docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=_job_lifespan(manager))
     app.state.jobs = manager
@@ -162,13 +182,16 @@ def _install_host_guard(app: FastAPI, allowed_hosts: List[str]) -> None:
 
 
 def _install_security_headers(app: FastAPI) -> None:
-    """安装安全响应头中间件（不覆盖响应已有的同名头）。"""
+    """安装安全响应头中间件（不覆盖响应已有的同名头）；/static/ 追加缓存校验头。"""
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Callable) -> Response:
         response = await call_next(request)
         for name, value in SECURITY_HEADERS.items():
             response.headers.setdefault(name, value)
+        if request.url.path.startswith(STATIC_PREFIX):
+            response.headers.setdefault(CACHE_CONTROL_HEADER,
+                                        STATIC_CACHE_CONTROL)
         return response
 
 
@@ -241,8 +264,8 @@ def _register_pages(app: FastAPI, state: Dict[str, Any], browse_mode: str,
                     root: str) -> None:
     """页面路由 + HTML 错误页。"""
     _register_home(app, state, browse_mode, root)
-    _register_detail(app, state)
-    _register_structure_page(app, state, browse_mode)
+    _register_detail(app, state, browse_mode)
+    _register_structure_page(app, state)
     _register_run_page(app, state, browse_mode, root)
     _register_error_page(app, state)
 
@@ -272,30 +295,36 @@ def _register_home(app: FastAPI, state: Dict[str, Any], browse_mode: str,
         return await run_in_threadpool(_clear_batches, state)
 
 
-def _register_detail(app: FastAPI, state: Dict[str, Any]) -> None:
-    """类型页与单对下钻页。"""
+def _register_detail(app: FastAPI, state: Dict[str, Any],
+                     browse_mode: str) -> None:
+    """类型页与单对下钻页（含 3D 视图开关）。"""
 
     @app.get("/type/{name}", response_class=HTMLResponse)
     def type_page(request: Request, name: str, search: str = "",
                   min_occupancy: str = "0", sort_by: str = "occupancy",
-                  sort_dir: str = "desc", page: int = 1) -> Response:
+                  sort_dir: str = "desc", page: int = 1,
+                  frame: int = 0) -> Response:
         sort_by, sort_dir = _parse_sort(sort_by, sort_dir)
         return _render_type(request, state, name, search,
                             _parse_occupancy(min_occupancy), sort_by,
-                            sort_dir, page)
+                            sort_dir, page, frame)
 
     @app.get("/pair/{name}/{idx}", response_class=HTMLResponse)
-    def pair_page(request: Request, name: str, idx: int) -> Response:
-        return _render_pair(request, state, name, idx)
+    def pair_page(request: Request, name: str, idx: int,
+                  view: str = PAIR_VIEW_CURVES,
+                  frame: int = 0) -> Response:
+        return _render_pair(request, state, name, idx, view, frame,
+                            browse_mode)
 
 
-def _register_structure_page(app: FastAPI, state: Dict[str, Any],
-                             browse_mode: str) -> None:
-    """3D 结构页（Mol* viewer + 帧滑块）。"""
+def _register_structure_page(app: FastAPI, state: Dict[str, Any]) -> None:
+    """旧 3D 独立页 → 单对页 3D 视图（302，保留调用方帧号）。"""
 
     @app.get("/structure/{name}/{idx}", response_class=HTMLResponse)
-    def structure_page(request: Request, name: str, idx: int) -> Response:
-        return _render_structure(request, state, name, idx, browse_mode)
+    def structure_page(request: Request, name: str, idx: int,
+                       frame: int = 0) -> Response:
+        requested = frame if "frame" in request.query_params else None
+        return _structure_redirect(name, idx, requested)
 
 
 def _register_run_page(app: FastAPI, state: Dict[str, Any], browse_mode: str,
@@ -376,6 +405,7 @@ def _register_api(app: FastAPI, state: Dict[str, Any],
                   browse_mode: str, root: str) -> None:
     """JSON 数据接口。"""
     _register_matrix_api(app, state)
+    _register_rows_api(app, state)
     _register_cell_api(app, state)
     _register_pair_api(app, state)
     _register_csv_api(app, state)
@@ -398,6 +428,71 @@ def _register_matrix_api(app: FastAPI, state: Dict[str, Any]) -> None:
         return _guard(lambda: matrix_view(
             _get_interaction(state, name), search,
             _clamp_occupancy(min_occupancy), sort_by, sort_dir))
+
+
+def _register_rows_api(app: FastAPI, state: Dict[str, Any]) -> None:
+    """聚合表行窗口接口（前端 load more 按需取数，不整页刷新）。"""
+
+    @app.get("/api/rows/{name}", response_model=None)
+    def api_rows(name: str, search: str = "", min_occupancy: str = "0",
+                 sort_by: str = "occupancy", sort_dir: str = "desc",
+                 offset: str = "", limit: str = "") -> Dict[str, Any]:
+        sort_by, sort_dir = _parse_sort(sort_by, sort_dir)
+        interaction = _get_interaction(state, name)
+        return _guard(lambda: _rows_view(
+            interaction, search, _parse_occupancy(min_occupancy), sort_by,
+            sort_dir, _parse_int(offset, ROWS_OFFSET_MIN),
+            _parse_int(limit, ROWS_DEFAULT_LIMIT)))
+
+
+def _rows_view(interaction: Interaction, search: str, min_occupancy: float,
+               sort_by: str, sort_dir: str, offset: int,
+               limit: int) -> Dict[str, Any]:
+    """聚合表行窗口：与 /type 聚合表共用行组装与单元格格式化。"""
+    rows = _table_rows(interaction, search, sort_by, sort_dir, min_occupancy)
+    offset, limit = _clamp_rows_window(offset, limit)
+    columns = _columns(interaction)
+    return {"offset": offset, "limit": limit, "total": len(rows),
+            "columns": columns, "units": _units(interaction),
+            "rows": [_rows_entry(row, columns)
+                     for row in rows[offset:offset + limit]]}
+
+
+def _clamp_rows_window(offset: int, limit: int) -> Tuple[int, int]:
+    """行窗口钳制：offset 不为负，limit 落在 [ROWS_LIMIT_MIN, ROWS_LIMIT_MAX]。"""
+    return (max(offset, ROWS_OFFSET_MIN),
+            min(max(limit, ROWS_LIMIT_MIN), ROWS_LIMIT_MAX))
+
+
+def _parse_int(raw: str, default: int) -> int:
+    """整数查询参数：空/非法值回落 default（随后由行窗口钳制）。"""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _rows_entry(row: Dict[str, Any], columns: List[str]) -> Dict[str, Any]:
+    """单个 pair 的行窗口条目（values 与 columns 逐列对齐）。"""
+    return {"idx": row["index"], "label": row["pair_label"],
+            "values": [_cell_text(column, row[column]) for column in columns]}
+
+
+def _attach_display_cells(table: Dict[str, Any]) -> Dict[str, Any]:
+    """给聚合表首屏行补显示文本（与 /api/rows 使用同一格式化）。"""
+    table["cells"] = [[_cell_text(column, row[column])
+                       for column in table["columns"]]
+                      for row in table["rows"]]
+    return table
+
+
+def _cell_text(column: str, value: Any) -> str:
+    """聚合表单元格文本：占有率/flags 百分比，avg/std 保留三位小数。"""
+    if column == "occupancy" or column.startswith("flag_"):
+        return CELL_DASH if value == "" else f"{float(value) * 100:.1f}%"
+    if column.startswith("avg_") or column.startswith("std_"):
+        return CELL_DASH if value == "" else f"{float(value):.3f}"
+    return "" if value is None else str(value)
 
 
 def _register_cell_api(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -558,7 +653,8 @@ def _register_structure_export(app: FastAPI, state: Dict[str, Any]) -> None:
     def api_structure_trajectory() -> Response:
         structure = _structure_or_400(state)
         return FileResponse(structure["trajectory"],
-                            media_type="application/octet-stream")
+                            media_type="application/octet-stream",
+                            headers=_session_cache_headers())
 
 
 def _register_structure_interactions(app: FastAPI,
@@ -590,7 +686,7 @@ def _register_run_api(app: FastAPI, state: Dict[str, Any]) -> None:
 
 def _select_structure(state: Dict[str, Any], root: str, topology: str,
                       trajectory: str) -> Response:
-    """打开并记录结构；两个路径先受 root 限制。"""
+    """打开并记录结构（会话版本号自增，供前端 URL 变体使用）。"""
     try:
         top_path = _structure_path(root, topology)
         traj_path = _structure_path(root, trajectory)
@@ -604,6 +700,8 @@ def _select_structure(state: Dict[str, Any], root: str, topology: str,
         "has_box": universe.dimensions is not None,
         "lock": threading.Lock(),
     }
+    state["structure_version"] = int(state.get("structure_version", 0)) + 1
+    structure["version"] = state["structure_version"]
     state["structure"] = structure
     return JSONResponse({"ok": True, "n_atoms": structure["n_atoms"],
                          "n_frames": structure["n_frames"],
@@ -623,6 +721,11 @@ def _structure_or_400(state: Dict[str, Any]) -> Dict[str, Any]:
     if not structure:
         raise HTTPException(status_code=400, detail=STRUCTURE_NOT_SELECTED)
     return structure
+
+
+def _session_cache_headers() -> Dict[str, str]:
+    """会话相关响应的缓存头（拓扑/轨迹共用）。"""
+    return {CACHE_CONTROL_HEADER: SESSION_CACHE_CONTROL}
 
 
 def _locked_topology(structure: Dict[str, Any], interaction: Interaction,
@@ -653,7 +756,8 @@ def _topology_response(state: Dict[str, Any], name: str,
     if failure:
         return failure
     return Response(_locked_topology(structure, interaction, idx),
-                    media_type="chemical/x-pdb")
+                    media_type="chemical/x-pdb",
+                    headers=_session_cache_headers())
 
 
 def _interactions_response(state: Dict[str, Any], name: str,
@@ -714,6 +818,27 @@ def _parse_occupancy(raw: str) -> float:
         return _clamp_occupancy(float(raw))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _pair_view(raw: str) -> str:
+    """单对页视图白名单：curves / 3d；其它值回落 curves（页面不 422）。"""
+    return raw if raw in PAIR_VIEWS else PAIR_VIEW_CURVES
+
+
+def _structure_redirect(name: str, idx: int,
+                        frame: Optional[int]) -> RedirectResponse:
+    """旧 3D 独立页跳到单对页 3D 视图；调用方给了帧号则原样保留。"""
+    url = f"/pair/{quote(name, safe='')}/{idx}?view={PAIR_VIEW_3D}"
+    if frame is not None:
+        url += f"&frame={frame}"
+    return RedirectResponse(url, status_code=302)
+
+
+def _clamp_frame(frame: int, n_frames: int) -> int:
+    """把请求帧号钳制到 [0, n_frames-1]；无帧时恒为 0。"""
+    if n_frames <= 0:
+        return 0
+    return min(max(frame, 0), n_frames - 1)
 
 
 def _guard(call: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
@@ -842,11 +967,39 @@ def _source(state: Dict[str, Any]
     return (paths[0] if len(paths) == 1 else " + ".join(paths)), state["items"]
 
 
+def _batch_chunks(
+        state: Dict[str, Any]
+) -> List[Tuple[Dict[str, Any], List[Tuple[str, str, Interaction]]]]:
+    """按批次切分合并 items（merge_batches 保持批次顺序与条数）。"""
+    merged = state.get("items") or []
+    chunks: List[Tuple[Dict[str, Any], List[Tuple[str, str, Interaction]]]] = []
+    offset = 0
+    for source in state["sources"]:
+        size = len(state["batch_items"][source["path"]])
+        chunks.append((source, merged[offset:offset + size]))
+        offset += size
+    return chunks
+
+
+def _type_entry(name: str, interaction: Interaction) -> Dict[str, Any]:
+    """侧栏类型条目：唯一链接名、基础类型名与对数。"""
+    return {"name": name, "base": interaction.interaction_type,
+            "n_pairs": interaction.n_pairs}
+
+
 def _batch_summaries(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """导航用批次摘要：路径、名称与该批次的类型条数。"""
+    """导航用批次摘要：路径、名称、类型条数与类型明细。"""
     return [{"path": source["path"], "name": source["name"],
-             "n_types": len(state["batch_items"][source["path"]])}
-            for source in state["sources"]]
+             "n_types": len(chunk),
+             "types": [_type_entry(name, it) for name, _, it in chunk]}
+            for source, chunk in _batch_chunks(state)]
+
+
+def _batch_groups(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """总览分组：每个批次一张区块，卡片取该批次的合并 items。"""
+    return [{"path": source["path"], "name": source["name"],
+             "n_types": len(chunk), "cards": overview(chunk)}
+            for source, chunk in _batch_chunks(state)]
 
 
 def _ds_name(batches: Sequence[Dict[str, Any]]) -> str:
@@ -884,52 +1037,72 @@ def _find_interaction(items: Any, name: str) -> Tuple[str, Interaction]:
 
 def _render_index(request: Request, state: Dict[str, Any], error: str,
                   warn: str, browse_mode: str) -> HTMLResponse:
-    """总览页：唯一数据源入口 + 类型卡片。"""
+    """总览页：按数据集分组的类型卡片；无数据时只展示两个入口。"""
     path, items = _source(state)
     return TEMPLATES.TemplateResponse(request, "index.html", {
         "title": "overview", "cards": overview(items),
-        "recent": load_recent(), "error": error, "warning": warn,
-        "browse_mode": browse_mode,
+        "groups": _batch_groups(state), "recent": load_recent(),
+        "error": error, "warning": warn, "browse_mode": browse_mode,
+        "add": bool(request.query_params.get("add")),
+        "add_path": request.query_params.get("path", ""),
         **_nav_source(path, items, batches=_batch_summaries(state)),
     })
 
 
 def _render_type(request: Request, state: Dict[str, Any], name: str, search: str,
                  min_occupancy: float, sort_by: str, sort_dir: str,
-                 page: int) -> HTMLResponse:
+                 page: int, frame: int) -> HTMLResponse:
     """类型页：元数据 + 分布 + pairs × frames 矩阵 + 帧检查器 + 聚合表。"""
     path, items = _source(state)
     h5_path, it = _find_interaction(items, name)
     clamped = _clamp_occupancy(min_occupancy)
-    table = aggregate_table(it, search, sort_by, sort_dir, page, clamped)
+    table = _attach_display_cells(
+        aggregate_table(it, search, sort_by, sort_dir, page, clamped))
     return TEMPLATES.TemplateResponse(request, "type.html", {
         "title": name, "type": name, "search": search,
         "min_occupancy": clamped,
         "sort_by": sort_by, "sort_dir": sort_dir,
         "n_pairs": it.n_pairs, "n_frames": it.n_frames,
+        "frame": _clamp_frame(frame, it.n_frames),
         "meta": interaction_meta(it, h5_path),
         "stats": metric_stats(it), "string_stats": string_stats(it),
         "activity": frame_activity(it), "table": table,
+        "rows_limit": ROWS_DEFAULT_LIMIT,
+        "rows_offset": (table["page"] - 1) * TABLE_PAGE_SIZE,
         **_nav_source(path, items, name, _batch_summaries(state)),
     })
 
 
 def _render_pair(request: Request, state: Dict[str, Any], name: str,
-                 idx: int) -> HTMLResponse:
-    """下钻页：基团元信息 + existence/指标对齐图 + 逐帧明细。"""
+                 idx: int, view: str = PAIR_VIEW_CURVES, frame: int = 0,
+                 browse_mode: str = "picker") -> HTMLResponse:
+    """下钻页：基团元信息 + existence/指标对齐图 + 逐帧明细；
+
+    view=3d 时同一页面改为 3D 区块（与 curves 视图共享帧号）。
+    """
     path, items = _source(state)
     _, it = _find_interaction(items, name)
     if not 0 <= idx < it.n_pairs:
         raise HTTPException(status_code=404, detail=f"pair index out of range: {idx}")
+    view = _pair_view(view)
     data = pair_drilldown(it, idx)
-    return TEMPLATES.TemplateResponse(request, "pair.html", {
+    context: Dict[str, Any] = {
         "title": data["pair_label"], "type": name, "idx": idx,
         "n_pairs": it.n_pairs, "n_frames": it.n_frames,
         "pair_label": data["pair_label"], "meta": data["groups"],
         "summary": pair_summary(it, idx), "downsampled": data["downsampled"],
         "flags": sorted(it.flags), "figure": fig_pair(data),
+        "view": view, "frame": _clamp_frame(frame, it.n_frames),
+        "browse_mode": browse_mode,
         **_nav_source(path, items, name, _batch_summaries(state)),
-    })
+    }
+    if view == PAIR_VIEW_3D:
+        context.update(_structure_context(state, it, idx))
+        context["frame"] = _clamp_frame(context["frame"], context["n_frames"])
+    response = TEMPLATES.TemplateResponse(request, "pair.html", context)
+    if view == PAIR_VIEW_3D:
+        response.headers["Content-Security-Policy"] = STRUCTURE_CSP
+    return response
 
 
 def _get_interaction(state: Dict[str, Any], name: str) -> Interaction:
@@ -937,17 +1110,11 @@ def _get_interaction(state: Dict[str, Any], name: str) -> Interaction:
     return _find_interaction(_source(state)[1], name)[1]
 
 
-def _render_structure(request: Request, state: Dict[str, Any], name: str,
-                      idx: int, browse_mode: str) -> HTMLResponse:
-    """3D 结构页：pair 信息 + 当前结构状态 + existence 条 + 浏览方式。"""
-    path, items = _source(state)
-    _, interaction = _find_interaction(items, name)
-    if not 0 <= idx < interaction.n_pairs:
-        raise HTTPException(status_code=404,
-                            detail=f"pair index out of range: {idx}")
+def _structure_context(state: Dict[str, Any], interaction: Interaction,
+                       idx: int) -> Dict[str, Any]:
+    """3D 视图上下文：结构状态 + existence 条 + 基团标签（pair/旧页共用）。"""
     structure = state.get("structure")
-    response = TEMPLATES.TemplateResponse(request, "structure.html", {
-        "title": "structure", "type": name, "idx": idx,
+    return {
         "n_frames": structure["n_frames"] if structure
         else interaction.n_frames,
         "has_structure": structure is not None,
@@ -958,11 +1125,8 @@ def _render_structure(request: Request, state: Dict[str, Any], name: str,
         "topology": structure["topology"] if structure else "",
         "trajectory": structure["trajectory"] if structure else "",
         "n_atoms": structure["n_atoms"] if structure else 0,
-        "browse_mode": browse_mode,
-        **_nav_source(path, items, name, _batch_summaries(state)),
-    })
-    response.headers["Content-Security-Policy"] = STRUCTURE_CSP
-    return response
+        "structure_version": structure["version"] if structure else 0,
+    }
 
 
 def _render_run(request: Request, state: Dict[str, Any], browse_mode: str,

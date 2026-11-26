@@ -3,70 +3,57 @@
 {% block main %}
 {% if error %}<div class="banner">{{ error }}</div>{% endif %}
 {% if warning %}<div class="banner">{{ warning }}</div>{% endif %}
-<p class="run-entry"><a class="btn btn-sm" href="/run">New calculation</a></p>
-{% if not cards %}
-<section class="hero">
-  <div class="hero-icon">
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-    </svg>
-  </div>
-  <h1>Open interaction results</h1>
-  <p>Point at the output folder of <code>dii run</code>, or at one single <code>.h5</code> file.</p>
+{% if add or groups or cards %}
+<details class="panel add-panel"{% if add %} open{% endif %}>
+  <summary>load results</summary>
   <form class="source-form" method="post" action="/select">
-    <input type="text" name="path" placeholder="C:\path\to\out  or  out\hydrogen_bond.h5" required>
-    <button class="btn btn-primary btn-lg">Open</button>
+    <input type="text" name="path" value="{{ add_path }}" placeholder="C:\path\to\out  or  out\hydrogen_bond.h5" required>
+    <button class="btn btn-primary">Open</button>
     {% if browse_server %}
-    <button type="button" class="btn btn-lg" id="browseBtn">Browse server folders…</button>
+    <button type="button" class="btn" id="browseBtn">Browse server folders…</button>
     {% else %}
-    <button type="button" class="btn btn-lg" id="browseBtn">Browse…</button>
+    <button type="button" class="btn" id="browseBtn">Browse…</button>
     {% endif %}
   </form>
   <p class="hint">Browse selects a folder (every <code>*.h5</code> inside is loaded); a single file can be typed. Server browsing is limited to the start-up directory (root); you cannot go above it.</p>
-  {% if recent %}
-  <div class="recent">
-    <p>recent</p>
-    <div class="chips">
-      {% for r in recent %}
-      <form method="post" action="/select"><input type="hidden" name="path" value="{{ r }}"><button class="chip" title="{{ r }}">{{ r }}</button></form>
-      {% endfor %}
-    </div>
+</details>
+{% endif %}
+{% if not groups and not cards %}
+<div class="start-screen">
+  <div class="start-choices">
+    <a class="start-choice" href="/?add=1">Load results</a>
+    <a class="start-choice" href="/run">Run job</a>
   </div>
-  {% endif %}
-</section>
+  {% if recent %}<p class="start-recent">recent: {% for r in recent %}<a href="/?add=1&amp;path={{ r | urlencode }}">{{ r }}</a>{% endfor %}</p>{% endif %}
+</div>
 {% else %}
-<div class="section-head">
-  <div>
-    <h1>overview</h1>
-    <p class="muted">{{ cards | length }} interaction types · {{ ds_name }}</p>
-    <p class="hint">Server browsing is limited to the start-up directory (root); you cannot go above it.</p>
+{% for g in groups %}
+<section class="ds-block">
+  <div class="ds-block-head">
+    <h2>{{ g.name }}</h2>
+    <span class="muted">{{ g.n_types }} types</span>
+    <span class="muted ds-block-path" title="{{ g.path }}">{{ g.path }}</span>
+    <form method="post" action="/select/remove"><input type="hidden" name="path" value="{{ g.path }}"><button class="btn btn-sm btn-ghost">remove</button></form>
   </div>
-  <form class="source-form compact" method="post" action="/select">
-    <input type="text" name="path" placeholder="folder or .h5 path" required>
-    <button class="btn btn-sm">Open</button>
-    {% if browse_server %}
-    <button type="button" class="btn btn-sm" id="browseBtn">Browse server folders…</button>
-    {% else %}
-    <button type="button" class="btn btn-sm" id="browseBtn">Browse…</button>
-    {% endif %}
-  </form>
-</div>
-<div class="grid">
-  {% for c in cards %}
-  <a class="card" data-t="{{ c.data_type }}" href="/type/{{ c.type | urlencode }}" title="{{ c.h5_path }}">
-    <div class="card-top"><span class="dot"></span><span class="card-label">{{ c.type }}</span></div>
-    <div class="card-metric"><span class="num">{{ c.n_pairs }}</span><span class="unit">pairs · {{ c.n_frames }} frames</span></div>
-    {% if c.n_pairs and c.n_frames %}
-    {% set top = c.occupancy.hist | max %}
-    <div class="bars mini">{% for v in c.occupancy.hist %}<span style="height: {{ (v / top * 100) | round(1) if top else 0 }}%" title="{{ v }} pairs"></span>{% endfor %}</div>
-    <div class="bars-axis"><span>occupancy 0%</span><span>100%</span></div>
-    {% else %}
-    <p class="muted card-empty">no data</p>
-    {% endif %}
-    {% if c.flags %}<div class="tags">{% for f in c.flags %}<span class="tag">{{ f }}</span>{% endfor %}</div>{% endif %}
-  </a>
-  {% endfor %}
-</div>
+  <div class="grid">
+    {% for c in g.cards %}
+    <a class="card" data-t="{{ c.data_type }}" href="/type/{{ c.type | urlencode }}" title="{{ c.h5_path }}">
+      <div class="card-top"><span class="dot"></span><span class="card-label">{{ c.data_type }}</span></div>
+      <div class="card-metric"><span class="num">{{ c.n_pairs }}</span><span class="unit">pairs · {{ c.n_frames }} frames</span></div>
+      {% if c.n_pairs and c.n_frames %}
+      {% set top = c.occupancy.hist | max %}
+      <div class="bars mini">{% for v in c.occupancy.hist %}<span style="height: {{ (v / top * 100) | round(1) if top else 0 }}%" title="{{ v }} pairs"></span>{% endfor %}</div>
+      <div class="bars-axis"><span>occupancy 0%</span><span>100%</span></div>
+      {% else %}
+      <p class="muted card-empty">no data</p>
+      {% endif %}
+      {% if c.flags %}<div class="tags">{% for f in c.flags %}<span class="tag">{{ f }}</span>{% endfor %}</div>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+<p class="ds-add"><a class="btn btn-sm" href="/?add=1">+ add dataset</a></p>
 {% endif %}
 {% if browse_server %}
 <div class="browse-modal hidden" id="browseModal">

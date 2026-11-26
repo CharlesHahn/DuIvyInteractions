@@ -8,6 +8,8 @@
   var cfg = JSON.parse(cfgEl.textContent);
 
   var host = document.getElementById("molstarViewer");
+  /* 单对页曲线视图不引入本条例；退化页面里没有 viewer 时安静退出 */
+  if (!host) return;
   var form = document.getElementById("structureForm");
   var topologyInput = document.getElementById("topologyInput");
   var trajectoryInput = document.getElementById("trajectoryInput");
@@ -22,6 +24,8 @@
   var TRAJECTORY_URL = "/api/structure/trajectory";
   var INTERACTIONS_URL = "/api/structure/interactions";
   var SELECT_URL = "/api/structure/select";
+  /* 会话版本号：结构每次重选都自增，URL 变则缓存键变（绕开浏览器/代理缓存） */
+  var VERSION_PARAM = "v";
   var PICK_ENDPOINT = "/api/pick";
   var PICK_BODY = "mode=file&kind=structure";
 
@@ -29,6 +33,10 @@
   var MODEL_KIND = "model-data";
   var DEFAULT_TRAJECTORY_FORMAT = "xtc";
   var BINARY_FORMATS = { xtc: true, trr: true, dcd: true };
+  /* 拓扑与轨迹原子数不一致：多半命中了上一次会话的轨迹缓存，提示重选轨迹 */
+  var MISMATCH_MARKER = "element count mismatch";
+  var MISMATCH_HINT = " (topology and trajectory atom counts differ — " +
+    "re-select the trajectory)";
 
   /* 后端给的表达式是 PyMOL 风格选择语言；Mol* 只有 script 类型的组件会按
      language 解析字符串（表达式类型需要编译好的 AST，字符串会被当常量）。 */
@@ -54,6 +62,11 @@
   var LINE_SIZE = 0.06;
   var DEBOUNCE_MS = 60;             /* 滑块拖动到换帧的防抖 */
   var FRAME_POLL_MS = 150;          /* 轮询 Mol* 原生轨迹控件的当前帧 */
+  /* loadTrajectory resolve 与 hierarchy 更新之间存在竞态：轮询等结构树出现 */
+  var STRUCTURE_WAIT_INTERVAL_MS = 100;
+  var STRUCTURE_WAIT_TIMEOUT_MS = 5000;
+  var DIAGNOSTIC_HEAD_CHARS = 40;    /* 诊断信息里展示的拓扑开头字符数 */
+  var FRAME_PARAM = "frame";        /* 地址栏帧号参数（视图之间贯通） */
 
   var TAG_POLYMER = "dii-polymer";
   var TAG_LIGAND = "dii-ligand";
@@ -92,7 +105,8 @@
     viewportShowControls: true,
     viewportShowSettings: true,
     viewportShowSelectionMode: false,
-    viewportShowAnimation: false,
+    /* 原生动画/播放按钮（轨迹逐帧播放）：Mol* 默认开启，显式打开 */
+    viewportShowAnimation: true,
     viewportShowTrajectoryControls: true
   };
 
@@ -102,7 +116,8 @@
   var structureRef = null;      /* 主结构 cell 的 ref：帧更新后 cell 对象会换，始终按 ref 取 */
   var modelRef = null;          /* model-from-trajectory 的 ref（改帧用） */
   var data = null;              /* /api/structure/interactions 的 JSON */
-  var frame = 0;
+  var topologySnapshot = "";    /* 最近一次通过校验的拓扑文本（超时诊断用） */
+  var frame = clampFrame(cfg.frame || 0);  /* 后端注入的初始帧（缺省 0） */
   var measurements = [];        /* 当前帧的虚线测量 [{selection, representation}] */
   var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
   var measureSeq = 0;
@@ -219,6 +234,22 @@
     highlightFrame(frame);
   }
 
+  /* 换帧后把帧号写回地址栏（保留 view=3d 等其它参数），刷新/切换视图不丢帧 */
+  function syncFrameUrl(value) {
+    if (!window.history || typeof window.history.replaceState !== "function") {
+      return;
+    }
+    var url = new URL(window.location.href);
+    if (url.searchParams.get(FRAME_PARAM) === String(value)) return;
+    url.searchParams.set(FRAME_PARAM, String(value));
+    try {
+      window.history.replaceState(null, "",
+        url.pathname + url.search + url.hash);
+    } catch (error) {
+      /* 浏览器对 replaceState 有频率限制：写不进去不影响换帧 */
+    }
+  }
+
   function statusText() {
     var parts = ["frame " + frame + " / " + frameLimit(),
                  "trajectory loaded"];
@@ -239,7 +270,14 @@
   /* 拓扑 PDB 由后端按该对原子打 B-factor 标记（表达式据此圈选），必须带 type/idx */
   function topologyUrl() {
     return TOPOLOGY_URL + "?type=" + encodeURIComponent(cfg.type) +
-      "&idx=" + cfg.idx;
+      "&idx=" + cfg.idx + "&" + VERSION_PARAM + "=" +
+      encodeURIComponent(cfg.structure_version || 0);
+  }
+
+  /* 原始轨迹文件同样按会话版本号取：URL 相同会复用上一次会话缓存的轨迹 */
+  function trajectoryUrl() {
+    return TRAJECTORY_URL + "?" + VERSION_PARAM + "=" +
+      encodeURIComponent(cfg.structure_version || 0);
   }
 
   function fetchTopologyText() {
@@ -248,7 +286,28 @@
         throw new Error("topology HTTP " + response.status);
       }
       return response.text();
+    }).then(function (text) {
+      if (!isPdbText(text)) {
+        throw new Error("topology response is not PDB (" + text.length +
+          " chars, head \"" + diagnosticHead(text) + "\")");
+      }
+      topologySnapshot = text;
+      return text;
     });
+  }
+
+  /* 错误页 / JSON 错误不能当 PDB 喂给 Mol*：后端拓扑至少含 ATOM 记录 */
+  function isPdbText(text) {
+    return !!text && text.indexOf("ATOM") !== -1;
+  }
+
+  /* 单行化诊断文本：换行/引号转义，避免多行内容挤爆状态栏 */
+  function diagnosticHead(text) {
+    return String(text || "").slice(0, DIAGNOSTIC_HEAD_CHARS)
+      .replace(/\\/g, "\\\\")
+      .replace(/\r/g, "\\r")
+      .replace(/\n/g, "\\n")
+      .replace(/"/g, "\\\"");
   }
 
   function fetchInteractions() {
@@ -286,7 +345,7 @@
       },
       coordinates: {
         kind: "coordinates-url",
-        url: TRAJECTORY_URL,
+        url: trajectoryUrl(),
         isBinary: true,
         format: trajectoryFormat()
       }
@@ -310,20 +369,53 @@
 
   function loadFailureText(error) {
     var message = error && error.message ? error.message : String(error);
-    return "trajectory load failed (model=" + MODEL_KIND + ", format=" +
+    var text = "trajectory load failed (model=" + MODEL_KIND + ", format=" +
       TOPOLOGY_FORMAT + ", coords=" + trajectoryFormat() + "): " + message;
+    /* 原子数不一致多半是旧轨迹缓存：追加可操作提示 */
+    if (String(message).toLowerCase().indexOf(MISMATCH_MARKER) >= 0) {
+      text += MISMATCH_HINT;
+    }
+    return text;
   }
 
   function afterLoad() {
-    var entry = structureEntry();
-    if (!entry) throw new Error("trajectory produced no structure");
-    structureRef = refOf(entry.cell);
-    modelRef = findModelRef();
-    return clearDefaultComponents()
-      .then(function () { return buildLayers(); })
-      .then(function () { return focusInitially(); })
-      .then(function () { return selectFrame(0); })
-      .then(function () { startPolling(); });
+    return waitForStructure().then(function (entry) {
+      structureRef = refOf(entry.cell);
+      modelRef = findModelRef();
+      return clearDefaultComponents()
+        .then(function () { return buildLayers(); })
+        .then(function () { return focusInitially(); })
+        .then(function () { return selectFrame(frame); })
+        .then(function () { startPolling(); });
+    });
+  }
+
+  /* 轮询等待 Mol* 结构树出现（loadTrajectory resolve 与 hierarchy 更新之间存在竞态） */
+  function waitForStructure() {
+    var waited = 0;
+    return new Promise(function (resolve, reject) {
+      (function poll() {
+        var entry = structureEntry();
+        if (entry) return resolve(entry);
+        if (waited >= STRUCTURE_WAIT_TIMEOUT_MS) {
+          return reject(new Error(structureTimeoutText()));
+        }
+        waited += STRUCTURE_WAIT_INTERVAL_MS;
+        setTimeout(poll, STRUCTURE_WAIT_INTERVAL_MS);
+      })();
+    });
+  }
+
+  /* 超时诊断：拓扑规模/开头 + 后端注入的结构状态，区分"没结构"与"结构树没更新" */
+  function structureTimeoutText() {
+    return "no structure after " + STRUCTURE_WAIT_TIMEOUT_MS + "ms (" +
+      structureDiagnostics() + ")";
+  }
+
+  function structureDiagnostics() {
+    return "topology " + topologySnapshot.length + " chars, head \"" +
+      diagnosticHead(topologySnapshot) + "\", has_structure=" +
+      String(!!cfg.has_structure) + ", n_frames=" + String(cfg.n_frames);
   }
 
   /* 改帧目标是 model-from-trajectory 变换：优先 hierarchy 的 model 条目，
@@ -985,6 +1077,7 @@
     var index = currentFrameIndex();
     if (index === null || index < 0 || index === frame) return;
     frame = index;
+    syncFrameUrl(index);
     highlightFrame(index);
     updateFrameLabel(index);
     updateMeasurements(index).then(function () {
@@ -1006,6 +1099,7 @@
     if (pendingTimer) clearTimeout(pendingTimer);
     pendingTimer = setTimeout(function () {
       pendingTimer = null;
+      syncFrameUrl(frame);
       selectFrame(frame);
     }, DEBOUNCE_MS);
   }
@@ -1155,9 +1249,9 @@
 
   if (form) form.addEventListener("submit", selectStructure);
 
-  highlightFrame(0);
+  highlightFrame(frame);
   if (cfg.has_structure) {
-    updateFrameLabel(0);
+    updateFrameLabel(frame);
     initViewer();
   } else {
     setStatus("select topology and trajectory to load the structure", false);

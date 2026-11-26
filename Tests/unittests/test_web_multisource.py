@@ -4,6 +4,7 @@
 不依赖真实轨迹：用 tmp_path 构造最小 h5。
 """
 
+import re
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -213,9 +214,15 @@ class TestSelectAppend:
     def test_sidebar_lists_every_type(self, loaded):
         client, _ = loaded
         html = client.get("/").text
-        assert html.count('class="side-item"') == 4
-        assert '<span class="side-label">hydrogen_bond</span>' in html
-        assert f'<span class="side-label">{SUFFIXED}</span>' in html
+        aside = html.split('<aside class="sidebar">', 1)[1].split("</aside>", 1)[0]
+        assert aside.count('class="side-item"') == 4
+        base_label = '<span class="side-label">hydrogen_bond</span>'
+        assert aside.count(base_label) == 2
+        assert SUFFIXED not in aside
+        hrefs = re.findall(r'data-t="hydrogen_bond" href="([^"]+)"', aside)
+        assert len(hrefs) == 2 and len(set(hrefs)) == 2
+        assert sum("%40" in href for href in hrefs) == 1
+        assert aside.count('class="side-batch-count">2</span>') == 2
 
     def test_reselect_same_path_replaces_in_place(self, make_client,
                                                   first_dir, second_dir):
@@ -286,7 +293,8 @@ class TestRemoveClear:
         assert state["sources"] == [] and state["items"] == []
         html = client.get("/").text
         assert 'class="card"' not in html
-        assert "Open interaction results" in html
+        assert html.count('class="start-choice"') == 2
+        assert "Load results" in html and "Run job" in html
 
     def test_clear_all_batches(self, loaded):
         client, state = loaded

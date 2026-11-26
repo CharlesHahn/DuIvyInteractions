@@ -13,6 +13,9 @@
   var slider = document.getElementById("frameSlider");
   var frameInfo = document.getElementById("frameInfo");
   var frameBody = document.getElementById("frameBody");
+  var frameInput = document.getElementById("frameInput");
+  var framePrev = document.getElementById("framePrev");
+  var frameNext = document.getElementById("frameNext");
   var viewStartInput = document.getElementById("viewStart");
   var viewEndInput = document.getElementById("viewEnd");
   var applyWindowBtn = document.getElementById("applyWindow");
@@ -44,6 +47,7 @@
   var COLOR_HOVER_ROW = "rgba(15,23,42,0.06)";
   var COLOR_HOVER_COL = "rgba(15,23,42,0.07)";
   var COLOR_FRAME_LINE = "rgba(15,23,42,0.55)";
+  var COLOR_FRAME_COL = "rgba(60,84,136,0.10)";  // 选中帧列底色（与 hover 同层，不改变活跃块配色）
   // π-堆积类型配色：与 figures.PT_COLORS 保持一致
   var PT_COLORS = {P: "#3c5488", T: "#e64b35", N: "#8491b4"};
   var ptColors = cfg.pt_colors || PT_COLORS;
@@ -209,6 +213,8 @@
   function drawSelectedFrame() {
     if (selectedFrame < viewStart || selectedFrame >= viewEnd) return;
     var x = columnX(selectedFrame);
+    ctx.fillStyle = COLOR_FRAME_COL;
+    ctx.fillRect(x, 0, Math.max(1, columnWidth()), plotHeight());
     ctx.fillStyle = COLOR_FRAME_LINE;
     ctx.fillRect(x, 0, 1, plotHeight());
   }
@@ -238,19 +244,25 @@
     return Math.abs(value) >= 1000 ? value.toFixed(0) : value.toFixed(1);
   }
 
+  function frameAt(x) {
+    var frame = viewStart + Math.floor((x - labelColWidth()) / columnWidth());
+    return Math.min(Math.max(frame, viewStart), viewEnd - 1);
+  }
+
   function hitTest(event) {
     var rect = canvas.getBoundingClientRect();
     var x = event.clientX - rect.left;
     var y = event.clientY - rect.top;
     var inPlot = y >= 0 && y < plotHeight();
+    // 底部时间轴条（AXIS_H）作为列头热区：顶部是数据行，放热区会抢首行点击
+    var inAxis = rows.length > 0 && y >= plotHeight() &&
+      y <= canvas.clientHeight;
     var row = Math.floor((y + scroller.scrollTop) / ROW_H);
-    var frame = viewStart + Math.floor((x - labelColWidth()) / columnWidth());
-    var visible = viewEnd > viewStart;
+    var inColumns = viewEnd > viewStart && x > labelColWidth();
     return {
       row: inPlot && row >= 0 && row < rows.length ? row : -1,
-      col: inPlot && x > labelColWidth() && visible
-        ? Math.min(Math.max(frame, viewStart), viewEnd - 1)
-        : -1,
+      col: inPlot && inColumns ? frameAt(x) : -1,
+      axisCol: inAxis && inColumns ? frameAt(x) : -1,
       x: x, y: y
     };
   }
@@ -339,11 +351,12 @@
 
   function onMove(event) {
     var hit = hitTest(event);
-    var changed = hit.row !== hoverRow || hit.col !== hoverCol;
+    var col = hit.axisCol >= 0 ? hit.axisCol : hit.col;
+    var changed = hit.row !== hoverRow || col !== hoverCol;
     hoverRow = hit.row;
-    hoverCol = hit.col;
+    hoverCol = col;
     if (!changed) return;
-    canvas.style.cursor = hit.row >= 0 ? "pointer" : "default";
+    canvas.style.cursor = hit.row >= 0 || hit.axisCol >= 0 ? "pointer" : "default";
     draw();
     if (hit.row >= 0) {
       showTip(hit);
@@ -355,8 +368,12 @@
 
   function onClick(event) {
     var hit = hitTest(event);
+    if (hit.axisCol >= 0) {
+      loadFrame(hit.axisCol);
+      return;
+    }
     if (hit.row < 0) return;
-    openPair(rows[hit.row].idx);
+    openPair(rows[hit.row].idx, selectedFrame);
   }
 
   function loadMatrix() {
@@ -386,10 +403,16 @@
     info.textContent = rows.length + " / " + data.total_pairs + " pairs";
     resize();
     if (nFrames > 0) {
-      loadFrame(0);
+      loadFrame(initialFrame());
     } else {
       showNoFrames();
     }
+  }
+
+  function initialFrame() {
+    var frame = parseInt(cfg.frame, 10);
+    if (!isFinite(frame) || frame < 0) return 0;
+    return Math.min(frame, nFrames - 1);
   }
 
   function resetHover() {
@@ -460,6 +483,7 @@
   }
 
   function showNoFrames() {
+    syncFrameNav(0);
     frameInfo.textContent = "no frames in this h5";
     frameBody.textContent = "no frames in this h5";
   }
@@ -473,10 +497,41 @@
     draw();
   }
 
+  function clampFrame(value) {
+    if (nFrames <= 0) return 0;
+    if (!isFinite(value)) return selectedFrame;
+    return Math.min(Math.max(Math.round(value), 0), nFrames - 1);
+  }
+
+  // 帧导航控件与矩阵列头选帧共用同一 selectedFrame，任何入口后同步四态
+  function syncFrameNav(frame) {
+    if (frameInput) frameInput.value = frame;
+    if (framePrev) framePrev.disabled = frame <= 0;
+    if (frameNext) frameNext.disabled = !nFrames || frame >= nFrames - 1;
+  }
+
+  function stepFrame(delta) {
+    var frame = selectedFrame + delta;
+    if (frame < 0 || frame >= nFrames) return;
+    loadFrame(frame);
+  }
+
+  function commitFrameInput() {
+    if (!frameInput) return;
+    var frame = clampFrame(parseInt(frameInput.value, 10));
+    if (frame === selectedFrame) {
+      frameInput.value = selectedFrame;
+      return;
+    }
+    loadFrame(frame);
+  }
+
   function loadFrame(frame, limit) {
     var seq = ++frameSeq;
+    frame = clampFrame(frame);
     selectedFrame = frame;
-    slider.value = frame;
+    if (slider) slider.value = frame;
+    syncFrameNav(frame);
     ensureWindow(frame);
     draw();
     frameInfo.textContent = "frame " + frame + " · loading…";
@@ -484,7 +539,9 @@
           "?limit=" + (limit || FRAME_PAGE))
       .then(readJson)
       .then(function (data) {
-        if (seq === frameSeq) renderFrame(data);
+        if (seq !== frameSeq) return;
+        syncUrl(frame);
+        renderFrame(data);
       })
       .catch(function (error) {
         if (seq === frameSeq) {
@@ -492,6 +549,14 @@
           frameBody.textContent = "failed to load frame " + frame;
         }
       });
+  }
+
+  // 把当前帧号写回 URL（保留 search/min_occupancy/sort_by/sort_dir/page 等既有参数）
+  function syncUrl(frame) {
+    if (!window.history || !window.history.replaceState) return;
+    var url = new URL(window.location.href);
+    url.searchParams.set("frame", frame);
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
   }
 
   function renderFrame(data) {
@@ -570,8 +635,10 @@
     frameBody.appendChild(button);
   }
 
-  function openPair(idx) {
-    window.location.href = "/pair/" + encodeURIComponent(cfg.type) + "/" + idx;
+  function openPair(idx, frame) {
+    var url = "/pair/" + encodeURIComponent(cfg.type) + "/" + idx;
+    if (typeof frame === "number" && frame >= 0) url += "?frame=" + frame;
+    window.location.href = url;
   }
 
   function addCell(tr, text, cls) {
@@ -603,12 +670,35 @@
                   parseInt(viewEndInput.value, 10));
     });
   }
-  slider.addEventListener("input", function () {
-    if (sliderTimer) clearTimeout(sliderTimer);
-    sliderTimer = setTimeout(function () {
-      loadFrame(parseInt(slider.value, 10));
-    }, 80);
-  });
+  if (slider) {
+    slider.addEventListener("input", function () {
+      if (sliderTimer) clearTimeout(sliderTimer);
+      sliderTimer = setTimeout(function () {
+        loadFrame(parseInt(slider.value, 10));
+      }, 80);
+    });
+  }
+  if (framePrev) {
+    framePrev.addEventListener("click", function () { stepFrame(-1); });
+  }
+  if (frameNext) {
+    frameNext.addEventListener("click", function () { stepFrame(1); });
+  }
+  if (frameInput) {
+    frameInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitFrameInput();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        stepFrame(-1);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        stepFrame(1);
+      }
+    });
+    frameInput.addEventListener("blur", commitFrameInput);
+  }
   window.addEventListener("resize", resize);
   resize();
   loadMatrix();

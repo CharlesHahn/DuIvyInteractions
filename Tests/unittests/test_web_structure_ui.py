@@ -102,7 +102,7 @@ def _structure_js() -> str:
 def _render_template(browse_mode: str) -> str:
     from DuIvyInteractions.web.app import TEMPLATES
 
-    template = TEMPLATES.get_template("structure.html")
+    template = TEMPLATES.get_template("_structure_view.html")
     return template.render(
         title="structure", ds_name="", datasource="", types=[],
         active_type=None, type="hydrogen_bond", idx=0, pair_label="pair 1",
@@ -198,7 +198,6 @@ class TestServerFilePicker:
                            "filepickPath", "filepickCurrent", "filepickUp",
                            "filepickGo", "filepickUse", "filepickCancel"):
             assert 'id="%s"' % element_id in html
-        assert "/static/filepick.js" in html
 
     def test_server_route_renders_modal(self, server_client):
         html = _page(server_client)
@@ -220,7 +219,7 @@ class TestNativeTrajectoryScript:
                       "isBinary: true", "frameIndex"):
             assert token in text, token
         call = _function_body(text, "loadTrajectoryOnce")
-        for token in ("MODEL_KIND", "coordinates-url", "TRAJECTORY_URL",
+        for token in ("MODEL_KIND", "coordinates-url", "trajectoryUrl(",
                       "trajectoryFormat()"):
             assert token in call, token
         assert 'MODEL_KIND = "model-data"' in text

@@ -512,13 +512,15 @@ class TestRoutes:
 
     def test_type_page_links_back_to_source(self, client):
         html = client.get("/type/hydrogen_bond").text
-        assert "add data source" in html
+        assert 'class="brand" href="/"' in html
+        assert "side-actions" in html
         assert "data-kind" not in html
 
     def test_type_page_panels(self, client):
         html = client.get("/type/hydrogen_bond").text
         assert "metadata" in html and "matrixCanvas" in html
-        assert "frameSlider" in html and "occupancy distribution" in html
+        # 帧滑块已并入矩阵列头（P1a），帧号显示由 frameInput 承担
+        assert "frameInput" in html and "occupancy distribution" in html
         assert "active pairs per frame" in html and "format version" in html
         assert "aggregates" in html and "apply filters" in html
 
