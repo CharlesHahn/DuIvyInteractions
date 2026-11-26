@@ -7,8 +7,10 @@ import math
 import secrets
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import (
+    Any, AsyncIterator, Callable, Dict, List, Optional, Tuple)
 from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, HTTPException, Request
@@ -34,6 +36,10 @@ from ..visualizers.structure import (
 from .fsbrowse import (
     BYTES_PER_KB, H5_SUFFIX, LIST_LIMIT, SIZE_DECIMALS, confine,
     list_directory,
+)
+from .jobs import (
+    ANY_PAIRING, DEFAULT_FF, DEFAULT_STRATEGY, FORCE_FIELDS, INTERACTIONS,
+    PAIRINGS, STATUS_CANCELLED, STRATEGIES, Job, JobManager, parse_run_form,
 )
 from .picker import pick_directory, pick_file
 
@@ -64,6 +70,10 @@ PICK_DIR = "dir"
 PICK_FILE = "file"
 DATASET_KIND = "dataset"
 STRUCTURE_KIND = "structure"
+RUN_LOG_LINES = 300  # 任务页最多展示的日志尾部行数
+ELAPSED_DECIMALS = 1  # 页面/JSON 中秒数保留的小数位
+JOB_NOT_FOUND = "job not found"
+CANNOT_CANCEL = "job is not running"
 # base.html / index.html 存在内联脚本且不在本次授权范围内，故允许 inline
 # script；若将来把内联脚本外置，可收紧为 script-src 'self'。
 SECURITY_HEADERS = {
@@ -87,9 +97,12 @@ _AUTH_LOCK = threading.Lock()
 def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
                allowed_hosts: Optional[List[str]] = None) -> FastAPI:
     """创建 FastAPI 应用（数据源状态 = 服务端内存，单用户）。"""
-    state: Dict[str, Any] = {"source": None, "structure": None}
+    manager = JobManager(root=root)
+    state: Dict[str, Any] = {"source": None, "structure": None,
+                             "jobs": manager}
     app = FastAPI(title="DII Web", docs_url=None, redoc_url=None,
-                  openapi_url=None)
+                  openapi_url=None, lifespan=_job_lifespan(manager))
+    app.state.jobs = manager
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
     if token:
@@ -100,6 +113,17 @@ def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
     _register_pages(app, state, browse_mode, root)
     _register_api(app, state, browse_mode, root)
     return app
+
+
+def _job_lifespan(manager: JobManager) -> Callable[[FastAPI], Any]:
+    """应用生命周期：退出时终止仍在运行的计算任务。"""
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+        manager.shutdown()
+
+    return lifespan
 
 
 def _install_token_guard(app: FastAPI, token: str) -> None:
@@ -218,6 +242,7 @@ def _register_pages(app: FastAPI, state: Dict[str, Any], browse_mode: str,
     _register_home(app, state, browse_mode, root)
     _register_detail(app, state)
     _register_structure_page(app, state, browse_mode)
+    _register_run_page(app, state, browse_mode, root)
     _register_error_page(app, state)
 
 
@@ -260,6 +285,25 @@ def _register_structure_page(app: FastAPI, state: Dict[str, Any],
     @app.get("/structure/{name}/{idx}", response_class=HTMLResponse)
     def structure_page(request: Request, name: str, idx: int) -> Response:
         return _render_structure(request, state, name, idx, browse_mode)
+
+
+def _register_run_page(app: FastAPI, state: Dict[str, Any], browse_mode: str,
+                       root: str) -> None:
+    """计算发起页、任务详情页与表单提交。"""
+
+    @app.get("/run", response_class=HTMLResponse)
+    def run_page(request: Request, error: str = "") -> Response:
+        return _render_run(request, state, browse_mode, root, error)
+
+    @app.get("/run/{job_id}", response_class=HTMLResponse)
+    def job_page(request: Request, job_id: str) -> Response:
+        return _render_job(request, state, job_id, browse_mode, root)
+
+    @app.post("/run")
+    async def start_run(request: Request) -> Response:
+        body = await request.body()
+        return await run_in_threadpool(_start_run, state["jobs"], root,
+                                       _form_fields(body))
 
 
 def _register_error_page(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -329,6 +373,7 @@ def _register_api(app: FastAPI, state: Dict[str, Any],
     _register_structure_select(app, state, root)
     _register_structure_export(app, state)
     _register_structure_interactions(app, state)
+    _register_run_api(app, state)
 
 
 def _register_matrix_api(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -513,6 +558,23 @@ def _register_structure_interactions(app: FastAPI,
     def api_structure_interactions(type: str = "",
                                    idx: int = 0) -> Response:
         return _interactions_response(state, type, idx)
+
+
+def _register_run_api(app: FastAPI, state: Dict[str, Any]) -> None:
+    """任务轮询、取消与日志下载接口。"""
+
+    @app.get("/api/run/{job_id}", response_model=None)
+    def api_run(job_id: str, since: str = "0") -> Dict[str, Any]:
+        job = _job_or_404(state["jobs"], job_id)
+        return _job_payload(job, _parse_since(since))
+
+    @app.post("/api/run/{job_id}/cancel", response_model=None)
+    def api_cancel(job_id: str) -> Response:
+        return _cancel_response(state["jobs"], job_id)
+
+    @app.get("/download/run-log/{job_id}", response_model=None)
+    def download_run_log(job_id: str) -> Response:
+        return _run_log_response(_job_or_404(state["jobs"], job_id))
 
 
 def _select_structure(state: Dict[str, Any], root: str, topology: str,
@@ -827,6 +889,137 @@ def _render_structure(request: Request, state: Dict[str, Any], name: str,
     })
     response.headers["Content-Security-Policy"] = STRUCTURE_CSP
     return response
+
+
+def _render_run(request: Request, state: Dict[str, Any], browse_mode: str,
+                root: str, error: str) -> HTMLResponse:
+    """计算发起页：参数表单默认值 + 最近任务。"""
+    return TEMPLATES.TemplateResponse(request, "run.html", {
+        "title": "new calculation",
+        "browse_mode": browse_mode,
+        "root": root,
+        "ffs": list(FORCE_FIELDS),
+        "strategies": list(STRATEGIES),
+        "pairings": list(PAIRINGS),
+        "interactions": list(INTERACTIONS),
+        "form": _run_form_defaults(),
+        "error": error,
+        "recent_jobs": _recent_jobs(state["jobs"]),
+        **_nav(state),
+    })
+
+
+def _run_form_defaults() -> Dict[str, Any]:
+    """表单默认值（默认全选 8 类相互作用）。"""
+    return {"topology": "", "trajectory": "", "output": "",
+            "ff": DEFAULT_FF, "strategy": DEFAULT_STRATEGY,
+            "interactions": list(INTERACTIONS), "select": "",
+            "pairing": ANY_PAIRING, "mark_redundant": False}
+
+
+def _render_job(request: Request, state: Dict[str, Any], job_id: str,
+                browse_mode: str, root: str) -> HTMLResponse:
+    """任务详情页：状态、日志尾部、产出目录与 h5 列表。"""
+    job = _job_or_404(state["jobs"], job_id)
+    return TEMPLATES.TemplateResponse(request, "job.html", {
+        "title": "job", "browse_mode": browse_mode, "root": root,
+        "job": _job_view(job), "recent_jobs": _recent_jobs(state["jobs"]),
+        **_nav(state),
+    })
+
+
+def _job_view(job: Job) -> Dict[str, Any]:
+    """任务页所需视图（日志只取尾部 RUN_LOG_LINES 行）。"""
+    return {"id": job.id, "status": job.status,
+            "summary": job.params.summary(),
+            "params_preview": job.params.preview(),
+            "lines": job.lines()[-RUN_LOG_LINES:],
+            "lines_total": job.line_total(),
+            "returncode": job.returncode,
+            "elapsed": _seconds(job.elapsed()),
+            "output_dir": job.output_dir,
+            "h5_files": job.h5_files(),
+            "error": job.error}
+
+
+def _job_or_404(manager: JobManager, job_id: str) -> Job:
+    """按 id 取任务；未知 → 404（页面走 HTML 错误页，API 走 JSON）。"""
+    job = manager.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=JOB_NOT_FOUND)
+    return job
+
+
+def _recent_jobs(manager: JobManager) -> List[Dict[str, Any]]:
+    """最近任务摘要（新 → 旧）。"""
+    return [{"id": job.id, "status": job.status,
+             "summary": job.params.summary(),
+             "elapsed": _seconds(job.elapsed()),
+             "output": job.output_dir}
+            for job in manager.recent()]
+
+
+def _seconds(value: float) -> float:
+    """秒数保留 ELAPSED_DECIMALS 位小数（显示用）。"""
+    return round(value, ELAPSED_DECIMALS)
+
+
+def _start_run(manager: JobManager, root: str,
+               fields: Dict[str, List[str]]) -> RedirectResponse:
+    """校验表单并启动任务；失败跳回表单页带回提示（与 /select 一致）。"""
+    try:
+        job = manager.start(parse_run_form(fields, root))
+    except ValueError as error:
+        return RedirectResponse(f"/run?error={quote(str(error))}",
+                                status_code=303)
+    return RedirectResponse(f"/run/{job.id}", status_code=303)
+
+
+def _form_fields(body: bytes) -> Dict[str, List[str]]:
+    """URL-encoded 表单体 → 字段多值映射（保留空值，支持重复键）。"""
+    try:
+        return parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError:
+        return {}
+
+
+def _job_payload(job: Job, since: int) -> Dict[str, Any]:
+    """轮询接口响应（lines 为 since 之后的日志增量）。"""
+    lines, next_index = job.lines_since(since)
+    return {"id": job.id, "status": job.status,
+            "returncode": job.returncode,
+            "elapsed": _seconds(job.elapsed()),
+            "lines": lines, "next": next_index,
+            "output_dir": job.output_dir, "h5_files": job.h5_files(),
+            "error": job.error}
+
+
+def _parse_since(raw: str) -> int:
+    """日志游标：非整数或负数一律视为 0。"""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(value, 0)
+
+
+def _cancel_response(manager: JobManager, job_id: str) -> Response:
+    """取消运行中任务（未知 → 404，已结束 → 400）。"""
+    _job_or_404(manager, job_id)
+    if not manager.cancel(job_id):
+        raise HTTPException(status_code=400, detail=CANNOT_CANCEL)
+    return JSONResponse({"status": STATUS_CANCELLED})
+
+
+def _run_log_response(job: Job) -> Response:
+    """任务日志全文（text/plain 附件）。"""
+    body = "\n".join(job.lines())
+    if body:
+        body += "\n"
+    filename = f"dii-run-{job.id}.log"
+    return Response(body, media_type="text/plain",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{filename}"'})
 
 
 def _to_csv(table: Dict[str, Any]) -> str:
