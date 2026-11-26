@@ -961,8 +961,8 @@ class TestStructurePage:
 
     def test_pair_page_links_to_3d_view(self, client):
         html = client.get("/pair/hydrogen_bond/0").text
-        assert 'href="/structure/hydrogen_bond/0"' in html
-        assert "3D view" in html
+        assert 'href="/pair/hydrogen_bond/0?view=3d' in html
+        assert ">3D</a>" in html
 
 
 # ============================================================

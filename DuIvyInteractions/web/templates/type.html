@@ -44,6 +44,7 @@
     <span class="muted">pairs × frames — hover a cell for its metrics, click a row to drill down</span>
     <span id="matrixInfo" class="muted"></span>
   </div>
+  <div class="matrix-hint muted">click a column header to inspect that frame · click a cell to open the pair at that frame</div>
   {% if has_pt %}
   <div class="pt-legend">
     <span>pistacking type</span>
@@ -85,6 +86,14 @@
 </div>
 
 <div class="panel">
+  <div class="frame-head">
+    <h2>frame <span id="frameNumber">{{ frame }}</span></h2>
+    <span id="frameInfo" class="muted"></span>
+  </div>
+  <div id="frameBody" class="frame-body muted">loading…</div>
+</div>
+
+<div class="panel">
   <div class="section-head compact">
     <h2>aggregates · {{ table.total }} pairs</h2>
     <span class="muted">page {{ table.page }} / {{ table.pages }}</span>
@@ -122,20 +131,15 @@
 </div>
 
 <div class="panel">
-  <div class="frame-controls">
-    <label class="field">inspect frame
-      <input type="range" id="frameSlider" min="0" max="{{ n_frames - 1 if n_frames else 0 }}" value="0"{% if not n_frames %} disabled{% endif %}>
-    </label>
-    <span id="frameInfo" class="muted"></span>
-  </div>
-  <div id="frameBody" class="frame-body muted">loading…</div>
-</div>
-
-<div class="panel">
-  <h2>active pairs per frame{% if activity | length < n_frames %} <span class="muted">· {{ activity | length }} buckets, max per bucket</span>{% endif %}</h2>
+  <h2>active pairs per frame (y: active pairs){% if activity | length < n_frames %} <span class="muted">· {{ activity | length }} buckets, max per bucket</span>{% endif %}</h2>
   {% if activity %}
   {% set act_top = activity | max %}
-  <div class="bars big">{% for c in activity %}<span style="height: {{ (c / act_top * 100) | round(1) if act_top else 0 }}%" title="{{ c }} active pairs"></span>{% endfor %}</div>
+  <div class="bars-plot">
+    <div class="bars-yaxis" aria-hidden="true">
+      <span>{{ act_top }}</span><span>{{ (act_top / 2) | round(0, "floor") | int }}</span><span>0</span>
+    </div>
+    <div class="bars big">{% for c in activity %}<span style="height: {{ (c / act_top * 100) | round(1) if act_top else 0 }}%" title="{{ c }} active pairs"></span>{% endfor %}</div>
+  </div>
   <div class="bars-axis"><span>frame 0</span><span>frame {{ n_frames - 1 }}</span></div>
   {% else %}
   <p class="muted">no frames in this h5</p>
@@ -143,10 +147,15 @@
 </div>
 
 <div class="panel">
-  <h2>occupancy distribution · {{ meta.n_pairs }} pairs</h2>
+  <h2>occupancy distribution (y: pairs) · {{ meta.n_pairs }} pairs</h2>
   {% if meta.n_pairs and n_frames %}
   {% set occ_top = meta.occupancy.hist | max %}
-  <div class="bars big bars-occupancy">{% for c in meta.occupancy.hist %}<span style="height: {{ (c / occ_top * 100) | round(1) if occ_top else 0 }}%" title="{{ c }} pairs"></span>{% endfor %}</div>
+  <div class="bars-plot">
+    <div class="bars-yaxis" aria-hidden="true">
+      <span>{{ occ_top }}</span><span>{{ (occ_top / 2) | round(0, "floor") | int }}</span><span>0</span>
+    </div>
+    <div class="bars big bars-occupancy">{% for c in meta.occupancy.hist %}<span style="height: {{ (c / occ_top * 100) | round(1) if occ_top else 0 }}%" title="{{ c }} pairs"></span>{% endfor %}</div>
+  </div>
   <div class="bars-axis"><span>0%</span><span>50%</span><span>100%</span></div>
   {% else %}
   <p class="muted">{{ "no pairs in this h5" if not meta.n_pairs else "no frames in this h5" }}</p>
@@ -199,7 +208,7 @@
 </div>
 {% endif %}
 
-{% set matrix_cfg = {"url": "/api/matrix/" ~ (type | urlencode), "type": type, "search": search, "min_occupancy": min_occupancy, "sort_by": sort_by, "sort_dir": sort_dir, "n_frames": n_frames} %}
+{% set matrix_cfg = {"url": "/api/matrix/" ~ (type | urlencode), "type": type, "search": search, "min_occupancy": min_occupancy, "sort_by": sort_by, "sort_dir": sort_dir, "n_frames": n_frames, "frame": frame} %}
 {% if has_pt %}{% set _ = matrix_cfg.update({"pt_colors": pt_colors}) %}{% endif %}
 <script id="matrixConfig" type="application/json">{{ matrix_cfg | tojson }}</script>
 {% endblock %}

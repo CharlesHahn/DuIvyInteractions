@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Web 外壳 UI 测试：顶栏品牌、多批次 chips、宽屏自适应与 3D viewer 响应式高度。
+"""Web 外壳 UI 测试：顶栏品牌、侧栏数据集树、宽屏自适应与 3D viewer 响应式高度。
 
 不依赖 app.py：用独立 jinja2 环境直接渲染 base.html（该模板的 block 渲染为空，
 可独立渲染）；样式断言直接读取 app.css 文本，取同名选择器的最后一条规则
@@ -48,9 +48,39 @@ def _final_rule(css: str, selector: str) -> str:
     return rules[-1]
 
 
-def _batch(name: str, n_types: int) -> dict:
+def _type(name: str, n_pairs: int = 1) -> dict:
+    """侧栏类型条目：name 为全局唯一链接名，base 为显示的基础类型名。"""
+    return {"name": name, "base": name.split("@")[0], "n_pairs": n_pairs}
+
+
+def _batch(name: str, type_names) -> dict:
+    """批次摘要：路径、名称、类型条数与类型明细（形状同 app._batch_summaries）。"""
     path = "/data/%s" % name
-    return {"path": path, "name": name, "n_types": n_types}
+    types = [_type(type_name) for type_name in type_names]
+    return {"path": path, "name": name, "n_types": len(types), "types": types}
+
+
+def _render_sidebar(env, batches) -> str:
+    """渲染带侧栏的外壳页：types 非空才渲染侧栏（形状同 type_summary）。"""
+    types = [{"type": t["name"], "data_type": t["base"], "n_pairs": t["n_pairs"]}
+             for batch in batches for t in batch["types"]]
+    return _render(env, batches=batches, types=types)
+
+
+def _aside(html: str) -> str:
+    """侧栏片段（无侧栏时为空串）。"""
+    if '<aside class="sidebar">' not in html:
+        return ""
+    return html.split('<aside class="sidebar">', 1)[1].split("</aside>", 1)[0]
+
+
+def _side_batch(aside: str, name: str) -> str:
+    """侧栏中名为 name 的数据集块（split 边界恰为下一块起点）。"""
+    for chunk in aside.split('<div class="side-batch">')[1:]:
+        head = '<span class="side-batch-name" title="/data/%s">%s</span>' % (name, name)
+        if head in chunk:
+            return chunk
+    raise AssertionError("missing sidebar batch: %s" % name)
 
 
 # ============================================================
@@ -125,56 +155,71 @@ class TestViewerHeight:
 
 
 # ============================================================
-# 顶栏批次 chips
+# 侧栏数据集树
 # ============================================================
 
 
-class TestBatchChips:
-    def test_three_batches_render_three_chips(self, env):
-        batches = [_batch("web_run_test", 8), _batch("md_amber", 3),
-                   _batch("md_charmm", 5)]
-        html = _render(env, batches=batches)
-        assert html.count('class="ds-chip"') == 3
-        for b in batches:
-            assert 'name="path" value="%s"' % b["path"] in html
-            assert 'title="%s">%s</span>' % (b["path"], b["name"]) in html
-            assert '<span class="ds-count">%d</span>' % b["n_types"] in html
+class TestSidebarTree:
+    def test_three_batches_render_three_datasets(self, env):
+        batches = [_batch("web_run_test", ["hydrogen_bond", "hydrophobic"]),
+                   _batch("md_amber", ["salt_bridge"]),
+                   _batch("md_charmm", ["pi_stacking", "halogen_bond"])]
+        html = _render_sidebar(env, batches)
+        assert html.count('class="side-batch"') == 3
+        for batch in batches:
+            assert 'name="path" value="%s"' % batch["path"] in html
+            assert '<span class="side-batch-name" title="%s">%s</span>' % (
+                batch["path"], batch["name"]) in html
+            assert '<span class="side-batch-count">%d</span>' % \
+                batch["n_types"] in html
         assert html.count('action="/select/remove"') == 3
-        assert html.count('class="ds-remove"') == 3
+        assert html.count('class="side-batch-remove"') == 3
 
-    def test_single_batch_has_no_clear_all(self, env):
-        html = _render(env, batches=[_batch("only_one", 2)])
-        assert html.count('class="ds-chip"') == 1
-        assert 'action="/select/clear"' not in html
+    def test_sidebar_lists_batch_types(self, env):
+        """side-label 显示基础名（无 @），href 用全局唯一名。"""
+        batches = [_batch("first", ["hydrogen_bond",
+                                    "hydrogen_bond@hydrogen_bond.h5"])]
+        first = _side_batch(_aside(_render_sidebar(env, batches)), "first")
+        label = '<span class="side-label">hydrogen_bond</span>'
+        assert first.count('class="side-item"') == 2
+        assert first.count(label) == 2
+        assert "hydrogen_bond@" not in first
+        assert 'href="/type/hydrogen_bond"' in first
+        assert 'href="/type/hydrogen_bond%40hydrogen_bond.h5"' in first
 
     def test_multiple_batches_render_clear_all_once(self, env):
-        html = _render(env, batches=[_batch("first", 1), _batch("second", 2)])
+        html = _render_sidebar(env, [_batch("first", ["hydrogen_bond"]),
+                                     _batch("second", ["salt_bridge"])])
         assert html.count('action="/select/clear"') == 1
-        assert '<form class="ds-clear" method="post" action="/select/clear">' in html
+        assert '<form method="post" action="/select/clear" class="side-clear">' \
+            in html
         assert "clear all" in html
 
-    def test_empty_batches_falls_back_to_single_chip(self, env):
-        html = _render(env, batches=[], ds_name="legacy_run",
-                       datasource="/data/legacy_run")
-        assert html.count('class="ds-chip"') == 1
-        assert "legacy_run" in html
-        assert 'action="/select/remove"' not in html
-        assert 'action="/select/clear"' not in html
-        assert 'class="ds-chips"' not in html
+    def test_single_batch_renders_clear_all(self, env):
+        """新规则：只要有数据集就提供清空（旧规则单批次隐藏 clear all）。"""
+        html = _render_sidebar(env, [_batch("only_one", ["hydrogen_bond"])])
+        assert html.count('class="side-batch"') == 1
+        assert 'action="/select/clear"' in html
 
-    def test_missing_batches_falls_back_to_single_chip(self, env):
-        """其它页面/旧后端不传 batches，仍按 ds_name/datasource 渲染单 chip。"""
-        html = _render(env, ds_name="old_ds", datasource="/data/old_ds")
-        assert html.count('class="ds-chip"') == 1
-        assert 'title="/data/old_ds"><span class="dot"></span>' in html
+    def test_empty_or_missing_batches_hides_sidebar(self, env):
+        """无批次（空列表 / 不传）时不渲染侧栏，也不再有单 chip 回退。"""
+        empty = _render(env, batches=[])
+        missing = _render(env)
+        for html in (empty, missing):
+            assert 'class="sidebar"' not in html
+            assert "side-batch" not in html
+            assert "ds-chip" not in html
+            assert "ds-chips" not in html
 
-    def test_no_chip_without_any_datasource(self, env):
-        html = _render(env)
-        assert "ds-chip" not in html
-        assert "ds-chips" not in html
 
+# ============================================================
+# 历史 chips 样式（样式表只追加不删，保留回归）
+# ============================================================
+
+
+class TestLegacyChipCss:
     def test_chips_scroller_degrades_to_horizontal_scroll(self, css):
-        """多批次布局方案：单行横向滚动（不换行），右侧按钮不被挤压。"""
+        """历史 .ds-chips 规则仍在：单行横向滚动（不换行），按钮不被挤压。"""
         base = [rule for rule in _rules(css, ".ds-chips")
                 if "display: flex" in rule]
         assert base, "missing flex .ds-chips rule"

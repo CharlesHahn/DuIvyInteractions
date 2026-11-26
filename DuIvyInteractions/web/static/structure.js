@@ -8,6 +8,8 @@
   var cfg = JSON.parse(cfgEl.textContent);
 
   var host = document.getElementById("molstarViewer");
+  /* 单对页曲线视图不引入本条例；退化页面里没有 viewer 时安静退出 */
+  if (!host) return;
   var form = document.getElementById("structureForm");
   var topologyInput = document.getElementById("topologyInput");
   var trajectoryInput = document.getElementById("trajectoryInput");
@@ -54,6 +56,7 @@
   var LINE_SIZE = 0.06;
   var DEBOUNCE_MS = 60;             /* 滑块拖动到换帧的防抖 */
   var FRAME_POLL_MS = 150;          /* 轮询 Mol* 原生轨迹控件的当前帧 */
+  var FRAME_PARAM = "frame";        /* 地址栏帧号参数（视图之间贯通） */
 
   var TAG_POLYMER = "dii-polymer";
   var TAG_LIGAND = "dii-ligand";
@@ -102,7 +105,7 @@
   var structureRef = null;      /* 主结构 cell 的 ref：帧更新后 cell 对象会换，始终按 ref 取 */
   var modelRef = null;          /* model-from-trajectory 的 ref（改帧用） */
   var data = null;              /* /api/structure/interactions 的 JSON */
-  var frame = 0;
+  var frame = clampFrame(cfg.frame || 0);  /* 后端注入的初始帧（缺省 0） */
   var measurements = [];        /* 当前帧的虚线测量 [{selection, representation}] */
   var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
   var measureSeq = 0;
@@ -219,6 +222,22 @@
     highlightFrame(frame);
   }
 
+  /* 换帧后把帧号写回地址栏（保留 view=3d 等其它参数），刷新/切换视图不丢帧 */
+  function syncFrameUrl(value) {
+    if (!window.history || typeof window.history.replaceState !== "function") {
+      return;
+    }
+    var url = new URL(window.location.href);
+    if (url.searchParams.get(FRAME_PARAM) === String(value)) return;
+    url.searchParams.set(FRAME_PARAM, String(value));
+    try {
+      window.history.replaceState(null, "",
+        url.pathname + url.search + url.hash);
+    } catch (error) {
+      /* 浏览器对 replaceState 有频率限制：写不进去不影响换帧 */
+    }
+  }
+
   function statusText() {
     var parts = ["frame " + frame + " / " + frameLimit(),
                  "trajectory loaded"];
@@ -322,7 +341,7 @@
     return clearDefaultComponents()
       .then(function () { return buildLayers(); })
       .then(function () { return focusInitially(); })
-      .then(function () { return selectFrame(0); })
+      .then(function () { return selectFrame(frame); })
       .then(function () { startPolling(); });
   }
 
@@ -985,6 +1004,7 @@
     var index = currentFrameIndex();
     if (index === null || index < 0 || index === frame) return;
     frame = index;
+    syncFrameUrl(index);
     highlightFrame(index);
     updateFrameLabel(index);
     updateMeasurements(index).then(function () {
@@ -1006,6 +1026,7 @@
     if (pendingTimer) clearTimeout(pendingTimer);
     pendingTimer = setTimeout(function () {
       pendingTimer = null;
+      syncFrameUrl(frame);
       selectFrame(frame);
     }, DEBOUNCE_MS);
   }
@@ -1155,9 +1176,9 @@
 
   if (form) form.addEventListener("submit", selectStructure);
 
-  highlightFrame(0);
+  highlightFrame(frame);
   if (cfg.has_structure) {
-    updateFrameLabel(0);
+    updateFrameLabel(frame);
     initViewer();
   } else {
     setStatus("select topology and trajectory to load the structure", false);

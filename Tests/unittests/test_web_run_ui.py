@@ -346,4 +346,5 @@ class TestStaticFrontend:
     def test_index_has_run_entry(self):
         html = INDEX_HTML.read_text(encoding="utf-8")
         assert 'href="/run"' in html
-        assert "New calculation" in html
+        assert "Run job" in html
+        assert "New calculation" not in html
