@@ -2,7 +2,10 @@
 """DuIvyInteraction 命令行入口。"""
 
 import argparse
+import ipaddress
 import os
+import secrets
+import socket
 
 import numpy as np
 
@@ -10,6 +13,12 @@ from .group_identifiers import IDENTIFIER_CLASSES
 
 # 概览显示的 Top N 个占位率
 OVERVIEW_TOP_N = 5
+# web：token 字节数、通配绑定地址、回环主机名、UDP 探测目标
+WEB_TOKEN_BYTES = 16
+WILDCARD_HOSTS = ("0.0.0.0", "::")
+LOOPBACK_HOSTS = ("localhost", "::1")
+LOCAL_HOST = "127.0.0.1"
+IPV4_PROBE_TARGET = ("8.8.8.8", 80)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,6 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
                        help="mark hydrophobic pair-frames overlapping pi-stacking "
                             "(mark only, not remove; auto-runs pi_stacking if needed)")
 
+    # web 子命令
+    web_p = sub.add_parser("web", help="launch local web UI to explore h5 results")
+    web_p.add_argument("--port", type=int, default=8888, help="listen port, default 8888 (auto-advance if taken)")
+    web_p.add_argument("--host", default="127.0.0.1", help="bind host, default 127.0.0.1")
+    web_p.add_argument("--token", default="",
+                       help="access token; auto-generated when binding to a "
+                            "non-loopback host")
+    web_p.add_argument("--root", default=None,
+                       help="restrict file browsing to DIR (default: current "
+                            "directory for non-loopback bindings; unrestricted "
+                            "on loopback)")
+
     # export 子命令
     export_p = sub.add_parser("export", help="export h5 results to xvg/xpm/csv and print overview")
     export_p.add_argument("-i", "--input", required=True, help="h5 file path")
@@ -54,22 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
 def _run_export(args) -> None:
     """导出 h5 结果为 xvg/xpm/csv，并打印概览。"""
     from .io.h5 import load_interactions
-    from .io import (
-        HydrogenBondExporter, SaltBridgeExporter, PiStackingExporter, PiCationExporter,
-        HalogenBondExporter, HydrophobicExporter, MetalCoordinationExporter, WaterBridgeExporter,
-    )
+    from .io import EXPORTER_CLASSES
 
-    # h5 里的 interaction_type（检测器名）→ Exporter 子类
-    exporter_classes = {
-        "hydrogen_bond": HydrogenBondExporter,
-        "pi_stacking": PiStackingExporter,
-        "salt_bridge": SaltBridgeExporter,
-        "hydrophobic": HydrophobicExporter,
-        "halogen_bond": HalogenBondExporter,
-        "metal_coordination": MetalCoordinationExporter,
-        "water_bridge": WaterBridgeExporter,
-        "pi_cation": PiCationExporter,
-    }
+    # h5 里的 interaction_type（检测器名）→ Exporter 子类（注册表见 io/__init__.py）
+    exporter_classes = EXPORTER_CLASSES
 
     try:
         interactions = load_interactions(args.input)
@@ -140,6 +149,138 @@ def _print_overview(it, exporter) -> None:
         print(f"  {i}. {exporter.get_pair_label(it, int(idx))}  {occ[idx]:.1%}")
 
 
+def _free_port(host: str, port: int, tries: int = 10) -> int:
+    """端口占用时 +1 顺延（最多 tries 个），返回首个可用端口。"""
+    import socket
+    for candidate in range(port, port + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, candidate))
+                return candidate
+            except OSError:
+                continue
+    raise SystemExit(f"error: no free port in {port}..{port + tries - 1}")
+
+
+def _is_loopback_host(host: str) -> bool:
+    """判断主机名是否为回环地址（localhost/::1/127.0.0.0/8）。"""
+    name = (host or "").strip().lower()
+    if name in LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+def _browse_root(root_arg: str, is_local: bool) -> str:
+    """浏览根目录：显式 --root 优先；本地默认不限制；远程默认当前目录。"""
+    if root_arg:
+        return os.path.abspath(root_arg)
+    return "" if is_local else os.getcwd()
+
+
+def _is_usable_ipv4(ip: str) -> bool:
+    """判断字符串是否为可对外使用的 IPv4（排除回环与 0.0.0.0）。"""
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except ipaddress.AddressValueError:
+        return False
+    return not (addr.is_loopback or addr.is_unspecified)
+
+
+def _probe_ipv4() -> str:
+    """通过 UDP 探测本机出网 IPv4（失败返回空串）。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(IPV4_PROBE_TARGET)
+            return sock.getsockname()[0]
+    except Exception:
+        return ""
+
+
+def _local_ipv4s() -> list[str]:
+    """本机非回环 IPv4 地址列表（去重、稳定排序）。"""
+    found: set[str] = set()
+    try:
+        found.update(socket.gethostbyname_ex(socket.gethostname())[2])
+    except Exception:
+        pass
+    found.add(_probe_ipv4())
+    return sorted(ip for ip in found if _is_usable_ipv4(ip))
+
+
+def _url(host: str, port: int) -> str:
+    """拼接 http URL。"""
+    return "http://%s:%d" % (host, port)
+
+
+def _lan_urls(host: str, port: int, ips: list[str]) -> list[str]:
+    """按绑定主机生成可访问 URL 列表（回环在前，去重保序）。"""
+    if host in WILDCARD_HOSTS:
+        urls = [_url(LOCAL_HOST, port)] + [_url(ip, port) for ip in ips]
+    elif _is_loopback_host(host):
+        urls = [_url(LOCAL_HOST, port)]
+    else:
+        urls = [_url(host, port)]
+    return list(dict.fromkeys(urls))
+
+
+def _print_web_banner(urls: list[str], token: str, host: str,
+                      is_local: bool, root: str) -> None:
+    """打印访问地址、root 范围、token、cookie 提示与绑定警告。"""
+    suffix = f"/?token={token}" if token and not is_local else ""
+    for url in urls:
+        print(f"[INFO] dii web serving at {url}{suffix}")
+    if root:
+        print(f"[INFO] file access restricted to: {root}")
+    else:
+        print("[INFO] file access: unrestricted (loopback only)")
+    if token:
+        print(f"[INFO] token: {token}")
+        print("[INFO] open the URL above once; a cookie keeps you "
+              "signed in afterwards")
+    if not is_local:
+        print(f"[WARN] binding to {host}: reachable from the network; "
+              "token protects access")
+    print("[INFO] press Ctrl+C to stop")
+
+
+def _allowed_hosts(host: str) -> list[str]:
+    """Web Host 头白名单：回环地址 + 本机 IPv4（+ 显式绑定主机）。"""
+    hosts = [LOCAL_HOST, "localhost", "::1"] + _local_ipv4s()
+    if host and host not in WILDCARD_HOSTS:
+        hosts.append(host)
+    return list(dict.fromkeys(hosts))
+
+
+def _open_browser(url: str) -> None:
+    """延时用默认浏览器打开访问地址。"""
+    import threading
+    import webbrowser
+    threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+
+
+def _run_web(args: argparse.Namespace) -> None:
+    """启动 Web 服务并打印访问地址。"""
+    from .web.app import create_app
+    from .web.picker import picker_available
+    port = _free_port(args.host, args.port)
+    is_local = _is_loopback_host(args.host)
+    token = args.token or ("" if is_local else secrets.token_urlsafe(WEB_TOKEN_BYTES))
+    browse_mode = "picker" if (is_local and picker_available()) else "server"
+    root = _browse_root(args.root, is_local)
+    allowed_hosts = _allowed_hosts(args.host)
+    urls = _lan_urls(args.host, port, _local_ipv4s())
+    _print_web_banner(urls, token, args.host, is_local, root)
+    if is_local:
+        _open_browser(urls[0])
+    import uvicorn
+    uvicorn.run(create_app(token=token, browse_mode=browse_mode,
+                           root=root, allowed_hosts=allowed_hosts),
+                host=args.host, port=port, log_level="warning")
+
+
 def main():
     """命令行入口。"""
     args = build_parser().parse_args()
@@ -166,6 +307,8 @@ def main():
         except ValueError as e:
             # 用户输入/选择歧义 → 友好报错（不暴露 traceback）
             raise SystemExit(f"error: {e}")
+    elif args.command == "web":
+        _run_web(args)
     elif args.command == "export":
         _run_export(args)
 

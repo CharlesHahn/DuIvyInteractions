@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="breadcrumb"><a href="/">overview</a> / <a href="/run">new calculation</a> / <span>job {{ job.id }}</span></div>
+
+<div class="section-head">
+  <div>
+    <h1>job {{ job.id }}</h1>
+    <p class="muted">{{ job.summary }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-sm" href="/run">‹ new calculation</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>status</h2>
+  <div id="jobStatus" class="job-status-row" data-job-id="{{ job.id }}" data-status="{{ job.status }}">
+    <span class="job-state job-state-{{ job.status }}" id="jobState">{{ job.status }}</span>
+    <span class="job-elapsed" id="jobElapsed">{{ (job.elapsed if job.elapsed is not none else 0) | round(1) }}s</span>
+    <button class="btn btn-sm job-cancel" type="button" id="cancelRun"{% if job.status not in ("pending", "running") %} disabled{% endif %}>cancel</button>
+  </div>
+  <p class="job-status-error hidden" id="jobStatusError" role="alert"></p>
+  <p class="hint">the log is appended live; this page polls every 800 ms.</p>
+</div>
+
+<div class="panel">
+  <h2>equivalent command</h2>
+  <pre id="jobCommand" class="mono run-command">{{ job.params_preview }}</pre>
+</div>
+
+<div class="panel">
+  <h2>log</h2>
+  <pre id="jobLog" class="mono job-log" data-since="{{ job.lines_total | default(0) }}">{% for line in job.lines %}{{ line }}
+{% endfor %}</pre>
+</div>
+
+<div id="jobResult" class="panel job-result hidden" data-output-dir="{{ job.output_dir or '' }}">
+  <h2>result</h2>
+  <div class="job-done hidden" id="jobDone">
+    <p class="hint">written:</p>
+    <ul class="job-h5-list" id="jobH5List">{% for name in job.h5_files %}<li class="mono">{{ name }}</li>{% endfor %}</ul>
+    <button class="btn btn-sm btn-primary" type="button" id="openResults"{% if not job.output_dir %} disabled{% endif %}>open results</button>
+  </div>
+  <div class="job-failed hidden" id="jobFailed">
+    {% if job.error %}<p class="job-error" id="jobFailedError">{{ job.error }}</p>{% else %}<p class="job-error hidden" id="jobFailedError"></p>{% endif %}
+    <p class="job-hint">the same command can be reproduced in a terminal.</p>
+  </div>
+  <div class="job-cancelled hidden" id="jobCancelled">
+    <p class="job-hint">run cancelled.</p>
+  </div>
+  <p class="job-download"><a class="btn btn-sm" id="downloadLog" href="/download/run-log/{{ job.id | urlencode }}">download full log</a></p>
+</div>
+
+{% if recent_jobs %}
+<div class="panel run-recent job-recent">
+  <h2>recent jobs</h2>
+  <ul class="run-recent-list">
+    {% for item in recent_jobs %}
+    <li class="run-recent-item">
+      <a class="run-recent-link" href="/run/{{ item.id | urlencode }}">
+        <span class="job-state job-state-{{ item.status }}">{{ item.status }}</span>
+        <span class="run-recent-summary">{{ item.summary }}</span>
+        <span class="run-recent-elapsed">{{ item.elapsed }}s</span>
+        <span class="run-recent-output mono">{{ item.output }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/run.js"></script>
+{% endblock %}

@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% set browse = browse_mode | default("picker") %}
+{% set form_data = form | default({}) %}
+{% set chosen_interactions = form_data.interactions | default([]) %}
+{% block main %}
+<div class="breadcrumb"><a href="/">overview</a> / <span>new calculation</span></div>
+
+<div class="section-head">
+  <div>
+    <h1>new calculation</h1>
+    <p class="muted">runs <code>dii run</code> on the server; inputs are read by path, nothing is uploaded.</p>
+  </div>
+</div>
+
+{% if error %}<div class="banner" id="runError">{{ error }}</div>{% endif %}
+<p class="run-status hidden" id="runStatus" role="alert"></p>
+
+<form class="run-form" id="runForm" method="post" action="/run">
+  <div class="panel">
+    <h2>inputs</h2>
+    <div class="run-grid">
+      <div class="run-field">
+        <label for="topologyInput">topology</label>
+        <div class="run-input-row">
+          <input type="text" id="topologyInput" name="topology" value="{{ form_data.topology | default('') }}" placeholder="/path/to/md.tpr" autocomplete="off">
+          <button class="btn btn-sm" type="button" id="browseTopology" data-browse="{{ browse }}" data-target="topologyInput">browse…</button>
+        </div>
+      </div>
+      <div class="run-field">
+        <label for="trajectoryInput">trajectory</label>
+        <div class="run-input-row">
+          <input type="text" id="trajectoryInput" name="trajectory" value="{{ form_data.trajectory | default('') }}" placeholder="/path/to/md.xtc" autocomplete="off">
+          <button class="btn btn-sm" type="button" id="browseTrajectory" data-browse="{{ browse }}" data-target="trajectoryInput">browse…</button>
+        </div>
+      </div>
+      <div class="run-field">
+        <label for="outputInput">output folder</label>
+        <div class="run-input-row">
+          <input type="text" id="outputInput" name="output" value="{{ form_data.output | default('') }}" placeholder="/path/to/out" autocomplete="off">
+          <button class="btn btn-sm" type="button" id="browseOutput" data-browse="{{ browse }}" data-target="outputInput" data-kind="dir">browse…</button>
+        </div>
+      </div>
+      <div class="run-field">
+        <label for="ffSelect">force field</label>
+        <select id="ffSelect" name="ff">
+          {% for ff in ffs %}<option value="{{ ff }}"{% if form_data.ff | default('') == ff %} selected{% endif %}>{{ ff }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="run-field">
+        <label for="strategySelect">strategy</label>
+        <select id="strategySelect" name="strategy">
+          {% for strategy in strategies %}<option value="{{ strategy }}"{% if form_data.strategy | default('') == strategy %} selected{% endif %}>{{ strategy }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="run-interactions">
+      <div class="run-interactions-head">
+        <span class="run-label">interactions</span>
+        <button class="btn btn-sm btn-ghost" type="button" id="interactionsAll">all</button>
+        <button class="btn btn-sm btn-ghost" type="button" id="interactionsNone">none</button>
+      </div>
+      <div class="run-checks">
+        {% for name in interactions %}
+        <label class="run-check" for="pt_{{ name }}">
+          <input type="checkbox" id="pt_{{ name }}" name="interactions" value="{{ name }}"{% if name in chosen_interactions %} checked{% endif %}>
+          <span>{{ name }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <p class="run-note hidden" id="perTupleNote">per_tuple is no longer maintained and has no tests.</p>
+      <p class="run-note hidden" id="markNote">mark redundant is only supported together with hydrophobic; the CLI will reject this combination.</p>
+    </div>
+  </div>
+
+  <details class="panel run-advanced" id="runAdvanced">
+    <summary>advanced</summary>
+    <div class="run-advanced-body">
+      <div class="run-field">
+        <label for="selectInput">select (one MDAnalysis selection per line)</label>
+        <textarea id="selectInput" name="select" rows="4" placeholder="segid A&#10;segid B">{{ form_data.select | default('') }}</textarea>
+      </div>
+      <div class="run-field">
+        <label for="pairingSelect">pairing</label>
+        <select id="pairingSelect" name="pairing">
+          {% for pairing in pairings %}<option value="{{ pairing }}"{% if form_data.pairing | default('any') == pairing %} selected{% endif %}>{{ pairing }}</option>{% endfor %}
+        </select>
+      </div>
+      <label class="run-check" for="markRedundant">
+        <input type="checkbox" id="markRedundant" name="mark_redundant"{% if form_data.mark_redundant | default(false) %} checked{% endif %}>
+        <span>mark redundant</span>
+      </label>
+    </div>
+  </details>
+
+  <div class="panel">
+    <h2>equivalent command</h2>
+    <pre id="commandPreview" class="mono run-command"></pre>
+  </div>
+
+  <div class="run-actions">
+    <button class="btn btn-primary" type="submit" id="startRun">start calculation</button>
+    <span class="hint">the job runs in the background; the next page follows its live log.</span>
+  </div>
+</form>
+
+{% if recent_jobs %}
+<div class="panel run-recent">
+  <h2>recent jobs</h2>
+  <ul class="run-recent-list">
+    {% for item in recent_jobs %}
+    <li class="run-recent-item">
+      <a class="run-recent-link" href="/run/{{ item.id | urlencode }}">
+        <span class="job-state job-state-{{ item.status }}">{{ item.status }}</span>
+        <span class="run-recent-summary">{{ item.summary }}</span>
+        <span class="run-recent-elapsed">{{ item.elapsed }}s</span>
+        <span class="run-recent-output mono">{{ item.output }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if browse == "server" %}
+<div class="filepick-modal hidden" id="filepickModal">
+  <div class="filepick-panel" role="dialog" aria-modal="true" aria-labelledby="filepickTitle">
+    <div class="filepick-head">
+      <h2 class="filepick-title" id="filepickTitle">select structure file</h2>
+      <button class="btn btn-sm filepick-close" type="button" id="filepickClose">×</button>
+    </div>
+    <div class="filepick-body">
+      <div class="filepick-path-row">
+        <button class="btn btn-sm filepick-up" type="button" id="filepickUp">↑ up</button>
+        <input type="text" class="filepick-path-input" id="filepickPath" placeholder="folder path" autocomplete="off">
+        <button class="btn btn-sm filepick-go" type="button" id="filepickGo">go</button>
+      </div>
+      <p class="filepick-current" id="filepickCurrent"></p>
+      <div class="filepick-list" id="filepickList"></div>
+      <p class="filepick-note hidden" id="filepickNote"></p>
+      <p class="filepick-error hidden" id="filepickError"></p>
+    </div>
+    <div class="filepick-foot">
+      <button class="btn btn-sm" type="button" id="filepickUseFolder" disabled>use this folder</button>
+      <button class="btn btn-sm" type="button" id="filepickUse" disabled>use this file</button>
+      <button class="btn btn-sm" type="button" id="filepickCancel">cancel</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if browse == "server" %}<script src="/static/filepick.js"></script>{% endif %}
+<script src="/static/run.js"></script>
+{% endblock %}

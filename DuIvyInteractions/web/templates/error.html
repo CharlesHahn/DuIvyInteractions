@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="error-box">
+  <div class="error-code">{{ status }}</div>
+  <h1>{% if status == 404 %}Not found{% else %}Something went wrong{% endif %}</h1>
+  <p class="muted">{{ message }}</p>
+  <p><a class="btn" href="/">back to overview</a></p>
+</div>
+{% endblock %}

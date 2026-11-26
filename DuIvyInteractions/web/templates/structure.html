@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="breadcrumb"><a href="/">overview</a> / <a href="/type/{{ type | urlencode }}">{{ type }}</a> / <a href="/pair/{{ type | urlencode }}/{{ idx }}">pair {{ idx + 1 }}</a> / <span>3D view</span></div>
+
+<div class="section-head">
+  <div>
+    <h1 class="pair-title">{{ pair_label }}</h1>
+    <p class="muted">{{ n_atoms }} atoms · {{ n_frames }} frames{% if not has_structure %} · structure not selected{% endif %}</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx }}">‹ back to pair</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>structure source</h2>
+  <form class="structure-form" id="structureForm">
+    <label class="structure-field">topology
+      <input type="text" id="topologyInput" name="topology" value="{{ topology }}" placeholder="/path/to/md.tpr" autocomplete="off">
+    </label>
+    <button class="btn btn-sm" type="button" id="browseTopology" data-browse="{{ browse_mode | default('picker') }}" data-target="topologyInput">browse…</button>
+    <label class="structure-field">trajectory
+      <input type="text" id="trajectoryInput" name="trajectory" value="{{ trajectory }}" placeholder="/path/to/md.xtc" autocomplete="off">
+    </label>
+    <button class="btn btn-sm" type="button" id="browseTrajectory" data-browse="{{ browse_mode | default('picker') }}" data-target="trajectoryInput">browse…</button>
+    <button class="btn btn-sm" type="submit" id="openStructure">open structure</button>
+  </form>
+  <p class="hint">topology and trajectory are opened on the server; paths must stay inside the browse root.</p>
+</div>
+
+<div class="panel">
+  <div id="molstarViewer" class="structure-viewer"></div>
+  <div class="structure-frame-row">
+    <span id="frameLabel" class="muted structure-frame-label">{% if has_structure %}frame 0 / {{ n_frames }}{% else %}no structure{% endif %}</span>
+  </div>
+  {# 进度条并入相互作用向量条：可直接拖动/点选/键盘换帧（structure.js 处理指针与键盘） #}
+  <div class="bars structure-existence" id="existenceBar" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="{{ [(n_frames | default(0)) - 1, 0] | max }}" aria-valuenow="0" aria-label="interaction frames">
+    {% for value in existence | default([], true) %}
+    {% set pt = pt_types[loop.index0] if pt_types and (pt_types | length) == (existence | length) else "" %}
+    <span class="{% if value %}on{% endif %}{% if value and pt %} pt-{{ pt | lower }}{% endif %}" title="frame {{ loop.index0 }}: {{ 'active' if value else 'inactive' }}{% if value and pt %} ({{ pt }}){% endif %}"></span>
+    {% endfor %}
+  </div>
+  {% if pt_types and (pt_types | length) == (existence | length) %}
+  <div class="pt-legend">
+    <span class="pt-legend-item"><span class="pt-dot" style="background: #3c5488"></span>P</span>
+    <span class="pt-legend-item"><span class="pt-dot" style="background: #e64b35"></span>T</span>
+  </div>
+  {% endif %}
+  <div class="structure-groups" id="groupLegend"></div>
+  <div class="structure-status" id="structureStatus"></div>
+</div>
+
+{% if (browse_mode | default('picker')) == "server" %}
+<div class="filepick-modal hidden" id="filepickModal">
+  <div class="filepick-panel" role="dialog" aria-modal="true" aria-labelledby="filepickTitle">
+    <div class="filepick-head">
+      <h2 class="filepick-title" id="filepickTitle">select structure file</h2>
+      <button class="btn btn-sm filepick-close" type="button" id="filepickClose">×</button>
+    </div>
+    <div class="filepick-body">
+      <div class="filepick-path-row">
+        <button class="btn btn-sm filepick-up" type="button" id="filepickUp">↑ up</button>
+        <input type="text" class="filepick-path-input" id="filepickPath" placeholder="folder path" autocomplete="off">
+        <button class="btn btn-sm filepick-go" type="button" id="filepickGo">go</button>
+      </div>
+      <p class="filepick-current" id="filepickCurrent"></p>
+      <div class="filepick-list" id="filepickList"></div>
+      <p class="filepick-note hidden" id="filepickNote"></p>
+      <p class="filepick-error hidden" id="filepickError"></p>
+    </div>
+    <div class="filepick-foot">
+      <button class="btn btn-sm" type="button" id="filepickUse" disabled>use this file</button>
+      <button class="btn btn-sm" type="button" id="filepickCancel">cancel</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<script id="structureConfig" type="application/json">{{ {"type": type, "idx": idx, "n_frames": n_frames | default(0), "has_structure": has_structure | default(false), "existence": existence | default([], true), "pt_types": pt_types | default([]), "trajectory": trajectory | default("")} | tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+{# base.html 没有 head block；样式链接放在 body 末尾，浏览器仍会应用 #}
+<link rel="stylesheet" href="/static/vendor/molstar.css">
+<script src="/static/vendor/molstar.js"></script>
+<script src="/static/structure.js"></script>
+{% if (browse_mode | default('picker')) == "server" %}
+<script src="/static/filepick.js"></script>
+{% endif %}
+{% endblock %}

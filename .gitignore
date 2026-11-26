@@ -14,3 +14,5 @@ docs_en/_build/
 
 # 测试输出生成物（h5/csv/xpm/个人参考文件）
 Tests/interaction_h5data/
+# Web 界面试跑/测试输出目录（不追踪）
+Tests/web_run_test/

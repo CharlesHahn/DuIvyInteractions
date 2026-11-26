@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DII · {{ title }}</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/"><span class="brand-mark">DII</span><span>DuIvyInteractions</span></a>
+  {% if batches is defined and batches %}
+  <div class="ds-chips">
+    {% for b in batches %}
+    <form class="ds-chip" method="post" action="/select/remove">
+      <input type="hidden" name="path" value="{{ b.path }}">
+      <span class="dot"></span><span class="ds-name" title="{{ b.path }}">{{ b.name }}</span>
+      <span class="ds-count">{{ b.n_types }}</span>
+      <button type="submit" class="ds-remove" aria-label="remove">×</button>
+    </form>
+    {% endfor %}
+    {% if batches | length > 1 %}
+    <form class="ds-clear" method="post" action="/select/clear">
+      <button type="submit" class="btn btn-ghost btn-sm">clear all</button>
+    </form>
+    {% endif %}
+  </div>
+  {% elif ds_name %}
+  <div class="ds-chip" title="{{ datasource }}"><span class="dot"></span><span class="ds-name">{{ ds_name }}</span></div>
+  {% endif %}
+  <div class="topbar-spacer"></div>
+  {% if ds_name and title != "overview" %}
+  <a class="btn btn-ghost btn-sm" href="/">add data source</a>
+  {% endif %}
+</header>
+<div class="layout">
+  {% if types %}
+  <aside class="sidebar">
+    <p class="side-title">interactions</p>
+    {% for t in types %}
+    <a class="side-item{% if t.type == active_type %} active{% endif %}" data-t="{{ t.data_type }}" href="/type/{{ t.type | urlencode }}">
+      <span class="dot"></span><span class="side-label">{{ t.type }}</span><span class="side-count">{{ t.n_pairs }}</span>
+    </a>
+    {% endfor %}
+  </aside>
+  {% endif %}
+  <main class="content">{% block main %}{% endblock %}</main>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+{% block scripts %}{% endblock %}
+<script>
+(function () {
+  var toast = document.getElementById('toast');
+  var timer = null;
+  window.showToast = function (text, sticky) {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!text) { toast.classList.add('hidden'); return; }
+    toast.textContent = text;
+    toast.classList.remove('hidden');
+    if (!sticky) {
+      timer = setTimeout(function () { toast.classList.add('hidden'); }, 4000);
+    }
+  };
+})();
+</script>
+</body>
+</html>
