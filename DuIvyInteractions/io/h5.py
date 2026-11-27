@@ -10,7 +10,8 @@ import json
 import os
 import stat
 import tempfile
-from typing import List, Tuple, Dict
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Dict
 from pathlib import Path
 
 from ..core.datas import Interaction, Group, AtomData
@@ -18,6 +19,50 @@ from ..core.datas import Interaction, Group, AtomData
 
 # HDF5 文件格式版本
 FORMAT_VERSION = "1.0"
+
+# 运行溯源组 run/ 的布局（可选组，旧文件无此组）
+RUN_GROUP = "run"
+RUN_INPUTS = "inputs"
+RUN_ATTRS = ("created_at", "dii_version", "cwd")
+# run/ 组内单值 attrs（路径/力场/策略/配对）
+RUN_TEXT_ATTRS = ("topology", "trajectory", "output", "ff", "strategy", "pairing")
+RUN_FLAG_ATTR = "mark_redundant"
+# run/ 组内字符串数组数据集（空列表也写出）
+RUN_LISTS = ("interactions", "select", "argv")
+# run/inputs 组内的文件指纹 stem
+RUN_STAT_STEMS = ("topology", "trajectory")
+# 读缺字段时的默认值
+DEFAULT_PAIRING = "any"
+FINGERPRINT_MISSING = -1
+FINGERPRINT_MISSING_MTIME = -1.0
+
+
+@dataclass(frozen=True)
+class RunMeta:
+    """一次 dii run 的运行参数（写入用）。"""
+    topology: str
+    trajectory: str
+    output: str
+    ff: str
+    strategy: str
+    interactions: Tuple[str, ...] = ()
+    select: Tuple[str, ...] = ()
+    pairing: str = "any"
+    mark_redundant: bool = False
+    argv: Tuple[str, ...] = ()
+    cwd: str = ""
+    created_at: str = ""
+    dii_version: str = ""
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """从 h5 读出的运行参数 + 输入文件指纹（校验用）。"""
+    meta: RunMeta
+    topology_size: int
+    topology_mtime: float
+    trajectory_size: int
+    trajectory_mtime: float
 
 
 def _json_default(obj):
@@ -43,13 +88,15 @@ def _normalize_path(path) -> str:
     return path
 
 
-def save_interactions(interactions: List[Interaction], path: str, compress: bool = True) -> None:
-    """保存 Interaction 列表到 HDF5 文件。
+def save_interactions(interactions: List[Interaction], path: str, compress: bool = True,
+                      run: Optional[RunMeta] = None) -> None:
+    """保存 Interaction 列表到 HDF5 文件，可选写入 run/ 溯源组。
 
     Args:
         interactions: Interaction 列表
         path: 输出文件路径
         compress: 是否启用 gzip 压缩
+        run: 运行参数（None 则不写 run/ 组）
     """
     path = _normalize_path(path)
 
@@ -61,10 +108,13 @@ def save_interactions(interactions: List[Interaction], path: str, compress: bool
         # 为每个 Interaction 创建一个 group
         for i, interaction in enumerate(interactions):
             _write_interaction(f, i, interaction, compress)
+        if run is not None:
+            save_run_group(f, run)
 
 
 def save_interactions_atomic(interactions: List[Interaction], path: str,
-                             compress: bool = True) -> None:
+                             compress: bool = True,
+                             run: Optional[RunMeta] = None) -> None:
     """原子保存：先写同目录临时文件，成功后替换目标文件。"""
     path = _normalize_path(path)
     directory = os.path.dirname(os.path.abspath(path))
@@ -75,7 +125,7 @@ def save_interactions_atomic(interactions: List[Interaction], path: str,
         prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
     os.close(fd)
     try:
-        save_interactions(interactions, tmp_path, compress)
+        save_interactions(interactions, tmp_path, compress, run=run)
         os.chmod(tmp_path, mode if mode is not None else 0o644)
         os.replace(tmp_path, path)
     finally:
@@ -107,6 +157,93 @@ def load_interactions(path: str) -> List[Interaction]:
             interactions.append(interaction)
     
     return interactions
+
+
+def save_run_group(handle: h5py.File, run: RunMeta) -> None:
+    """写入 h5 顶层 run/ 组（参数 attrs、字符串数组与输入文件指纹）。"""
+    grp = handle.create_group(RUN_GROUP)
+    for name in RUN_TEXT_ATTRS + RUN_ATTRS:
+        grp.attrs[name] = getattr(run, name)
+    grp.attrs[RUN_FLAG_ATTR] = bool(run.mark_redundant)
+    for name in RUN_LISTS:
+        _write_str_list(grp, name, getattr(run, name))
+    _write_fingerprints(grp.create_group(RUN_INPUTS), run)
+
+
+def load_run_meta(path: str) -> Optional[RunRecord]:
+    """读取 h5 的 run/ 溯源组；旧文件无该组时返回 None。"""
+    path = _normalize_path(path)
+    with h5py.File(path, 'r') as f:
+        if RUN_GROUP not in f:
+            return None
+        return _read_run_record(f[RUN_GROUP])
+
+
+def _read_run_record(grp: h5py.Group) -> RunRecord:
+    """由 run/ 组组装 RunRecord（缺字段取默认值）。"""
+    topo_size, topo_mtime = _read_stat(grp, "topology")
+    traj_size, traj_mtime = _read_stat(grp, "trajectory")
+    return RunRecord(meta=_read_run_meta(grp), topology_size=topo_size,
+                     topology_mtime=topo_mtime, trajectory_size=traj_size,
+                     trajectory_mtime=traj_mtime)
+
+
+def _read_run_meta(grp: h5py.Group) -> RunMeta:
+    """读取 run/ 组的参数 attrs 与列表数据集。"""
+    values: Dict[str, object] = {
+        name: _attr_str(grp, name) for name in RUN_TEXT_ATTRS + RUN_ATTRS}
+    values.update({name: _read_str_list(grp, name) for name in RUN_LISTS})
+    values["pairing"] = _attr_str(grp, "pairing", DEFAULT_PAIRING)
+    values[RUN_FLAG_ATTR] = bool(grp.attrs.get(RUN_FLAG_ATTR, False))
+    return RunMeta(**values)
+
+
+def _write_str_list(grp: h5py.Group, name: str, values: Tuple[str, ...]) -> None:
+    """写出 UTF-8 字符串数组数据集（空序列写长度 0 数组）。"""
+    items = np.array([str(v) for v in values], dtype=object)
+    grp.create_dataset(name, data=items, dtype=h5py.string_dtype(encoding="utf-8"))
+
+
+def _read_str_list(grp: h5py.Group, name: str) -> Tuple[str, ...]:
+    """读取字符串数组数据集为 tuple（缺失或空 → 空 tuple）。"""
+    if name not in grp:
+        return ()
+    return tuple(_decode_strings(grp[name][:]))
+
+
+def _attr_str(grp: h5py.Group, name: str, default: str = "") -> str:
+    """读取字符串 attr（bytes 自动解码，缺失取 default）。"""
+    value = grp.attrs.get(name, default)
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _write_fingerprints(grp: h5py.Group, run: RunMeta) -> None:
+    """写出拓扑/轨迹的 size 与 mtime（stat 失败记 -1）。"""
+    for stem, path in zip(RUN_STAT_STEMS, (run.topology, run.trajectory)):
+        size, mtime = _stat_file(path)
+        grp.attrs[f"{stem}_size"] = size
+        grp.attrs[f"{stem}_mtime"] = mtime
+
+
+def _read_stat(grp: h5py.Group, stem: str) -> Tuple[int, float]:
+    """读取 <stem>_size/mtime（无 run/inputs 组时记 -1）。"""
+    if RUN_INPUTS not in grp:
+        return (FINGERPRINT_MISSING, FINGERPRINT_MISSING_MTIME)
+    inputs = grp[RUN_INPUTS]
+    size = int(inputs.attrs.get(f"{stem}_size", FINGERPRINT_MISSING))
+    mtime = float(inputs.attrs.get(f"{stem}_mtime", FINGERPRINT_MISSING_MTIME))
+    return (size, mtime)
+
+
+def _stat_file(path: str) -> Tuple[int, float]:
+    """返回文件 (size, mtime)；异常时返回 (-1, -1.0)。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (FINGERPRINT_MISSING, FINGERPRINT_MISSING_MTIME)
+    return (st.st_size, st.st_mtime)
 
 
 def _write_interaction(f: h5py.File, idx: int, interaction: Interaction, compress: bool) -> None:

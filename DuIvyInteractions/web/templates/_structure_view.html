@@ -2,17 +2,19 @@
    页面自行决定是否引入 molstar.js / structure.js；本 partial 只提供 DOM 与配置。 #}
 <div class="panel">
   <h2>structure source</h2>
+  {% set recorded = run_meta if run_meta else None %}
   <form class="structure-form" id="structureForm">
     <label class="structure-field">topology
-      <input type="text" id="topologyInput" name="topology" value="{{ topology }}" placeholder="/path/to/md.tpr" autocomplete="off">
+      <input type="text" id="topologyInput" name="topology" value="{{ (recorded.topology if recorded else '') if auto_attempt else topology }}" placeholder="/path/to/md.tpr" autocomplete="off">
     </label>
     <button class="btn btn-sm" type="button" id="browseTopology" data-browse="{{ browse_mode | default('picker') }}" data-target="topologyInput">browse…</button>
     <label class="structure-field">trajectory
-      <input type="text" id="trajectoryInput" name="trajectory" value="{{ trajectory }}" placeholder="/path/to/md.xtc" autocomplete="off">
+      <input type="text" id="trajectoryInput" name="trajectory" value="{{ (recorded.trajectory if recorded else '') if auto_attempt else trajectory }}" placeholder="/path/to/md.xtc" autocomplete="off">
     </label>
     <button class="btn btn-sm" type="button" id="browseTrajectory" data-browse="{{ browse_mode | default('picker') }}" data-target="trajectoryInput">browse…</button>
     <button class="btn btn-sm" type="submit" id="openStructure">open structure</button>
   </form>
+  {% if recorded %}<p class="hint muted">paths from this h5 (run record)</p>{% endif %}
   <p class="hint">topology and trajectory are opened on the server; paths must stay inside the browse root.</p>
 </div>
 
@@ -64,4 +66,17 @@
 </div>
 {% endif %}
 
-<script id="structureConfig" type="application/json">{{ {"type": type, "idx": idx, "frame": frame | default(0), "n_frames": n_frames | default(0), "has_structure": has_structure | default(false), "structure_version": structure_version | default(0), "existence": existence | default([], true), "pt_types": pt_types | default([]), "trajectory": trajectory | default("")} | tojson }}</script>
+<script id="structureConfig" type="application/json">{
+  "type": {{ type | tojson }},
+  "idx": {{ idx | default(0) }},
+  "frame": {{ frame | default(0) }},
+  "n_frames": {{ n_frames | default(0) }},
+  "has_structure": {{ "true" if has_structure | default(false) else "false" }},
+  "structure_version": {{ structure_version | default(0) }},
+  "existence": {{ existence | default([], true) | tojson }},
+  "pt_types": {{ pt_types | default([]) | tojson }},
+  "trajectory": {{ trajectory | default("") | tojson }},
+  "auto_url": "/api/structure/auto",
+  "run_meta": {{ run_meta | tojson if run_meta else "null" }},
+  "auto_attempt": {{ "true" if auto_attempt else "false" }}
+}</script>

@@ -2,9 +2,12 @@
 """Pipeline：串联 Reader → Identifier → Detector → h5 保存。"""
 
 import os
+from datetime import datetime
 from typing import List, Optional, Set, Tuple
 
 import MDAnalysis as mda
+
+import DuIvyInteractions
 
 from .core.datas import Group, Interaction
 from .system_readers import GmxTprReader
@@ -20,7 +23,7 @@ from .interaction_detectors import (
     PiCationDetectorTwoPass, PiCationDetectorPerFrame, PiCationDetectorPerTuple,
 )
 from .io.h5 import (
-    save_interactions, save_interactions_atomic, load_interactions,
+    RunMeta, save_interactions, save_interactions_atomic, load_interactions,
 )
 from .redundancy import FLAG_PI_OVERLAP, pi_overlap_flags
 from .selection import (
@@ -80,6 +83,9 @@ class Pipeline:
         """运行相互作用检测并保存 h5（--select/--pairing 限定参与池与配对；
         mark_redundant 标记疏水与 π-π 的重叠）。"""
         names = _prepare_run_names(interactions, mark_redundant, self.strategy)
+        run_meta = build_run_meta(
+            tpr, xtc, output, self.ff, self.strategy, interactions, select,
+            pairing, mark_redundant)
         sd = GmxTprReader().read(tpr)
         identifier = self._make_identifier()
         groups = identifier.identify(sd)
@@ -90,15 +96,15 @@ class Pipeline:
         succeeded = {
             name for name in names
             if self._detect_and_save(name, groups, u, water_residues,
-                                     assignment, pairing, output)
+                                     assignment, pairing, output, run_meta)
         }
         if mark_redundant:
-            _finish_marking(output, succeeded)
+            _finish_marking(output, succeeded, run_meta)
 
     def _detect_and_save(self, name: str, groups: List[Group], u: mda.Universe,
                          water_residues: frozenset,
                          assignment: Optional[Assignment], pairing: str,
-                         output: str) -> bool:
+                         output: str, run: Optional[RunMeta] = None) -> bool:
         """单类型检测并保存 h5；失败只告警，返回是否成功。"""
         try:
             detector = self._make_detector(name)
@@ -109,7 +115,8 @@ class Pipeline:
                 tuple_filter = build_tuple_filter(pairing, assignment, name)
             results = detector.detect(filtered, trajectory=u.trajectory,
                                       tuple_filter=tuple_filter)
-            save_interactions(results, os.path.join(output, f"{name}.h5"))
+            save_interactions(results, os.path.join(output, f"{name}.h5"),
+                              run=run)
             return True
         except Exception as e:
             print(f"[WARN] {name} detection failed: {e}")
@@ -180,6 +187,61 @@ class Pipeline:
         return result
 
 
+def build_run_meta(tpr: str, xtc: str, output: str, ff: str, strategy: str,
+                   interactions: Optional[List[str]],
+                   select: Optional[List[str]], pairing: str,
+                   mark_redundant: bool,
+                   argv: Optional[List[str]] = None,
+                   cwd: Optional[str] = None,
+                   created_at: Optional[str] = None) -> RunMeta:
+    """构建一次 dii run 的运行参数（argv/cwd/created_at 缺省时自动生成）。"""
+    types = None if interactions is None else _unique(interactions)
+    selects = _unique(select)
+    tpr, xtc, output = (os.path.abspath(p) for p in (tpr, xtc, output))
+    if argv is None:
+        argv = _canonical_argv(tpr, xtc, output, ff, strategy, types, selects,
+                               pairing, mark_redundant)
+    return RunMeta(
+        topology=tpr, trajectory=xtc, output=output, ff=ff, strategy=strategy,
+        interactions=types or (), select=selects, pairing=pairing,
+        mark_redundant=bool(mark_redundant), argv=tuple(argv),
+        cwd=cwd if cwd is not None else os.getcwd(),
+        created_at=created_at if created_at is not None else _now_iso(),
+        dii_version=_dii_version())
+
+
+def _canonical_argv(tpr: str, xtc: str, output: str, ff: str, strategy: str,
+                    interactions: Optional[Tuple[str, ...]],
+                    select: Tuple[str, ...], pairing: str,
+                    mark_redundant: bool) -> List[str]:
+    """生成与 dii run 参数顺序一致的规范命令行。"""
+    types = "all" if interactions is None else ",".join(interactions)
+    argv = ["dii", "run", "-t", tpr, "-f", xtc, "-o", output, "--ff", ff,
+            "--strategy", strategy, "--interactions", types]
+    for value in select:
+        argv += ["--select", value]
+    if pairing != "any":
+        argv += ["--pairing", pairing]
+    if mark_redundant:
+        argv.append("--mark-redundant")
+    return argv
+
+
+def _unique(values: Optional[List[str]]) -> Tuple[str, ...]:
+    """去重并保持传入顺序。"""
+    return tuple(dict.fromkeys(values or ()))
+
+
+def _now_iso() -> str:
+    """当前本地时间（含时区、秒精度）的 ISO 字符串。"""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _dii_version() -> str:
+    """DuIvyInteractions 包版本号（未定义时为 unknown）。"""
+    return str(getattr(DuIvyInteractions, "__version__", "unknown"))
+
+
 def _prepare_run_names(interactions: Optional[List[str]], mark_redundant: bool,
                        strategy: str) -> List[str]:
     """构建实际运行类型列表；mark 时校验并自动补跑 pi_stacking。"""
@@ -196,19 +258,21 @@ def _prepare_run_names(interactions: Optional[List[str]], mark_redundant: bool,
     return names
 
 
-def _finish_marking(output: str, succeeded: Set[str]) -> None:
+def _finish_marking(output: str, succeeded: Set[str],
+                    run: Optional[RunMeta] = None) -> None:
     """确认依赖类型成功并写回 flags；依赖失败则报错。"""
     missing = {"hydrophobic", "pi_stacking"} - succeeded
     if missing:
         raise ValueError(
             "mark-redundant skipped: "
             + ", ".join(f"{name} detection failed" for name in sorted(missing)))
-    n_pairs, n_frames = _mark_hydrophobic_redundancy(output)
+    n_pairs, n_frames = _mark_hydrophobic_redundancy(output, run)
     print(f"[INFO] marked {n_pairs} hydrophobic pairs ({n_frames} pair-frames) "
           "overlapping pi-stacking (kept, not removed)")
 
 
-def _mark_hydrophobic_redundancy(output: str) -> Tuple[int, int]:
+def _mark_hydrophobic_redundancy(output: str,
+                                 run: Optional[RunMeta] = None) -> Tuple[int, int]:
     """读取 hydrophobic/pi_stacking h5，计算并原子写回 flags。"""
     hydro_path = os.path.join(output, "hydrophobic.h5")
     pi_path = os.path.join(output, "pi_stacking.h5")
@@ -216,7 +280,7 @@ def _mark_hydrophobic_redundancy(output: str) -> Tuple[int, int]:
     if not hydrophobic:
         return (0, 0)
     counts = _apply_overlap_flags(hydrophobic, pi_interaction)
-    _save_marked(hydrophobic, hydro_path)
+    _save_marked(hydrophobic, hydro_path, run)
     return counts
 
 
@@ -256,9 +320,10 @@ def _apply_overlap_flags(hydrophobic: List[Interaction],
     return (total_pairs, total_frames)
 
 
-def _save_marked(hydrophobic: List[Interaction], hydro_path: str) -> None:
-    """原子写回带 flags 的 hydrophobic h5。"""
+def _save_marked(hydrophobic: List[Interaction], hydro_path: str,
+                 run: Optional[RunMeta] = None) -> None:
+    """原子写回带 flags 的 hydrophobic h5（保留 run/ 溯源组）。"""
     try:
-        save_interactions_atomic(hydrophobic, hydro_path)
+        save_interactions_atomic(hydrophobic, hydro_path, run=run)
     except OSError as e:
         raise ValueError(f"cannot write {hydro_path}: {e}") from e

@@ -24,6 +24,15 @@
   var TRAJECTORY_URL = "/api/structure/trajectory";
   var INTERACTIONS_URL = "/api/structure/interactions";
   var SELECT_URL = "/api/structure/select";
+  /* h5 的 run/ 组自动载入：auto_attempt 为真时先试后端，失败才回退手选 */
+  var AUTO_URL_KEY = "auto_url";
+  var AUTO_TRIED_FLAG = "auto";
+  var AUTO_SKIP_VALUE = "0";
+  var AUTO_CONFLICT_STATUS = 409;
+  var AUTO_LOADING_TEXT = "loading h5 recorded structure…";
+  var AUTO_UNAVAILABLE_TEXT = "h5 recorded trajectory unavailable";
+  var AUTO_CONFIRM_HINT = " — confirm the paths";
+  var AUTO_FAILED_PREFIX = "auto structure failed: HTTP ";
   /* 会话版本号：结构每次重选都自增，URL 变则缓存键变（绕开浏览器/代理缓存） */
   var VERSION_PARAM = "v";
   var PICK_ENDPOINT = "/api/pick";
@@ -253,11 +262,27 @@
   function statusText() {
     var parts = ["frame " + frame + " / " + frameLimit(),
                  "trajectory loaded"];
+    var source = runSourceLabel();
+    if (source) parts.push(source);
     var residues = data && data.residues ? data.residues : [];
     if (residues.length) parts.push(residues.length + " groups");
     if (focusPath) parts.push("focus: " + focusPath);
     if (failures) parts.push(failures + " warnings");
     return parts.join(" · ");
+  }
+
+  /* 已载入结构且 h5 带 run/ 记录时，状态栏标出来源（只提示，不重复载入） */
+  function runSourceLabel() {
+    var meta = cfg.run_meta;
+    if (!cfg.has_structure || !meta) return "";
+    if (!meta.topology || !meta.trajectory) return "";
+    return "source: run (" + basename(meta.topology) + " + " +
+      basename(meta.trajectory) + ")";
+  }
+
+  function basename(path) {
+    var parts = String(path || "").split("/");
+    return parts[parts.length - 1];
   }
 
   /* ---------------- 数据请求 ---------------- */
@@ -280,10 +305,17 @@
       encodeURIComponent(cfg.structure_version || 0);
   }
 
+  /* 后端 400 的 detail 才是真实原因（如原子名/原子数不一致），状态栏直接展示 */
   function fetchTopologyText() {
     return fetch(topologyUrl()).then(function (response) {
       if (!response.ok) {
-        throw new Error("topology HTTP " + response.status);
+        return response.json().then(function (payload) {
+          var detail = payload && (payload.detail || payload.error);
+          throw new Error(detail ? String(detail)
+            : "topology HTTP " + response.status);
+        }, function () {
+          throw new Error("topology HTTP " + response.status);
+        });
       }
       return response.text();
     }).then(function (text) {
@@ -1214,10 +1246,88 @@
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body
     }).then(readJson).then(function () {
+      /* 手动选择优先：本次会话不再让自动尝试覆盖用户显式指定的结构 */
+      markAutoSkipped();
       window.location.reload();
     }).catch(function (error) {
       openButton.disabled = false;
       setStatus(error.message, true);
+    });
+  }
+
+  /* ---------------- 自动载入 h5 记录的拓扑/轨迹 ---------------- */
+
+  /* auto=0 表示本次会话已尝试过（失败后写入地址栏，刷新不再反复请求） */
+  function shouldAutoLoad() {
+    return !!cfg.auto_attempt && !!cfg[AUTO_URL_KEY] && !autoSkipRequested();
+  }
+
+  function autoSkipRequested() {
+    var url = new URL(window.location.href);
+    return url.searchParams.get(AUTO_TRIED_FLAG) === AUTO_SKIP_VALUE;
+  }
+
+  function markAutoSkipped() {
+    if (!window.history || typeof window.history.replaceState !== "function") {
+      return;
+    }
+    var url = new URL(window.location.href);
+    if (url.searchParams.get(AUTO_TRIED_FLAG) === AUTO_SKIP_VALUE) return;
+    url.searchParams.set(AUTO_TRIED_FLAG, AUTO_SKIP_VALUE);
+    try {
+      window.history.replaceState(null, "", url.pathname + url.search +
+        url.hash);
+    } catch (error) {
+      /* 浏览器限制 replaceState 频率时忽略：本次已回退手选 */
+    }
+  }
+
+  function autoRequestBody() {
+    return "type=" + encodeURIComponent(cfg.type) + "&idx=" + cfg.idx;
+  }
+
+  /* 409 时 h5 记录的路径仍值得展示：预填输入框让用户只需确认 */
+  function prefillAutoPaths(payload) {
+    if (payload && payload.topology && topologyInput) {
+      topologyInput.value = String(payload.topology);
+    }
+    if (payload && payload.trajectory && trajectoryInput) {
+      trajectoryInput.value = String(payload.trajectory);
+    }
+  }
+
+  function autoFallback(status, payload) {
+    var body = payload || {};
+    if (status === AUTO_CONFLICT_STATUS) {
+      prefillAutoPaths(body);
+      setStatus(AUTO_UNAVAILABLE_TEXT + " (" + (body.reason || body.detail ||
+        status) + ")" + AUTO_CONFIRM_HINT, true);
+    } else {
+      setStatus(body.detail || body.error || (AUTO_FAILED_PREFIX + status),
+        true);
+    }
+    markAutoSkipped();
+  }
+
+  /* 200 后整页刷新：后端已写入结构状态，重载的页面直接进正常载入流程 */
+  function autoLoadStructure() {
+    setStatus(AUTO_LOADING_TEXT, false);
+    fetch(cfg[AUTO_URL_KEY], {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: autoRequestBody()
+    }).then(function (response) {
+      if (response.ok) {
+        window.location.reload();
+        return null;
+      }
+      return response.json().then(function (payload) {
+        autoFallback(response.status, payload);
+      }).catch(function () {
+        autoFallback(response.status, null);
+      });
+    }).catch(function (error) {
+      autoFallback(0, { detail: error.message });
     });
   }
 
@@ -1250,7 +1360,11 @@
   if (form) form.addEventListener("submit", selectStructure);
 
   highlightFrame(frame);
-  if (cfg.has_structure) {
+  /* 自动尝试优先于 has_structure：切到另一数据集时旧结构与该 h5 记录不一致，
+     必须先按记录重载，否则会用旧宇宙算新拓扑（400）。 */
+  if (shouldAutoLoad()) {
+    autoLoadStructure();
+  } else if (cfg.has_structure) {
     updateFrameLabel(frame);
     initViewer();
   } else {
