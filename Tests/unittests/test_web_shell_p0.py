@@ -144,42 +144,49 @@ def _block_named(html: str, name: str) -> str:
 
 class TestEmptyLanding:
 
-    def test_two_start_choices(self, make_client):
+    def test_main_shows_brand_empty_state(self, make_client):
+        """无数据时主区只渲染品牌空状态：纯展示，不含任何入口。"""
         client, _ = make_client()
         html = client.get("/").text
-        assert html.count('class="start-choice"') == 2
-        assert "Load results" in html and "Run job" in html
-        assert 'class="card"' not in html
+        for marker in ('class="start-choice"', "start-screen", "add-panel",
+                       "+ add dataset", "ds-add", 'class="card"', "ds-block"):
+            assert marker not in html, marker
+        main = html.split('<main class="content">', 1)[1].split("</main>", 1)[0]
+        assert main.count("<section") == 1
+        brand = main.split('<section class="empty-brand">', 1)[1] \
+                    .split("</section>", 1)[0]
+        assert 'class="empty-brand-mark">DII</span>' in brand
+        assert "<h1>DuIvyInteractions</h1>" in brand
+        assert "non-covalent interaction analysis for MD trajectories" in brand
+        assert brand.count('class="kbd"') == 2
+        assert ">+ load</span>" in brand and ">+ run</span>" in brand
+        assert not re.search(r"<a\b|<form\b|<button\b", brand)
 
-    def test_no_dataset_blocks_or_cards(self, make_client):
+    def test_no_empty_brand_with_data(self, loaded):
+        assert "empty-brand" not in loaded[0].get("/").text
+
+    def test_load_modal_is_rendered_hidden(self, make_client):
         client, _ = make_client()
         html = client.get("/").text
-        assert "ds-block" not in html
-        assert "New calculation" not in html
+        assert 'class="load-modal hidden" id="loadModal"' in html
+        assert 'class="source-form" id="loadForm" method="post" action="/select"' \
+            in html
 
-    def test_load_form_collapsed_without_add(self, make_client):
+    def test_sidebar_is_always_present(self, make_client):
         client, _ = make_client()
-        html = client.get("/").text
-        assert 'class="source-form"' not in html
-        assert "<details" not in html
+        aside = _aside(client.get("/").text)
+        assert "+ load" in aside and "+ run" in aside
+        assert "data-load-open" in aside
+        assert 'class="side-batch"' not in aside
+        assert 'action="/select/clear"' not in aside
 
-    def test_add_query_expands_form(self, make_client):
+    def test_add_query_no_longer_renders_inline_form(self, make_client):
         client, _ = make_client()
-        html = client.get("/?add=1").text
-        assert '<details class="panel add-panel" open>' in html
-        assert html.count('class="source-form"') == 1
-        assert 'action="/select"' in html and 'name="path"' in html
-
-    def test_start_choices_are_links(self, make_client):
-        client, _ = make_client()
-        html = client.get("/").text
-        assert 'href="/?add=1"' in html and 'href="/run"' in html
-
-    def test_sidebar_absent_without_data(self, make_client):
-        client, _ = make_client()
-        html = client.get("/").text
-        assert 'class="sidebar"' not in html
-        assert "side-batch" not in html
+        resp = client.get("/?add=1")
+        assert resp.status_code == 200
+        assert "add-panel" not in resp.text
+        assert "<details" not in resp.text
+        assert 'class="load-modal hidden" id="loadModal"' in resp.text
 
 
 # ============================================================
@@ -228,13 +235,15 @@ class TestDatasetBlocks:
         assert 'href="/type/hydrogen_bond"' in _block_named(html, "first")
         assert SUFFIXED_HREF in _block_named(html, "second")
 
-    def test_add_dataset_entry(self, loaded):
+    def test_no_add_dataset_entry(self, loaded):
         html = loaded[0].get("/").text
-        assert "+ add dataset" in html and 'href="/?add=1"' in html
+        assert "+ add dataset" not in html
+        assert "ds-add" not in html
 
-    def test_add_query_expands_form_with_data(self, loaded):
+    def test_add_query_keeps_single_load_form(self, loaded):
         html = loaded[0].get("/?add=1").text
-        assert '<details class="panel add-panel" open>' in html
+        assert "add-panel" not in html
+        assert '<details' not in html
         assert html.count('class="source-form"') == 1
 
     def test_remove_drops_block(self, loaded, first_dir):
@@ -321,7 +330,8 @@ class TestNavAndGroups:
         assert len(captured["cards"]) == 4
         assert len(captured["groups"]) == 2
 
-    def test_index_context_flags_add(self, monkeypatch, loaded):
+    def test_index_context_has_shell_extras(self, monkeypatch, loaded):
+        """主页上下文保留外壳所需的浏览方式与最近数据源（供 base 弹窗）。"""
         client, _ = loaded
         captured = {}
         original = web_app.TEMPLATES.TemplateResponse
@@ -331,9 +341,9 @@ class TestNavAndGroups:
             return original(request, name, context, **kwargs)
 
         monkeypatch.setattr(web_app.TEMPLATES, "TemplateResponse", capture)
-        assert client.get("/?add=1&path=/tmp/out").status_code == 200
-        assert captured["add"] is True
-        assert captured["add_path"] == "/tmp/out"
+        assert client.get("/").status_code == 200
+        assert captured["browse_mode"] == "picker"
+        assert isinstance(captured["recent"], list)
 
 
 # ============================================================
@@ -353,11 +363,15 @@ class TestShellCss:
         assert rules, "missing rule for %s" % selector
         return rules
 
-    def test_start_choice_is_large(self, css):
-        rule = self._rules(css, ".start-choice")[-1]
-        assert "min-height: 120px" in rule
-        choices = self._rules(css, ".start-choices")[-1]
-        assert "grid-template-columns" in choices
+    def test_load_modal_rules(self, css):
+        modal = self._rules(css, ".load-modal")[0]
+        assert "position: fixed" in modal
+        assert "z-index: 90" in modal
+        assert any("max-width" in rule
+                   for rule in self._rules(css, ".load-panel"))
+        assert "display: flex" in self._rules(css, ".load-row")[0]
+        assert self._rules(css, ".load-recent")
+        assert ".ds-add" not in css
 
     def test_dataset_and_sidebar_rules(self, css):
         assert any("text-overflow: ellipsis" in rule
@@ -366,5 +380,5 @@ class TestShellCss:
         assert "padding-left" in self._rules(css, ".side-batch .side-item")[-1]
         for selector in (".side-actions", ".side-action", ".side-batch",
                          ".side-batch-head", ".side-batch-remove",
-                         ".side-clear", ".start-recent"):
+                         ".side-clear"):
             assert self._rules(css, selector), selector

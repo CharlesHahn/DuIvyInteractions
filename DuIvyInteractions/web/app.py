@@ -140,6 +140,7 @@ def create_app(token: str = "", browse_mode: str = "picker", root: str = "",
     manager = JobManager(root=root)
     state: Dict[str, Any] = {"sources": [], "batch_items": {}, "items": [],
                              "structure": None, "structure_version": 0,
+                             "browse_mode": browse_mode,
                              "jobs": manager}
     app = FastAPI(title="DII Web", docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=_job_lifespan(manager))
@@ -436,7 +437,7 @@ def _error_page(request: Request, state: Dict[str, Any], status: int,
     return TEMPLATES.TemplateResponse(
         request, "error.html",
         {"title": str(status), "status": status, "message": message,
-         **_nav(state)},
+         **_page_nav(state)},
         status_code=status)
 
 
@@ -1170,6 +1171,13 @@ def _nav(state: Dict[str, Any], active_type: str = "") -> Dict[str, Any]:
     return _nav_source(path, items, active_type, _batch_summaries(state))
 
 
+def _page_nav(state: Dict[str, Any], active_type: str = "") -> Dict[str, Any]:
+    """页面上下文 = 导航上下文 + 外壳弹窗所需（浏览方式与最近数据源）。"""
+    return {**_nav(state, active_type),
+            "browse_mode": state.get("browse_mode", "picker"),
+            "recent": load_recent()}
+
+
 def _find_interaction(items: Any, name: str) -> Tuple[str, Interaction]:
     """在 items 中按显示名查找 (h5 路径, Interaction)；未知 → 404。"""
     for tname, h5_path, it in items:
@@ -1186,8 +1194,6 @@ def _render_index(request: Request, state: Dict[str, Any], error: str,
         "title": "overview", "cards": overview(items),
         "groups": _batch_groups(state), "recent": load_recent(),
         "error": error, "warning": warn, "browse_mode": browse_mode,
-        "add": bool(request.query_params.get("add")),
-        "add_path": request.query_params.get("path", ""),
         **_nav_source(path, items, batches=_batch_summaries(state)),
     })
 
@@ -1196,7 +1202,7 @@ def _render_type(request: Request, state: Dict[str, Any], name: str, search: str
                  min_occupancy: float, sort_by: str, sort_dir: str,
                  page: int, frame: int) -> HTMLResponse:
     """类型页：元数据 + 分布 + pairs × frames 矩阵 + 帧检查器 + 聚合表。"""
-    path, items = _source(state)
+    items = _source(state)[1]
     h5_path, it = _find_interaction(items, name)
     clamped = _clamp_occupancy(min_occupancy)
     table = _attach_display_cells(
@@ -1213,7 +1219,7 @@ def _render_type(request: Request, state: Dict[str, Any], name: str, search: str
         "rows_limit": ROWS_DEFAULT_LIMIT,
         "rows_offset": (table["page"] - 1) * TABLE_PAGE_SIZE,
         **_type_hotspot_context(state, name, h5_path, it),
-        **_nav_source(path, items, name, _batch_summaries(state)),
+        **_page_nav(state, name),
     })
 
 
@@ -1244,7 +1250,7 @@ def _hotspot_choice_context(state: Dict[str, Any]) -> Dict[str, Any]:
     return {"title": "hot spots", "dataset": None, "type": "", "rows": [],
             "total": 0, "include_water": False,
             "sort_by": HOTSPOT_DEFAULT_SORT, "sort_dir": SORT_DESC,
-            "search": "", **_nav(state)}
+            "search": "", **_page_nav(state)}
 
 
 def _hotspot_context(state: Dict[str, Any], source: Dict[str, Any],
@@ -1260,7 +1266,7 @@ def _hotspot_context(state: Dict[str, Any], source: Dict[str, Any],
             "segments": hotspot_segments(rows),
             "include_water": include_water, "sort_by": field,
             "sort_dir": direction, "search": search,
-            **_nav(state, type_name)}
+            **_page_nav(state, type_name)}
 
 
 def _hotspot_dataset(state: Dict[str, Any],
@@ -1399,7 +1405,7 @@ def _render_pair(request: Request, state: Dict[str, Any], name: str,
         "summary": pair_summary(it, idx), "downsampled": data["downsampled"],
         "flags": sorted(it.flags), "figure": fig_pair(data),
         "view": view, "frame": _clamp_frame(frame, it.n_frames),
-        "browse_mode": browse_mode,
+        "browse_mode": browse_mode, "recent": load_recent(),
         **_nav_source(path, items, name, _batch_summaries(state)),
     }
     if view == PAIR_VIEW_3D:
@@ -1495,7 +1501,7 @@ def _render_run(request: Request, state: Dict[str, Any], browse_mode: str,
         "form": _run_form_defaults(),
         "error": error,
         "recent_jobs": _recent_jobs(state["jobs"]),
-        **_nav(state),
+        **_page_nav(state),
     })
 
 
@@ -1514,7 +1520,7 @@ def _render_job(request: Request, state: Dict[str, Any], job_id: str,
     return TEMPLATES.TemplateResponse(request, "job.html", {
         "title": "job", "browse_mode": browse_mode, "root": root,
         "job": _job_view(job), "recent_jobs": _recent_jobs(state["jobs"]),
-        **_nav(state),
+        **_page_nav(state),
     })
 
 

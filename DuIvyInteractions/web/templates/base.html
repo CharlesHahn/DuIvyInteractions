@@ -7,21 +7,20 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/app.css">
 </head>
-<body>
+<body data-browse-mode="{{ browse_mode | default('picker') }}">
 <header class="topbar">
   <a class="brand" href="/"><span class="brand-mark">DII</span><span>DuIvyInteractions</span></a>
 </header>
 <div class="layout">
-  {% if types %}
   <aside class="sidebar">
     <div class="side-actions">
-      <a class="side-action" href="/?add=1">+ load</a>
+      <a class="side-action" href="/?add=1" data-load-open>+ load</a>
       <a class="side-action" href="/run">+ run</a>
     </div>
     {% for b in batches %}
     <div class="side-batch">
       <div class="side-batch-head">
-        <span class="side-batch-name" title="{{ b.path }}">{{ b.name }}</span>
+        <a class="side-batch-name" href="/" title="{{ b.path }}">{{ b.name }}</a>
         <span class="side-batch-count">{{ b.n_types }}</span>
         <form method="post" action="/select/remove">
           <input type="hidden" name="path" value="{{ b.path }}">
@@ -35,13 +34,64 @@
       {% endfor %}
     </div>
     {% endfor %}
+    {% if batches %}
     <form method="post" action="/select/clear" class="side-clear">
       <button type="submit">clear all</button>
     </form>
+    {% endif %}
   </aside>
-  {% endif %}
   <main class="content">{% block main %}{% endblock %}</main>
 </div>
+<div class="load-modal hidden" id="loadModal">
+  <div class="load-panel" role="dialog" aria-modal="true" aria-labelledby="loadTitle">
+    <div class="load-head">
+      <span class="load-title" id="loadTitle">load results</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="loadClose" aria-label="close">✕</button>
+    </div>
+    <form class="source-form" id="loadForm" method="post" action="/select">
+      <div class="load-row">
+        <input type="text" name="path" id="loadPath"
+               placeholder="type or paste a path, then press Enter"
+               autocomplete="off" spellcheck="false" required>
+        <button type="button" class="btn btn-sm" id="loadBrowse">browse…</button>
+      </div>
+    </form>
+    <p class="hint">Browse selects a folder (every <code>*.h5</code> inside is loaded); a single file can be typed.{% if browse_mode == "server" %} Server browsing is limited to the start-up directory (root); you cannot go above it.{% endif %}</p>
+    {% if recent %}
+    <div class="load-recent">
+      <span class="load-recent-title">recent</span>
+      <ul>
+        {% for r in recent[:5] %}<li><a href="#" data-load-recent="{{ r }}" title="{{ r }}">{{ r }}</a></li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% if browse_mode == "server" %}
+<button type="button" class="hidden" id="browseBtn" aria-hidden="true" tabindex="-1"></button>
+<div class="browse-modal hidden" id="browseModal">
+  <div class="browse-panel" role="dialog" aria-modal="true" aria-labelledby="browseTitle">
+    <div class="browse-head">
+      <span class="browse-title" id="browseTitle">Browse server folders</span>
+      <button type="button" class="btn btn-ghost btn-sm browse-close" id="browseClose" aria-label="close">✕</button>
+    </div>
+    <div class="browse-body">
+      <div class="browse-path-row">
+        <button type="button" class="btn btn-sm browse-up" id="browseUp" title="parent folder" aria-label="parent folder">↑ up</button>
+        <input type="text" class="browse-path-input" id="browsePathInput" spellcheck="false" autocomplete="off" aria-label="path">
+        <button type="button" class="btn btn-sm browse-go" id="browseGo">go</button>
+      </div>
+      <p class="browse-current" id="browseCurrent"></p>
+      <div class="browse-error hidden" id="browseError" role="alert"></div>
+      <p class="browse-note hidden" id="browseNote"></p>
+      <div class="browse-list" id="browseList"></div>
+    </div>
+    <div class="browse-foot">
+      <button type="button" class="btn btn-primary btn-sm" id="browseUse">use this folder</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 <div id="toast" class="toast hidden" role="status"></div>
 {% block scripts %}{% endblock %}
 <script>
@@ -57,7 +107,16 @@
       timer = setTimeout(function () { toast.classList.add('hidden'); }, 4000);
     }
   };
+  var bannerCloses = document.querySelectorAll('.banner-close');
+  for (var i = 0; i < bannerCloses.length; i++) {
+    bannerCloses[i].addEventListener('click', function () {
+      var banner = this.parentNode;
+      if (banner) banner.classList.add('hidden');
+    });
+  }
 })();
 </script>
+<script src="/static/load.js"></script>
+{% if browse_mode == "server" %}<script src="/static/browse.js"></script>{% endif %}
 </body>
 </html>

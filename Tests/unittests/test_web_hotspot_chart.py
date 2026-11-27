@@ -27,6 +27,7 @@ H5_DATA_DIR = Path(__file__).parent.parent / "interaction_h5data"
 STATIC_CSS = (Path(__file__).resolve().parents[2]
               / "DuIvyInteractions" / "web" / "static" / "app.css")
 CHART_MARKER = '<div class="residue-chart">'
+GLOBAL_SCRIPTS = frozenset({"/static/load.js", "/static/browse.js"})
 SEG_RE = re.compile(r'<div class="residue-seg" style="flex-grow: (\d+); flex-basis: 0">')
 SEG_LABEL_RE = re.compile(r'<div class="residue-seg-label" title="([^"]*)">([^<]*)</div>')
 BAR_GROUP_RE = re.compile(r'<div class="bars big residue-bars">(.*?)</div>', re.S)
@@ -378,14 +379,18 @@ class TestTypePageChart:
 class TestNoJavascript:
 
     def test_dataset_page_adds_no_script(self, dataset):
+        """图表页不加载图表专用脚本：只允许全局外壳脚本（load.js / browse.js）。"""
         html = _get_page(_select_client(dataset), _ds(dataset))
-        assert re.findall(r"<script\s+src=", html) == []
+        scripts = set(re.findall(r'<script src="([^"]+)"', html))
+        assert scripts <= GLOBAL_SCRIPTS, scripts
         assert "<script" not in _chart(html)
 
     def test_type_page_script_set_unchanged(self, dataset):
+        """语义：仅全局脚本 + matrix/rows，不混入图表专用脚本。"""
         html = _select_client(dataset).get("/type/hydrophobic").text
-        assert set(re.findall(r'<script src="([^"]+)"', html)) == {
-            "/static/matrix.js", "/static/rows.js"}
+        scripts = set(re.findall(r'<script src="([^"]+)"', html))
+        assert scripts - GLOBAL_SCRIPTS == {"/static/matrix.js",
+                                            "/static/rows.js"}
         assert "<script" not in _chart(html)
 
 

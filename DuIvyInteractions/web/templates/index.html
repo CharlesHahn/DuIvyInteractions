@@ -1,32 +1,18 @@
 {% extends "base.html" %}
-{% set browse_server = (browse_mode | default("picker")) == "server" %}
 {% block main %}
-{% if error %}<div class="banner">{{ error }}</div>{% endif %}
-{% if warning %}<div class="banner">{{ warning }}</div>{% endif %}
-{% if add or groups or cards %}
-<details class="panel add-panel"{% if add %} open{% endif %}>
-  <summary>load results</summary>
-  <form class="source-form" method="post" action="/select">
-    <input type="text" name="path" value="{{ add_path }}" placeholder="C:\path\to\out  or  out\hydrogen_bond.h5" required>
-    <button class="btn btn-primary">Open</button>
-    {% if browse_server %}
-    <button type="button" class="btn" id="browseBtn">Browse server folders…</button>
-    {% else %}
-    <button type="button" class="btn" id="browseBtn">Browse…</button>
-    {% endif %}
-  </form>
-  <p class="hint">Browse selects a folder (every <code>*.h5</code> inside is loaded); a single file can be typed. Server browsing is limited to the start-up directory (root); you cannot go above it.</p>
-</details>
+{% if error %}<div class="banner banner-dismissible">{{ error }}<button type="button" class="banner-close" aria-label="dismiss">✕</button></div>{% endif %}
+{% if warning %}<div class="banner banner-dismissible">{{ warning }}<button type="button" class="banner-close" aria-label="dismiss">✕</button></div>{% endif %}
+{% if not groups %}
+<section class="empty-brand">
+  <span class="empty-brand-mark">DII</span>
+  <h1>DuIvyInteractions</h1>
+  <p class="empty-brand-tagline">non-covalent interaction analysis for MD trajectories</p>
+  <p class="empty-brand-hint">
+    use <span class="kbd">+ load</span> to open existing results, or
+    <span class="kbd">+ run</span> to start a calculation
+  </p>
+</section>
 {% endif %}
-{% if not groups and not cards %}
-<div class="start-screen">
-  <div class="start-choices">
-    <a class="start-choice" href="/?add=1">Load results</a>
-    <a class="start-choice" href="/run">Run job</a>
-  </div>
-  {% if recent %}<p class="start-recent">recent: {% for r in recent %}<a href="/?add=1&amp;path={{ r | urlencode }}">{{ r }}</a>{% endfor %}</p>{% endif %}
-</div>
-{% else %}
 {% for g in groups %}
 <section class="ds-block">
   <div class="ds-block-head">
@@ -54,54 +40,4 @@
   </div>
 </section>
 {% endfor %}
-<p class="ds-add"><a class="btn btn-sm" href="/?add=1">+ add dataset</a></p>
-{% endif %}
-{% if browse_server %}
-<div class="browse-modal hidden" id="browseModal">
-  <div class="browse-panel" role="dialog" aria-modal="true" aria-labelledby="browseTitle">
-    <div class="browse-head">
-      <span class="browse-title" id="browseTitle">Browse server folders</span>
-      <button type="button" class="btn btn-ghost btn-sm browse-close" id="browseClose" aria-label="close">✕</button>
-    </div>
-    <div class="browse-body">
-      <div class="browse-path-row">
-        <button type="button" class="btn btn-sm browse-up" id="browseUp" title="parent folder" aria-label="parent folder">↑ up</button>
-        <input type="text" class="browse-path-input" id="browsePathInput" spellcheck="false" autocomplete="off" aria-label="path">
-        <button type="button" class="btn btn-sm browse-go" id="browseGo">go</button>
-      </div>
-      <p class="browse-current" id="browseCurrent"></p>
-      <div class="browse-error hidden" id="browseError" role="alert"></div>
-      <p class="browse-note hidden" id="browseNote"></p>
-      <div class="browse-list" id="browseList"></div>
-    </div>
-    <div class="browse-foot">
-      <button type="button" class="btn btn-primary btn-sm" id="browseUse">use this folder</button>
-    </div>
-  </div>
-</div>
-{% endif %}
-{% endblock %}
-
-{% block scripts %}
-<script src="/static/browse.js"></script>
-{% if not browse_server %}
-<script>
-(function () {
-  var browse = document.getElementById('browseBtn');
-  var input = document.querySelector('.source-form input[name="path"]');
-  if (!browse || !input) return;
-  browse.addEventListener('click', function () {
-    browse.disabled = true;
-    fetch('/api/pick', {method: 'POST'})
-      .then(function (resp) { return resp.json(); })
-      .then(function (data) {
-        if (data.path) { input.value = data.path; return; }
-        if (data.error) showToast('browse unavailable: ' + data.error);
-      })
-      .catch(function (error) { showToast('browse failed: ' + error); })
-      .finally(function () { browse.disabled = false; });
-  });
-})();
-</script>
-{% endif %}
 {% endblock %}
