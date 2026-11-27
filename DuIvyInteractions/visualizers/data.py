@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import h5py
 import numpy as np
 
-from ..core.datas import Interaction
+from ..core.datas import Group, Interaction
 from ..io import EXPORTER_CLASSES, load_interactions
 from ..io.interaction_exporter import InteractionExporter
 
@@ -38,6 +38,9 @@ METRIC_UNITS = {
     "acc_angle": "°", "don_angle": "°",
     "angle_dh_ow": "°", "angle_ow_hw_a": "°", "angle_h_ow_a": "°",
 }
+WATER_GROUP_TYPE = "water"   # 水桥中的桥接水基团类型
+DISTANCE_METRIC = "distance"  # 热点表平均距离所用指标名
+DISTANCE_METRIC_BY_TYPE = {"water_bridge": "dist_d_ow"}  # 水桥无 distance，用供体–水氧
 RECENT_LIMIT = 10       # 最近数据源记忆条数
 RECENT_PATH = Path(os.environ.get("DII_CACHE_HOME", Path.home() / ".cache" / "duivyinteractions")) / "web_recent.json"
 _RECENT_LOCK = threading.Lock()
@@ -729,3 +732,162 @@ def _frame_row(interaction: Interaction, idx: int, frame: int) -> Dict:
             "values": _metric_values(interaction, idx, frame),
             "flags": {name: bool(arr[idx, frame])
                       for name, arr in interaction.flags.items()}}
+
+
+def residue_hotspots(items: Sequence[Tuple[str, str, Interaction]],
+                     type_filter: Optional[str] = None,
+                     include_water: bool = False) -> List[Dict[str, Any]]:
+    """残基热点表：把相互作用对聚合到残基维度的数据行列表。
+
+    残基身份严格取自 h5 的 residue_id/residue_name（不做 PDB 映射，label 为名字+编号）。
+    occupancy 分母为被选中 Interaction 的最大帧数；frames_active 为跨对、跨
+    interaction_type 的帧并集；types 明细以 interaction_type 为键。
+    avg_distance 的指标按类型映射（水桥 dist_d_ow，其余 distance）。
+    """
+    selected = _hotspot_items(items, type_filter)
+    n_frames = max((it.n_frames for _, _, it in selected), default=0)
+    accumulator: Dict[Tuple[int, str], Dict[str, Any]] = {}
+    for _, _, interaction in selected:
+        for pair_idx in range(interaction.n_pairs):
+            _add_pair_votes(accumulator, interaction, pair_idx,
+                            include_water, n_frames)
+    return _finalize_hotspots(accumulator, n_frames)
+
+
+def _hotspot_items(items: Sequence[Tuple[str, str, Interaction]],
+                   type_filter: Optional[str]
+                   ) -> List[Tuple[str, str, Interaction]]:
+    """按显示名过滤后的 items（type_filter 为 None 时全部保留）。"""
+    if type_filter is None:
+        return list(items)
+    return [item for item in items if item[0] == type_filter]
+
+
+def _pair_residues(pair: Sequence[Group],
+                   include_water: bool) -> List[Tuple[int, str]]:
+    """一对基团涉及的残基键 [(residue_id, residue_name)]（可排除桥接水）。"""
+    keys: List[Tuple[int, str]] = []
+    for group in pair:
+        if include_water or group.group_type != WATER_GROUP_TYPE:
+            keys.append((int(group.residue_id), str(group.residue_name)))
+    return keys
+
+
+def _residue_accumulator() -> Dict[str, Any]:
+    """单个残基的累计容器。"""
+    return {"frames": np.zeros(0, dtype=bool), "n_pairs": 0,
+            "partners": set(), "types": {}, "dist_sum": 0.0, "dist_count": 0}
+
+
+def _pad_frames(frames: Optional[np.ndarray], n_frames: int) -> np.ndarray:
+    """布尔帧数组对齐到 n_frames（None 或偏短补 False，偏长截断）。"""
+    padded = np.zeros(n_frames, dtype=bool)
+    if frames is not None:
+        size = min(frames.size, n_frames)
+        padded[:size] = np.asarray(frames, dtype=bool)[:size]
+    return padded
+
+
+def _pair_distances(interaction: Interaction, pair_idx: int,
+                    n_frames: int) -> np.ndarray:
+    """一个基团对的逐帧距离（指标缺失或与 existence 形状不符时全 NaN）。"""
+    values = np.full(n_frames, np.nan, dtype=float)
+    array = _distance_array(interaction)
+    if array is None:
+        return values
+    array = np.asarray(array, dtype=float)
+    if array.shape != np.shape(interaction.existence):
+        return values
+    row = array[pair_idx]
+    size = min(row.size, n_frames)
+    values[:size] = row[:size]
+    return values
+
+
+def _distance_metric(interaction_type: str) -> str:
+    """该类型用于热点平均距离的指标名（无类型映射时用 distance）。"""
+    return DISTANCE_METRIC_BY_TYPE.get(interaction_type, DISTANCE_METRIC)
+
+
+def _distance_array(interaction: Interaction) -> Optional[np.ndarray]:
+    """该相互作用的距离指标数组（映射指标缺失时回落 distance）。"""
+    name = _distance_metric(interaction.interaction_type)
+    if name in interaction.metrics:
+        return interaction.metrics[name]
+    return interaction.metrics.get(DISTANCE_METRIC)
+
+
+def _add_pair_votes(accumulator: Dict[Tuple[int, str], Dict[str, Any]],
+                    interaction: Interaction, pair_idx: int,
+                    include_water: bool, n_frames: int) -> None:
+    """把一对基团的活跃帧、伙伴、类型与距离投票累加进它涉及的每个残基。"""
+    keys = _pair_residues(interaction.groups[pair_idx], include_water)
+    existence = _pad_frames(np.asarray(interaction.existence[pair_idx]), n_frames)
+    distances = _pair_distances(interaction, pair_idx, n_frames)
+    for key in dict.fromkeys(keys):
+        _vote_residue(accumulator.setdefault(key, _residue_accumulator()),
+                      key, keys, interaction.interaction_type,
+                      existence, distances)
+
+
+def _vote_residue(record: Dict[str, Any], key: Tuple[int, str],
+                  keys: List[Tuple[int, str]], type_name: str,
+                  existence: np.ndarray, distances: np.ndarray) -> None:
+    """把一次基团对命中并入单残基累计容器（帧取并集，不求和）。"""
+    record["frames"] = _pad_frames(record["frames"], existence.size) | existence
+    record["n_pairs"] += 1
+    record["partners"].update(other for other in keys if other != key)
+    typed = record["types"].get(type_name)
+    record["types"][type_name] = _pad_frames(typed, existence.size) | existence
+    active = distances[existence]
+    record["dist_sum"] += float(np.nansum(active))
+    record["dist_count"] += int(np.isfinite(active).sum())
+
+
+def _finalize_hotspot(key: Tuple[int, str], record: Dict[str, Any],
+                      n_frames: int) -> Dict[str, Any]:
+    """单个残基的对外输出行。"""
+    residue_id, residue_name = key
+    frames_active = int(record["frames"].sum())
+    types = [_hotspot_type_entry(name, mask, n_frames)
+             for name, mask in sorted(record["types"].items())]
+    return {"residue_id": residue_id, "residue_name": residue_name,
+            "label": f"{residue_name}{residue_id}",
+            "occupancy": _hotspot_ratio(frames_active, n_frames),
+            "frames_active": frames_active, "n_pairs": record["n_pairs"],
+            "n_partners": len(record["partners"]), "n_types": len(types),
+            "types": types, "avg_distance": _hotspot_distance(record)}
+
+
+def _hotspot_type_entry(type_name: str, mask: np.ndarray,
+                        n_frames: int) -> Dict[str, Any]:
+    """单个 interaction_type 的明细行。"""
+    frames = int(mask.sum())
+    return {"type": type_name, "frames": frames,
+            "occupancy": _hotspot_ratio(frames, n_frames)}
+
+
+def _hotspot_ratio(count: int, n_frames: int) -> float:
+    """占比（帧数为 0 时返回 0.0）。"""
+    return float(count) / float(n_frames) if n_frames else 0.0
+
+
+def _hotspot_distance(record: Dict[str, Any]) -> Optional[float]:
+    """活跃帧 distance 均值（无有效值返回 None）。"""
+    if not record["dist_count"]:
+        return None
+    return record["dist_sum"] / record["dist_count"]
+
+
+def _finalize_hotspots(accumulator: Dict[Tuple[int, str], Dict[str, Any]],
+                       n_frames: int) -> List[Dict[str, Any]]:
+    """全部残基输出行（按 occupancy 降序、n_pairs 降序、residue_id 升序）。"""
+    rows = [_finalize_hotspot(key, record, n_frames)
+            for key, record in accumulator.items()]
+    return sorted(rows, key=_hotspot_sort_key)
+
+
+def _hotspot_sort_key(row: Dict[str, Any]) -> Tuple[float, int, int, str]:
+    """排序键：occupancy 降序、n_pairs 降序、residue_id 升序、residue_name 升序。"""
+    return (-row["occupancy"], -row["n_pairs"], row["residue_id"],
+            row["residue_name"])

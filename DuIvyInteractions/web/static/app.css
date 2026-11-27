@@ -1636,3 +1636,52 @@ tr.clickable { cursor: pointer; }
 .rows-more { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .rows-status { font-size: 12px; }
 .rows-status.error { color: var(--danger); }
+
+/* ---------- 残基热点（hot spots） ---------- */
+
+.hotspots-crumb {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.hotspots-summary { margin: 0 0 12px; font-size: 13px; color: var(--text-2); }
+.hotspots-form { margin: 0 0 14px; }
+.hotspots-form .field { gap: 4px; }
+.hotspots-table tbody td { text-align: right; }
+.hotspots-table tbody td:first-child,
+.hotspots-table tbody td.hotspots-types { text-align: left; }
+.hotspots-table td.hotspots-types { white-space: normal; }
+.hotspots-table .chip {
+  margin: 0 4px 2px 0;
+  padding: 3px 9px;
+  font-size: 11px;
+}
+.hotspots-empty { margin: 0; }
+.hotspots-datasets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.hotspots-datasets li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.hotspots-dataset { font-weight: 600; }
+.hotspots-datasets .mono {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 热点页主表：占满可用高度并始终可滚（与其它长表一致的观感） */
+.hotspots-scroll { max-height: calc(100vh - 240px); overflow-y: auto; }
+.hotspots-scroll > table { margin: 0; }

@@ -30,7 +30,8 @@ from ..visualizers import (
     add_recent, aggregate_table, cell_values, export_table, fig_pair,
     frame_activity, frame_view, get_exporter, interaction_meta, load_recent,
     matrix_view, metric_stats, overview, pair_drilldown, pair_frames,
-    pair_summary, pair_types, parse_datasource, string_stats, type_summary,
+    pair_summary, pair_types, parse_datasource, residue_hotspots,
+    string_stats, type_summary,
 )
 # 聚合表首屏与 /api/rows 复用同一行组装/单位函数，避免两套格式化逻辑漂移。
 from ..visualizers.data import (
@@ -55,6 +56,14 @@ ROWS_LIMIT_MIN = 1      # /api/rows 单次最少返回行数
 ROWS_LIMIT_MAX = 200    # /api/rows 单次最多返回行数
 ROWS_OFFSET_MIN = 0     # /api/rows 起始行号下限
 ROWS_DEFAULT_LIMIT = TABLE_PAGE_SIZE  # 首屏与聚合表分页大小一致
+HOTSPOT_SORT_FIELDS = ("occupancy", "pairs", "partners", "residue")
+HOTSPOT_DEFAULT_SORT = "occupancy"
+SORT_ASC = "asc"
+SORT_DESC = "desc"
+HOTSPOT_FLAG_VALUES = frozenset({"1", "true", "on", "yes"})
+HOTSPOT_CSV_COLUMNS = ("residue", "occupancy", "frames_active", "n_pairs",
+                       "n_partners", "n_types", "types")
+HOTSPOT_DATASET_REQUIRED = "dataset not specified"
 CELL_DASH = "—"         # 聚合表空值占位（与页面渲染一致）
 TOKEN_COOKIE = "dii_token"
 SERVER_BROWSE_HINT = ("native picker unavailable on this host; "
@@ -275,6 +284,7 @@ def _register_pages(app: FastAPI, state: Dict[str, Any], browse_mode: str,
     """页面路由 + HTML 错误页。"""
     _register_home(app, state, browse_mode, root)
     _register_detail(app, state, browse_mode)
+    _register_hotspot_pages(app, state)
     _register_structure_page(app, state)
     _register_run_page(app, state, browse_mode, root)
     _register_error_page(app, state)
@@ -325,6 +335,24 @@ def _register_detail(app: FastAPI, state: Dict[str, Any],
                   frame: int = 0) -> Response:
         return _render_pair(request, state, name, idx, view, frame,
                             browse_mode)
+
+
+def _register_hotspot_pages(app: FastAPI, state: Dict[str, Any]) -> None:
+    """数据集级残基热点页与热点 CSV 下载。"""
+
+    @app.get("/residues", response_class=HTMLResponse)
+    def residues_page(request: Request, ds: str = "", type: str = "",
+                      search: str = "", sort_by: str = "",
+                      sort_dir: str = "", include_water: str = "") -> Response:
+        return _render_hotspots(request, state, ds, type, search, sort_by,
+                                sort_dir, _flag_enabled(include_water))
+
+    @app.get("/download/residues.csv", response_model=None)
+    def residues_csv(ds: str = "", type: str = "", search: str = "",
+                     sort_by: str = "", sort_dir: str = "",
+                     include_water: str = "") -> Response:
+        return _hotspots_download(state, ds, type, search, sort_by, sort_dir,
+                                  _flag_enabled(include_water))
 
 
 def _register_structure_page(app: FastAPI, state: Dict[str, Any]) -> None:
@@ -1107,6 +1135,15 @@ def _batch_groups(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             for source, chunk in _batch_chunks(state)]
 
 
+def _dataset_of(state: Dict[str, Any], h5_path: str) -> str:
+    """该 h5 所属数据集的绝对路径（未匹配时回落当前数据源路径）。"""
+    for source in state.get("sources") or []:
+        if any(path == h5_path
+               for _, path, _ in state["batch_items"][source["path"]]):
+            return source["path"]
+    return _source(state)[0]
+
+
 def _ds_name(batches: Sequence[Dict[str, Any]]) -> str:
     """顶栏数据源名：单批次用批名，多批次为首批名 + 其余数量。"""
     if len(batches) == 1:
@@ -1174,8 +1211,169 @@ def _render_type(request: Request, state: Dict[str, Any], name: str, search: str
         "activity": frame_activity(it), "table": table,
         "rows_limit": ROWS_DEFAULT_LIMIT,
         "rows_offset": (table["page"] - 1) * TABLE_PAGE_SIZE,
+        **_type_hotspot_context(state, name, h5_path, it),
         **_nav_source(path, items, name, _batch_summaries(state)),
     })
+
+
+def _type_hotspot_context(state: Dict[str, Any], name: str, h5_path: str,
+                          interaction: Interaction) -> Dict[str, Any]:
+    """类型页热点面板上下文（该类型的全部残基，按 occupancy 降序）。"""
+    rows = residue_hotspots([(name, h5_path, interaction)], type_filter=name)
+    return {"hotspots_top": rows,
+            "hotspot_ds": _dataset_of(state, h5_path)}
+
+
+def _render_hotspots(request: Request, state: Dict[str, Any], ds: str,
+                     type_name: str, search: str, sort_by: str,
+                     sort_dir: str, include_water: bool) -> HTMLResponse:
+    """热点页：指定数据集的残基表；未指定且多数据集时渲染选择列表。"""
+    source = _hotspot_dataset(state, ds)
+    if source is None:
+        return TEMPLATES.TemplateResponse(
+            request, "hotspots.html", _hotspot_choice_context(state))
+    context = _hotspot_context(state, source, type_name, search, sort_by,
+                               sort_dir, include_water)
+    return TEMPLATES.TemplateResponse(request, "hotspots.html", context)
+
+
+def _hotspot_choice_context(state: Dict[str, Any]) -> Dict[str, Any]:
+    """数据集选择视图上下文（未指定 ds 且无/多数据集）。"""
+    return {"title": "hot spots", "dataset": None, "type": "", "rows": [],
+            "total": 0, "include_water": False,
+            "sort_by": HOTSPOT_DEFAULT_SORT, "sort_dir": SORT_DESC,
+            "search": "", **_nav(state)}
+
+
+def _hotspot_context(state: Dict[str, Any], source: Dict[str, Any],
+                     type_name: str, search: str, sort_by: str,
+                     sort_dir: str, include_water: bool) -> Dict[str, Any]:
+    """热点页上下文：聚合 → 类型/搜索过滤 → 排序 → 按上限截断。"""
+    field, direction = _parse_hotspot_sort(sort_by, sort_dir)
+    rows = _hotspot_rows(state, source, type_name, search, field, direction,
+                         include_water)
+    return {"title": "hot spots",
+            "dataset": {"path": source["path"], "name": source["name"]},
+            "type": type_name, "rows": rows, "total": len(rows),
+            "include_water": include_water, "sort_by": field,
+            "sort_dir": direction, "search": search,
+            **_nav(state, type_name)}
+
+
+def _hotspot_dataset(state: Dict[str, Any],
+                     ds: str) -> Optional[Dict[str, Any]]:
+    """热点目标数据集：显式 ds 必须已载入（否则 404），缺省时单数据集自动选中。"""
+    sources = state.get("sources") or []
+    if not ds:
+        return sources[0] if len(sources) == 1 else None
+    for source in sources:
+        if source["path"] == ds:
+            return source
+    raise HTTPException(status_code=404, detail=f"dataset not loaded: {ds}")
+
+
+def _hotspot_rows(state: Dict[str, Any], source: Dict[str, Any],
+                  type_name: str, search: str, sort_by: str, sort_dir: str,
+                  include_water: bool) -> List[Dict[str, Any]]:
+    """某数据集的残基热点行（已按类型/搜索过滤并排序）。"""
+    items = state["batch_items"][source["path"]]
+    rows = residue_hotspots(
+        items, _hotspot_type_filter(state, source, type_name), include_water)
+    return _sort_hotspot_rows(_filter_hotspot_rows(rows, search),
+                              sort_by, sort_dir)
+
+
+def _hotspot_type_filter(state: Dict[str, Any], source: Dict[str, Any],
+                         type_name: str) -> Optional[str]:
+    """热点聚合的批内类型名；显示名必须属于该数据集（否则 404）。"""
+    if not type_name:
+        return None
+    items = state["batch_items"][source["path"]]
+    for name, h5_path, _ in state.get("items") or []:
+        if name != type_name:
+            continue
+        for local_name, local_path, _ in items:
+            if local_path == h5_path:
+                return local_name
+    raise HTTPException(
+        status_code=404,
+        detail=f"interaction type not loaded: '{type_name}'")
+
+
+def _filter_hotspot_rows(rows: List[Dict[str, Any]],
+                         search: str) -> List[Dict[str, Any]]:
+    """按残基标签子串过滤（大小写不敏感）。"""
+    needle = search.strip().lower()
+    if not needle:
+        return rows
+    return [row for row in rows if needle in row["label"].lower()]
+
+
+def _sort_hotspot_rows(rows: List[Dict[str, Any]], sort_by: str,
+                       sort_dir: str) -> List[Dict[str, Any]]:
+    """按白名单字段排序（稳定；同键保持纯函数层的默认顺序）。"""
+    return sorted(rows, key=_hotspot_sort_key(sort_by),
+                  reverse=sort_dir == SORT_DESC)
+
+
+def _hotspot_sort_key(sort_by: str) -> Callable[[Dict[str, Any]], Any]:
+    """热点排序键：residue 按 (名称, 编号)，其余按数值字段。"""
+    if sort_by == "residue":
+        return lambda row: (row["residue_name"], row["residue_id"])
+    if sort_by == "pairs":
+        return lambda row: row["n_pairs"]
+    if sort_by == "partners":
+        return lambda row: row["n_partners"]
+    return lambda row: row["occupancy"]
+
+
+def _parse_hotspot_sort(sort_by: str, sort_dir: str) -> Tuple[str, str]:
+    """热点排序字段白名单 + 方向（residue 默认升序，数值字段默认降序）。"""
+    field = sort_by if sort_by in HOTSPOT_SORT_FIELDS else HOTSPOT_DEFAULT_SORT
+    if sort_dir in (SORT_ASC, SORT_DESC):
+        return field, sort_dir
+    return field, SORT_ASC if field == "residue" else SORT_DESC
+
+
+def _flag_enabled(raw: str) -> bool:
+    """复选框/标志参数：空串与 '0' 视为关闭。"""
+    return raw.strip().lower() in HOTSPOT_FLAG_VALUES
+
+
+def _hotspots_download(state: Dict[str, Any], ds: str, type_name: str,
+                       search: str, sort_by: str, sort_dir: str,
+                       include_water: bool) -> Response:
+    """热点 CSV：全部匹配行。"""
+    source = _hotspot_dataset(state, ds)
+    if source is None:
+        raise HTTPException(status_code=404, detail=HOTSPOT_DATASET_REQUIRED)
+    field, direction = _parse_hotspot_sort(sort_by, sort_dir)
+    rows = _hotspot_rows(state, source, type_name, search, field, direction,
+                         include_water)
+    filename = quote(f"hotspots-{source['name']}.csv")
+    return Response(_hotspot_csv(rows), media_type="text/csv",
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"{filename}\"; "
+                             f"filename*=UTF-8''{filename}"})
+
+
+def _hotspot_csv(rows: List[Dict[str, Any]]) -> str:
+    """残基热点行 → CSV 文本（表头固定，types 为 name:占比 分号拼接）。"""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(HOTSPOT_CSV_COLUMNS)
+    for row in rows:
+        writer.writerow([
+            row["label"], row["occupancy"], row["frames_active"],
+            row["n_pairs"], row["n_partners"], row["n_types"],
+            _hotspot_types_text(row["types"])])
+    return buffer.getvalue()
+
+
+def _hotspot_types_text(types: List[Dict[str, Any]]) -> str:
+    """类型明细文本：name:占比（分号分隔）。"""
+    return ";".join(f"{entry['type']}:{entry['occupancy']:.3f}"
+                    for entry in types)
 
 
 def _render_pair(request: Request, state: Dict[str, Any], name: str,
