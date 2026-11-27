@@ -224,10 +224,11 @@ class TestNativeTrajectoryScript:
             assert token in call, token
         assert 'MODEL_KIND = "model-data"' in text
 
-    def test_topology_pdb_uses_model_data_branch(self):
-        """PDB 不是拓扑格式（dataFormats 只对 psf/prmtop/top 给 .topology），
+    def test_topology_mmcif_uses_model_data_branch(self):
+        """mmCIF 不是拓扑格式（dataFormats 只对 psf/prmtop/top 给 .topology），
         必须走 model-data 分支，否则 loadTrajectory 内部读 r.ref 会抛 TypeError。"""
         text = _structure_js()
+        assert 'TOPOLOGY_FORMAT = "mmcif"' in text
         assert text.count("topology-data") == 0
         assert text.count("model-data") >= 1
         assert text.count('kind: MODEL_KIND') == 1
@@ -409,7 +410,7 @@ class TestNativeTrajectoryScript:
         assert "EXPRESSION_LANGUAGE = \"pymol\"" in text
 
     def test_topology_request_carries_type_and_idx(self):
-        """拓扑 PDB 按该对原子打 B-factor 标记，请求必须带 type/idx。"""
+        """拓扑 mmCIF 按该对原子打 B-factor 标记，请求必须带 type/idx。"""
         body = _function_body(_structure_js(), "topologyUrl")
         assert "type=" in body and "idx=" in body
         assert "TOPOLOGY_URL" in body

@@ -38,7 +38,7 @@
   var PICK_ENDPOINT = "/api/pick";
   var PICK_BODY = "mode=file&kind=structure";
 
-  var TOPOLOGY_FORMAT = "pdb";
+  var TOPOLOGY_FORMAT = "mmcif";
   var MODEL_KIND = "model-data";
   var DEFAULT_TRAJECTORY_FORMAT = "xtc";
   var BINARY_FORMATS = { xtc: true, trr: true, dcd: true };
@@ -87,6 +87,12 @@
   var LEGEND_ATOM_LIMIT = 12;      /* 图例里最多列出的原子名个数，其余用 (+N) */
   var GROUP_ITEM_CLASS = "structure-group-item";
   var GROUP_LABEL_CLASS = "structure-group-label";
+  var LEGEND_CLASS = "pt-legend";
+  var LEGEND_ITEM_CLASS = "pt-legend-item";
+  var LEGEND_DOT_CLASS = "pt-dot";
+  /* 与后端 figures.PT_COLORS / 服务端模板中的 P/T 色一致（写 rgb 以避免自造色板） */
+  var PT_LEGEND_TYPES = ["P", "T"];
+  var PT_DOT_COLORS = { P: "rgb(60, 84, 136)", T: "rgb(230, 75, 53)" };
   var STATUS_CLASS = "structure-status";
   var STATUS_ERROR_CLASS = "structure-status error";
   var BROWSE_TARGET_ATTR = "data-target";
@@ -128,6 +134,8 @@
   var topologySnapshot = "";    /* 最近一次通过校验的拓扑文本（超时诊断用） */
   var frame = clampFrame(cfg.frame || 0);  /* 后端注入的初始帧（缺省 0） */
   var measurements = [];        /* 当前帧的虚线测量 [{selection, representation}] */
+  var residueRefs = [];         /* 当前 pair 的残基棍棒组件 ref（updatePair 整批替换） */
+  var mounted = false;          /* mount 幂等标记 */
   var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
   var measureSeq = 0;
   var frameSeq = 0;             /* 已请求的换帧序号（滑块） */
@@ -292,7 +300,7 @@
       "&idx=" + cfg.idx;
   }
 
-  /* 拓扑 PDB 由后端按该对原子打 B-factor 标记（表达式据此圈选），必须带 type/idx */
+  /* 拓扑 mmCIF 由后端按该对原子打 B-factor 标记（表达式据此圈选），必须带 type/idx */
   function topologyUrl() {
     return TOPOLOGY_URL + "?type=" + encodeURIComponent(cfg.type) +
       "&idx=" + cfg.idx + "&" + VERSION_PARAM + "=" +
@@ -319,8 +327,8 @@
       }
       return response.text();
     }).then(function (text) {
-      if (!isPdbText(text)) {
-        throw new Error("topology response is not PDB (" + text.length +
+      if (!isCifText(text)) {
+        throw new Error("topology response is not mmCIF (" + text.length +
           " chars, head \"" + diagnosticHead(text) + "\")");
       }
       topologySnapshot = text;
@@ -328,9 +336,10 @@
     });
   }
 
-  /* 错误页 / JSON 错误不能当 PDB 喂给 Mol*：后端拓扑至少含 ATOM 记录 */
-  function isPdbText(text) {
-    return !!text && text.indexOf("ATOM") !== -1;
+  /* 错误页 / JSON 错误不能当拓扑喂给 Mol*：必须是含 atom_site 的 mmCIF */
+  function isCifText(text) {
+    return !!text && text.indexOf("data_") !== -1 &&
+      text.indexOf("_atom_site.") !== -1;
   }
 
   /* 单行化诊断文本：换行/引号转义，避免多行内容挤爆状态栏 */
@@ -631,9 +640,18 @@
   function buildLayer(expression, tag, label, params) {
     return buildScriptComponent(expression, tag, label)
       .then(function (result) {
+        trackResidueRef(tag, result);
         return addLayerRepresentation(result.component, params,
           tag + "-repr");
       });
+  }
+
+  /* 记录残基棍棒组件 ref：updatePair 只删这些，保留卡通/配体/离子背景 */
+  function trackResidueRef(tag, result) {
+    var component = result ? result.component : null;
+    if (!component || String(tag).indexOf(TAG_RESIDUE) !== 0) return;
+    var ref = refOf(component.cell);
+    if (ref) residueRefs.push(ref);
   }
 
   /* tryCreateComponentStatic(parent, keyword, {label}, tags)：第三个参数是
@@ -679,8 +697,16 @@
      相互作用残基本身拆成"其余原子（灰）+ 定义基团原子（组色）"两块互补棍棒。 */
   function buildLayers() {
     var residues = data && data.residues ? data.residues : [];
-    var chain = buildPolymerLayer(residues);
-    chain = chain.then(function () { return buildLigandLayer(residues); });
+    residueRefs = [];
+    return buildPolymerLayer(residues)
+      .then(function () { return buildLigandLayer(residues); })
+      .then(function () { return buildResidueLayers(); });
+  }
+
+  /* 只重建 pair 相关的残基棍棒层（updatePair 不碰骨架/配体/轨迹） */
+  function buildResidueLayers() {
+    var residues = data && data.residues ? data.residues : [];
+    var chain = Promise.resolve();
     for (var i = 0; i < residues.length; i++) {
       chain = chain.then(residueStep(residues[i], i));
     }
@@ -720,13 +746,22 @@
       stickParams(RESIDUE_STICK_SIZE));
   }
 
-  /* 水残基的 residue_selector 不唯一（resSeq 4 列截断），改用精确的原子并集 */
+  /* 水残基的 residue_selector 可能因 PDB resSeq 4 列截断而命中其它水分子；
+     group_expression（后端给出，整水分子即 residue_selector）缺失时回退 b 区间。 */
   function residueLayerExpression(residue) {
     if (isWaterResidue(residue)) {
-      return residue && residue.expression
-        ? String(residue.expression) : null;
+      return groupSelection(residue) ||
+        (residue && residue.expression ? String(residue.expression) : null);
     }
     return residueSelector(residue);
+  }
+
+  /* 组级选择器：优先后端 group_expression（chain/resi + 原子名，与 pair 无关）；
+     缺失（无结构旧 payload）时回退 b 区间表达式。 */
+  function groupSelection(residue) {
+    if (!residue) return null;
+    if (residue.group_expression) return String(residue.group_expression);
+    return residue.expression ? String(residue.expression) : null;
   }
 
   /* 残基级选择器（后端 residue_selector）；缺失时该残基不建表示（不猜几何） */
@@ -761,9 +796,8 @@
   function residueUnionExpression(residues) {
     var parts = [];
     for (var i = 0; i < residues.length; i++) {
-      if (residues[i] && residues[i].expression) {
-        parts.push("(" + residues[i].expression + ")");
-      }
+      var expression = groupSelection(residues[i]);
+      if (expression) parts.push("(" + expression + ")");
     }
     return parts.length ? parts.join(" or ") : null;
   }
@@ -805,6 +839,37 @@
     for (var i = 0; i < residues.length; i++) {
       groupLegendEl.appendChild(legendItem(residues[i], i));
     }
+  }
+
+  /* π-堆积类型图例：有类型数据时显示 P/T，否则移除（updatePair 重建） */
+  function renderTypeLegend(values) {
+    var legend = document.querySelector("." + LEGEND_CLASS);
+    var types = values && values.length ? values : [];
+    if (!types.length) {
+      if (legend && legend.parentNode) legend.parentNode.removeChild(legend);
+      return;
+    }
+    if (!legend) {
+      if (!groupLegendEl || !groupLegendEl.parentNode) return;
+      legend = document.createElement("div");
+      legend.className = LEGEND_CLASS;
+      groupLegendEl.parentNode.insertBefore(legend, groupLegendEl);
+    }
+    while (legend.firstChild) legend.removeChild(legend.firstChild);
+    for (var i = 0; i < PT_LEGEND_TYPES.length; i++) {
+      legend.appendChild(typeLegendItem(PT_LEGEND_TYPES[i]));
+    }
+  }
+
+  function typeLegendItem(name) {
+    var item = document.createElement("span");
+    item.className = LEGEND_ITEM_CLASS;
+    var dot = document.createElement("span");
+    dot.className = LEGEND_DOT_CLASS;
+    dot.style.backgroundColor = PT_DOT_COLORS[name];
+    item.appendChild(dot);
+    item.appendChild(document.createTextNode(name));
+    return item;
   }
 
   /* 图例：残基标签 + 判定为相互作用组的原子名（纯文字，3D 里不做任何叠加） */
@@ -874,8 +939,9 @@
     }
     function residueFocusStep(residue, index) {
       return function () {
-        if (!residue || !residue.expression) return null;
-        return buildScriptComponent(residue.expression,
+        var expression = groupSelection(residue);
+        if (!expression) return null;
+        return buildScriptComponent(expression,
           TAG_FOCUS_ITEM + index, "focus " + (index + 1)
         ).then(function (result) {
           merged = unionLoci(merged,
@@ -1008,8 +1074,8 @@
   function groupLociStep(groups, index, loci) {
     return function () {
       var residue = groups[index];
-      var expression = residue && residue.expression
-        ? String(residue.expression) : null;
+      var expression = groupSelection(residue) ||
+        (residue && residue.expression ? String(residue.expression) : null);
       if (!expression) return null;
       return buildScriptComponent(expression, TAG_MEASURE + index,
         "measure " + (index + 1)).then(function (result) {
@@ -1099,6 +1165,63 @@
     return Promise.resolve(builder.commit({ canUndo: false }))
       .catch(function (error) {
         noteFailure("measurement cleanup failed", error);
+      });
+  }
+
+  /* ---------------- 原地切 pair（不重载结构/轨迹） ---------------- */
+
+  /* 只删当前 pair 的残基棍棒组件：卡通/配体/离子背景与轨迹常驻 */
+  function clearResidueLayers() {
+    var stale = residueRefs;
+    residueRefs = [];
+    if (!stale.length || !ready) return Promise.resolve();
+    var builder = viewer.plugin.state.data.build();
+    for (var i = 0; i < stale.length; i++) builder.delete(stale[i]);
+    return Promise.resolve(builder.commit({ canUndo: false }))
+      .catch(function (error) {
+        noteFailure("residue cleanup failed", error);
+      });
+  }
+
+  function clearMeasurements() {
+    var stale = measurements;
+    measurements = [];
+    return deleteMeasurementCells(stale);
+  }
+
+  /* 切 pair：只换与 pair 相关的表示/帧数据，structure 与 trajectory 复用。
+     payload = GET /api/pair/{type}/{idx} 的 JSON（groups/existence/...）。 */
+  function updatePair(payload) {
+    var next = payload || {};
+    if (!ready || !structureRef) {
+      setStatus("3D viewer is not ready; pair not updated", true);
+      return Promise.resolve();
+    }
+    data = {
+      residues: next.groups || [],
+      existence: next.existence || [],
+      pt_types: next.pt_types || [],
+      n_frames: typeof next.n_frames === "number"
+        ? next.n_frames : cfg.n_frames,
+      pair_label: next.pair_label ? String(next.pair_label) : ""
+    };
+    var target = typeof next.frame === "number" ? next.frame : frame;
+    return clearResidueLayers()
+      .then(function () { return clearMeasurements(); })
+      .then(function () { return buildResidueLayers(); })
+      .then(function () {
+        renderExistence(data.existence, data.pt_types);
+        updateFrameRange();
+        renderLegend(data.residues);
+        renderTypeLegend(data.pt_types);
+        return null;
+      })
+      .then(function () { return focusInitially(); })
+      .then(function () { return selectFrame(clampFrame(target)); })
+      .catch(function (error) {
+        console.warn("[dii] pair update failed", error);
+        setStatus("pair update failed: " + (error && error.message
+          ? error.message : error), true);
       });
   }
 
@@ -1359,15 +1482,30 @@
 
   if (form) form.addEventListener("submit", selectStructure);
 
-  highlightFrame(frame);
-  /* 自动尝试优先于 has_structure：切到另一数据集时旧结构与该 h5 记录不一致，
-     必须先按记录重载，否则会用旧宇宙算新拓扑（400）。 */
-  if (shouldAutoLoad()) {
-    autoLoadStructure();
-  } else if (cfg.has_structure) {
-    updateFrameLabel(frame);
-    initViewer();
-  } else {
-    setStatus("select topology and trajectory to load the structure", false);
+  /* ---------------- 挂载入口：幂等，外层可在切 pair 时复用同一 viewer ---------------- */
+
+  function mount() {
+    if (mounted) return;
+    mounted = true;
+    highlightFrame(frame);
+    /* 自动尝试优先于 has_structure：切到另一数据集时旧结构与该 h5 记录不一致，
+       必须先按记录重载，否则会用旧宇宙算新拓扑（400）。 */
+    if (shouldAutoLoad()) {
+      autoLoadStructure();
+    } else if (cfg.has_structure) {
+      updateFrameLabel(frame);
+      initViewer();
+    } else {
+      setStatus("select topology and trajectory to load the structure", false);
+    }
   }
+
+  window.DiiStructure = {
+    mount: mount,
+    updatePair: updatePair,
+    isMounted: function () { return !!viewer; }
+  };
+
+  /* 模板未改：脚本自挂载，行为与原首屏流程一致；外层后续可显式再调 mount（幂等） */
+  if (window.DiiStructure) window.DiiStructure.mount();
 })();
