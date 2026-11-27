@@ -305,10 +305,17 @@
       encodeURIComponent(cfg.structure_version || 0);
   }
 
+  /* 后端 400 的 detail 才是真实原因（如原子名/原子数不一致），状态栏直接展示 */
   function fetchTopologyText() {
     return fetch(topologyUrl()).then(function (response) {
       if (!response.ok) {
-        throw new Error("topology HTTP " + response.status);
+        return response.json().then(function (payload) {
+          var detail = payload && (payload.detail || payload.error);
+          throw new Error(detail ? String(detail)
+            : "topology HTTP " + response.status);
+        }, function () {
+          throw new Error("topology HTTP " + response.status);
+        });
       }
       return response.text();
     }).then(function (text) {
@@ -1239,6 +1246,8 @@
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body
     }).then(readJson).then(function () {
+      /* 手动选择优先：本次会话不再让自动尝试覆盖用户显式指定的结构 */
+      markAutoSkipped();
       window.location.reload();
     }).catch(function (error) {
       openButton.disabled = false;
@@ -1351,11 +1360,13 @@
   if (form) form.addEventListener("submit", selectStructure);
 
   highlightFrame(frame);
-  if (cfg.has_structure) {
+  /* 自动尝试优先于 has_structure：切到另一数据集时旧结构与该 h5 记录不一致，
+     必须先按记录重载，否则会用旧宇宙算新拓扑（400）。 */
+  if (shouldAutoLoad()) {
+    autoLoadStructure();
+  } else if (cfg.has_structure) {
     updateFrameLabel(frame);
     initViewer();
-  } else if (shouldAutoLoad()) {
-    autoLoadStructure();
   } else {
     setStatus("select topology and trajectory to load the structure", false);
   }

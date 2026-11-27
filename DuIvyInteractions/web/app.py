@@ -4,6 +4,7 @@
 import csv
 import io
 import math
+import os
 import secrets
 import threading
 import time
@@ -1214,11 +1215,34 @@ def _get_interaction(state: Dict[str, Any], name: str) -> Interaction:
     return _find_interaction(_source(state)[1], name)[1]
 
 
+def _structure_mismatch(structure: Optional[Dict[str, Any]],
+                        run_meta: Optional[Dict[str, str]]) -> bool:
+    """当前结构与 h5 记录的输入是否不一致（无结构 → True，无记录 → False）。"""
+    if structure is None:
+        return True
+    if run_meta is None:
+        return False
+    current = [structure.get(key, "") for key in ("topology", "trajectory")]
+    recorded = [run_meta.get(key, "") for key in ("topology", "trajectory")]
+    return any(_canonical_path(a) != _canonical_path(b)
+               for a, b in zip(current, recorded))
+
+
+def _canonical_path(path: str) -> str:
+    """路径归一（abspath + realpath，兼容符号链接与相对写法差异）。"""
+    return os.path.realpath(os.path.abspath(path))
+
+
+def _auto_attempt(structure: Optional[Dict[str, Any]],
+                  run_meta: Optional[Dict[str, str]]) -> bool:
+    """3D 页是否需要自动载入（有记录且与当前结构不一致）。"""
+    return run_meta is not None and _structure_mismatch(structure, run_meta)
+
+
 def _structure_context(state: Dict[str, Any], interaction: Interaction,
                        idx: int, h5_path: str = "") -> Dict[str, Any]:
     """3D 视图上下文：结构状态 + existence 条 + 基团标签（pair/旧页共用）。"""
-    structure = state.get("structure")
-    run_meta = _pair_run_meta(h5_path)
+    structure, run_meta = state.get("structure"), _pair_run_meta(h5_path)
     return {
         "n_frames": structure["n_frames"] if structure
         else interaction.n_frames,
@@ -1232,7 +1256,7 @@ def _structure_context(state: Dict[str, Any], interaction: Interaction,
         "n_atoms": structure["n_atoms"] if structure else 0,
         "structure_version": structure["version"] if structure else 0,
         "run_meta": run_meta,
-        "auto_attempt": structure is None and run_meta is not None,
+        "auto_attempt": _auto_attempt(structure, run_meta),
     }
 
 

@@ -9,6 +9,7 @@ _select_structure 复用同一 _install_structure。
 
 import inspect
 import json
+import os
 import re
 from pathlib import Path
 
@@ -21,6 +22,15 @@ from DuIvyInteractions.io.h5 import RunMeta, load_run_meta, save_interactions
 WEB_DIR = Path(__file__).resolve().parents[2] / "DuIvyInteractions" / "web"
 STRUCTURE_JS = WEB_DIR / "static" / "structure.js"
 PARTIAL_TEMPLATE = WEB_DIR / "templates" / "_structure_view.html"
+TESTS_DIR = Path(__file__).resolve().parents[1]
+REAL_AMBER_DIR = TESTS_DIR / "interaction_h5data"
+REAL_CHARMM_DIR = TESTS_DIR / "web_run_test"
+CHARMM_TYPE = "pi_stacking@pi_stacking.h5"
+INPUT_VALUE_PATTERN = r'id="%s"[^>]*value="([^"]*)"'
+SELECTED_TOPOLOGY = "/selected/top.pdb"
+SELECTED_TRAJECTORY = "/selected/traj.xtc"
+RECORDED_TOPOLOGY = "/recorded/top.tpr"
+RECORDED_TRAJECTORY = "/recorded/traj.xtc"
 
 TYPE = "hydrogen_bond"
 PAIR_URL = f"/pair/{TYPE}/0"
@@ -158,6 +168,51 @@ def _function_body(text: str, name: str) -> str:
                       re.S)
     assert match, f"missing function {name}"
     return match.group(0)
+
+
+def _input_value(html: str, element_id: str) -> str:
+    """页面输入框的 value 属性（模板预填断言用）。"""
+    match = re.search(INPUT_VALUE_PATTERN % re.escape(element_id), html)
+    assert match, f"missing input #{element_id}"
+    return match.group(1)
+
+
+def _render_partial(**overrides) -> str:
+    """直接渲染 3D partial（默认：已选结构 + 与记录不一致的 auto_attempt）。"""
+    from DuIvyInteractions.web.app import TEMPLATES
+
+    context = dict(
+        title="structure", ds_name="", datasource="", types=[],
+        active_type=None, type=TYPE, idx=0, pair_label="pair 1",
+        n_atoms=len(ATOMS), n_frames=1, has_structure=True,
+        existence=[1], topology=SELECTED_TOPOLOGY,
+        trajectory=SELECTED_TRAJECTORY, auto_attempt=True,
+        run_meta={"topology": RECORDED_TOPOLOGY,
+                  "trajectory": RECORDED_TRAJECTORY},
+        browse_mode="picker")
+    context.update(overrides)
+    return TEMPLATES.get_template("_structure_view.html").render(**context)
+
+
+def _real_data_ready() -> bool:
+    """真实 amber/charmm 数据集是否都带可用的 run/ 记录。"""
+    for directory in (REAL_AMBER_DIR, REAL_CHARMM_DIR):
+        path = directory / "pi_stacking.h5"
+        if not path.is_file():
+            return False
+        try:
+            record = load_run_meta(str(path))
+        except (OSError, KeyError, TypeError, ValueError):
+            return False
+        if record is None:
+            return False
+        paths = (record.meta.topology, record.meta.trajectory)
+        if not all(Path(p).is_file() for p in paths):
+            return False
+    return True
+
+
+REAL_DATA_READY = _real_data_ready()
 
 
 # ============================================================
@@ -462,8 +517,11 @@ class TestStructureScriptAuto:
 
     def test_auto_runs_before_viewer_init(self):
         text = _structure_js()
-        assert "} else if (shouldAutoLoad()) {" in text
+        assert "if (shouldAutoLoad()) {" in text
+        assert "} else if (cfg.has_structure) {" in text
         assert "autoLoadStructure();" in text
+        assert (text.index("if (shouldAutoLoad()) {")
+                < text.index("} else if (cfg.has_structure) {"))
         assert (text.index("function autoLoadStructure()")
                 < text.index("function initViewer()"))
 
@@ -482,3 +540,234 @@ class TestStructureScriptAuto:
         assert "topologyInput.value.trim()" in body
         assert "window.location.reload()" in body
         assert "openButton.disabled = true" in body
+
+    def test_manual_select_suppresses_auto_override(self):
+        """手选结构后写 auto=0：避免重载页被 h5 记录再次覆盖。"""
+        body = _function_body(_structure_js(), "selectStructure")
+        assert "markAutoSkipped()" in body
+        assert (body.index("markAutoSkipped()")
+                < body.index("window.location.reload()"))
+
+
+# ============================================================
+# 结构与 h5 记录的一致性判据（R1：切数据集不得复用旧宇宙）
+# ============================================================
+
+
+def _recorded(top, traj) -> dict:
+    return {"topology": str(top), "trajectory": str(traj)}
+
+
+def _installed(top, traj) -> dict:
+    return {"topology": str(top), "trajectory": str(traj)}
+
+
+class TestStructureMismatch:
+    def test_no_structure_is_mismatch(self):
+        from DuIvyInteractions.web.app import _structure_mismatch
+
+        assert _structure_mismatch(None, _recorded("a", "b")) is True
+
+    def test_no_record_is_not_mismatch(self):
+        from DuIvyInteractions.web.app import _structure_mismatch
+
+        assert _structure_mismatch(_installed("a", "b"), None) is False
+
+    def test_matching_paths_are_not_mismatch(self, tmp_path):
+        from DuIvyInteractions.web.app import _structure_mismatch
+
+        top = _write_pdb(tmp_path / "top.pdb")
+        traj = _write_pdb(tmp_path / "traj.pdb")
+        assert _structure_mismatch(_installed(top, traj),
+                                   _recorded(top, traj)) is False
+
+    def test_topology_mismatch(self, tmp_path):
+        from DuIvyInteractions.web.app import _structure_mismatch
+
+        top = _write_pdb(tmp_path / "top.pdb")
+        traj = _write_pdb(tmp_path / "traj.pdb")
+        other = _write_pdb(tmp_path / "other.pdb")
+        assert _structure_mismatch(_installed(other, traj),
+                                   _recorded(top, traj)) is True
+
+    def test_trajectory_mismatch(self, tmp_path):
+        from DuIvyInteractions.web.app import _structure_mismatch
+
+        top = _write_pdb(tmp_path / "top.pdb")
+        traj = _write_pdb(tmp_path / "traj.pdb")
+        other = _write_pdb(tmp_path / "other_traj.pdb")
+        assert _structure_mismatch(_installed(top, other),
+                                   _recorded(top, traj)) is True
+
+    def test_equivalent_paths_are_not_mismatch(self, tmp_path):
+        """realpath 归一：../ 写法与符号链接都视为同一文件。"""
+        from DuIvyInteractions.web.app import _structure_mismatch
+
+        top = _write_pdb(tmp_path / "top.pdb")
+        traj = _write_pdb(tmp_path / "traj.pdb")
+        traj_link = tmp_path / "traj_link.pdb"
+        os.symlink(traj, traj_link)
+        weird = str(tmp_path / "sub" / ".." / "top.pdb")
+        assert _structure_mismatch(_installed(weird, traj_link),
+                                   _recorded(top, traj)) is False
+
+
+class TestAutoAttemptContext:
+    def test_no_structure_attempts_auto(self, client):
+        cfg = _page_config(client)
+        assert cfg["has_structure"] is False
+        assert cfg["auto_attempt"] is True
+
+    def test_matching_structure_skips_auto(self, client, pdb_pair):
+        response = client.post("/api/structure/select", data={
+            "topology": str(pdb_pair[0]), "trajectory": str(pdb_pair[1])})
+        assert response.status_code == 200
+        assert _page_config(client)["auto_attempt"] is False
+
+    def test_other_topology_attempts_auto(self, client, pdb_pair, tmp_path):
+        other = _write_pdb(tmp_path / "other.pdb")
+        response = client.post("/api/structure/select", data={
+            "topology": str(other), "trajectory": str(pdb_pair[1])})
+        assert response.status_code == 200
+        assert _page_config(client)["auto_attempt"] is True
+
+    def test_other_trajectory_attempts_auto(self, client, pdb_pair, tmp_path):
+        other = _write_pdb(tmp_path / "other_traj.pdb")
+        response = client.post("/api/structure/select", data={
+            "topology": str(pdb_pair[0]), "trajectory": str(other)})
+        assert response.status_code == 200
+        assert _page_config(client)["auto_attempt"] is True
+
+    def test_auto_success_marks_context_current(self, client):
+        """防循环：auto 成功后重载页 auto_attempt 必须为 False。"""
+        assert _auto(client).status_code == 200
+        cfg = _page_config(client)
+        assert cfg["has_structure"] is True
+        assert cfg["auto_attempt"] is False
+
+    def test_symlinked_structure_is_not_a_mismatch(self, client, pdb_pair,
+                                                   tmp_path):
+        top_link = tmp_path / "top_link.pdb"
+        traj_link = tmp_path / "traj_link.pdb"
+        os.symlink(pdb_pair[0], top_link)
+        os.symlink(pdb_pair[1], traj_link)
+        response = client.post("/api/structure/select", data={
+            "topology": str(top_link), "trajectory": str(traj_link)})
+        assert response.status_code == 200
+        assert _page_config(client)["auto_attempt"] is False
+
+
+class TestInputPrefill:
+    def test_recorded_paths_prefilled_without_structure(self, client, pdb_pair):
+        html = client.get(PAIR_URL, params={"view": "3d"}).text
+        assert _input_value(html, "topologyInput") == str(pdb_pair[0])
+        assert _input_value(html, "trajectoryInput") == str(pdb_pair[1])
+        assert "paths from this h5 (run record)" in html
+
+    def test_mismatched_structure_prefills_recorded_paths(self, client,
+                                                          pdb_pair, tmp_path):
+        """auto_attempt=True：显示 h5 记录，而不是旧结构路径。"""
+        other = _write_pdb(tmp_path / "other.pdb")
+        response = client.post("/api/structure/select", data={
+            "topology": str(other), "trajectory": str(pdb_pair[1])})
+        assert response.status_code == 200
+        html = client.get(PAIR_URL, params={"view": "3d"}).text
+        assert _config(html)["auto_attempt"] is True
+        assert _input_value(html, "topologyInput") == str(pdb_pair[0])
+        assert _input_value(html, "trajectoryInput") == str(pdb_pair[1])
+
+    def test_matching_structure_keeps_structure_paths(self, client, pdb_pair):
+        """auto_attempt=False：显示当前已选结构路径。"""
+        response = client.post("/api/structure/select", data={
+            "topology": str(pdb_pair[0]), "trajectory": str(pdb_pair[1])})
+        assert response.status_code == 200
+        html = client.get(PAIR_URL, params={"view": "3d"}).text
+        assert _config(html)["auto_attempt"] is False
+        assert _input_value(html, "topologyInput") == str(pdb_pair[0])
+        assert _input_value(html, "trajectoryInput") == str(pdb_pair[1])
+
+    def test_no_record_keeps_structure_paths(self, pdb_pair, tmp_path):
+        client = _client()
+        _select(client, _save_h5(tmp_path / "bare"))
+        client.post("/api/structure/select", data={
+            "topology": str(pdb_pair[0]), "trajectory": str(pdb_pair[1])})
+        html = client.get(PAIR_URL, params={"view": "3d"}).text
+        assert _config(html)["run_meta"] is None
+        assert _input_value(html, "topologyInput") == str(pdb_pair[0])
+        assert _input_value(html, "trajectoryInput") == str(pdb_pair[1])
+
+    def test_no_record_keeps_inputs_empty(self, tmp_path):
+        client = _client()
+        _select(client, _save_h5(tmp_path / "bare"))
+        html = client.get(PAIR_URL, params={"view": "3d"}).text
+        assert _input_value(html, "topologyInput") == ""
+        assert _input_value(html, "trajectoryInput") == ""
+        assert "paths from this h5 (run record)" not in html
+
+    # ---- 模板级优先级：两份路径故意不同，才能区分取值来源 ----
+
+    def test_template_priority_record_on_mismatch(self):
+        html = _render_partial(auto_attempt=True)
+        assert _input_value(html, "topologyInput") == RECORDED_TOPOLOGY
+        assert _input_value(html, "trajectoryInput") == RECORDED_TRAJECTORY
+        assert "paths from this h5 (run record)" in html
+
+    def test_template_priority_structure_when_current(self):
+        html = _render_partial(auto_attempt=False)
+        assert _input_value(html, "topologyInput") == SELECTED_TOPOLOGY
+        assert _input_value(html, "trajectoryInput") == SELECTED_TRAJECTORY
+        assert "paths from this h5 (run record)" in html
+
+    def test_template_priority_empty_without_record(self):
+        html = _render_partial(auto_attempt=False, run_meta=None,
+                               topology="", trajectory="")
+        assert _input_value(html, "topologyInput") == ""
+        assert _input_value(html, "trajectoryInput") == ""
+        assert "paths from this h5 (run record)" not in html
+
+
+class TestTopologyFailureDetail:
+    def test_fetch_topology_reads_json_detail(self):
+        body = _function_body(_structure_js(), "fetchTopologyText")
+        assert "if (!response.ok)" in body
+        assert "response.json()" in body
+        assert "payload.detail" in body
+        assert "topology HTTP " in body
+
+    def test_topology_error_throws_detail(self):
+        body = _function_body(_structure_js(), "fetchTopologyText")
+        assert "throw new Error(detail" in body
+
+    def test_topology_detail_reaches_status_bar(self):
+        """fetchTopologyText 的 rejection 走 loadScene → loadFailureText → 状态栏。"""
+        text = _structure_js()
+        assert "setStatus(loadFailureText(error), true)" in text
+        assert "fetchTopologyText()" in _function_body(text, "loadScene")
+
+
+@pytest.mark.skipif(not REAL_DATA_READY,
+                    reason="real amber/charmm h5 fixtures with run/ unavailable")
+class TestRealDataRegression:
+    """用户实测路径：amber 数据集自动载入后，切到 charmm 数据集不得复用旧宇宙。"""
+
+    def test_switching_dataset_reloads_recorded_structure(self):
+        client = _client()
+        _select(client, REAL_AMBER_DIR)
+        amber = _auto(client)
+        assert amber.status_code == 200
+        assert amber.json()["n_atoms"] == 116383
+        _select(client, REAL_CHARMM_DIR)
+        page = client.get(f"/pair/{CHARMM_TYPE}/0", params={"view": "3d"})
+        cfg = _config(page.text)
+        assert cfg["has_structure"] is True
+        assert cfg["auto_attempt"] is True
+        assert cfg["run_meta"] is not None
+        assert Path(cfg["run_meta"]["topology"]).name == (
+            "SMO-BST_md_fullatom.tpr")
+        charmm = _auto(client, type=CHARMM_TYPE)
+        assert charmm.status_code == 200
+        assert charmm.json()["n_atoms"] == 196991
+        cfg = _config(client.get(f"/pair/{CHARMM_TYPE}/0",
+                                 params={"view": "3d"}).text)
+        assert cfg["has_structure"] is True
+        assert cfg["auto_attempt"] is False

@@ -31,7 +31,6 @@ except ModuleNotFoundError:   # pragma: no cover - 取决于解释器版本
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TMP_DIR = REPO_ROOT / "test_temp" / "run_meta_test"
-OLD_H5 = REPO_ROOT / "Tests" / "interaction_h5data" / "pi_stacking.h5"
 
 
 def _pyproject_version() -> str:
@@ -292,14 +291,18 @@ class TestVersion:
         assert meta.dii_version == DuIvyInteractions.__version__
 
 
-class TestOldFixtureCompatibility:
-    """仓库内旧 h5（无 run/ 组）的只读兼容性。"""
+class TestLegacyH5Layout:
+    """自造旧格式 h5（无 run/ 组）的读取兼容性。"""
 
-    def test_old_fixture_without_run_group(self):
-        if not OLD_H5.is_file():
-            pytest.skip("fixture h5 not generated")
-        assert load_run_meta(str(OLD_H5)) is None
-        loaded = load_interactions(str(OLD_H5))
+    def test_legacy_h5_without_run_group(self, tmp_path):
+        path = str(tmp_path / "legacy.h5")
+        interaction = _make_interaction()
+        save_interactions([interaction], path)
+        assert load_run_meta(path) is None
+        loaded = load_interactions(path)
         assert len(loaded) == 1
-        assert loaded[0].n_pairs == 10
-        assert loaded[0].n_frames == 101
+        assert loaded[0].n_pairs == interaction.n_pairs
+        assert loaded[0].n_frames == interaction.n_frames
+        with h5py.File(path, "r") as f:
+            assert set(f.attrs.keys()) == {"format_version", "n_interactions"}
+            assert RUN_GROUP not in f

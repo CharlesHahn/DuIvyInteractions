@@ -2,17 +2,19 @@
    页面自行决定是否引入 molstar.js / structure.js；本 partial 只提供 DOM 与配置。 #}
 <div class="panel">
   <h2>structure source</h2>
+  {% set recorded = run_meta if run_meta else None %}
   <form class="structure-form" id="structureForm">
     <label class="structure-field">topology
-      <input type="text" id="topologyInput" name="topology" value="{{ topology }}" placeholder="/path/to/md.tpr" autocomplete="off">
+      <input type="text" id="topologyInput" name="topology" value="{{ (recorded.topology if recorded else '') if auto_attempt else topology }}" placeholder="/path/to/md.tpr" autocomplete="off">
     </label>
     <button class="btn btn-sm" type="button" id="browseTopology" data-browse="{{ browse_mode | default('picker') }}" data-target="topologyInput">browse…</button>
     <label class="structure-field">trajectory
-      <input type="text" id="trajectoryInput" name="trajectory" value="{{ trajectory }}" placeholder="/path/to/md.xtc" autocomplete="off">
+      <input type="text" id="trajectoryInput" name="trajectory" value="{{ (recorded.trajectory if recorded else '') if auto_attempt else trajectory }}" placeholder="/path/to/md.xtc" autocomplete="off">
     </label>
     <button class="btn btn-sm" type="button" id="browseTrajectory" data-browse="{{ browse_mode | default('picker') }}" data-target="trajectoryInput">browse…</button>
     <button class="btn btn-sm" type="submit" id="openStructure">open structure</button>
   </form>
+  {% if recorded %}<p class="hint muted">paths from this h5 (run record)</p>{% endif %}
   <p class="hint">topology and trajectory are opened on the server; paths must stay inside the browse root.</p>
 </div>
 
