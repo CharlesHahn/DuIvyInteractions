@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""单对页 3D 视图开关测试：/structure 302 → /pair?view=3d，帧号在两视图间贯通。
+"""单对页 3D 区块测试：/structure 302 → /pair，单页始终内嵌 Mol* viewer。
 
-不依赖真实轨迹：用 tmp_path 构造最小 h5，只覆盖"未选结构"的退化分支。
+布局合并后不再有 curves/3D 视图切换；?view=3d 仅为旧链接兼容而接受。
+不依赖真实轨迹：用 tmp_path 构造最小 h5，覆盖"未选结构"的退化分支。
 """
 
 import json
@@ -120,130 +121,89 @@ class TestStructureRedirect:
 
 
 # ============================================================
-# 曲线视图（默认）与 3D 视图的资源隔离
+# 单页合并：曲线与 3D 同页，始终加载两套资源
 # ============================================================
 
 
-class TestPairViews:
-    def test_default_view_is_curves(self, client):
-        html = client.get(PAIR_URL).text
-        assert 'id="pairChart"' in html
-        assert 'id="framesTable"' in html
-        assert 'id="molstarViewer"' not in html
-
-    def test_curves_view_skips_molstar_bundle(self, client):
-        html = client.get(PAIR_URL).text
-        assert "/static/plotly-basic.min.js" in html
-        assert "/static/pair.js" in html
-        assert "/static/vendor/molstar.js" not in html
-        assert "/static/vendor/molstar.css" not in html
-        assert "/static/structure.js" not in html
-
-    def test_3d_view_renders_structure_dom(self, client):
-        response = client.get(PAIR_URL, params={"view": "3d"})
+class TestMergedPairPage:
+    def test_pair_page_always_embeds_viewer(self, client):
+        response = client.get(PAIR_URL)
         assert response.status_code == 200
         html = response.text
         for element_id in ("molstarViewer", "existenceBar", "groupLegend",
                            "structureStatus", "structureForm",
                            "topologyInput", "trajectoryInput",
-                           "openStructure", "structureConfig"):
+                           "openStructure", "structureConfig",
+                           "pairChart", "framesTable"):
             assert 'id="%s"' % element_id in html, element_id
 
-    def test_3d_view_loads_molstar_bundle(self, client):
-        html = client.get(PAIR_URL, params={"view": "3d"}).text
+    def test_pair_page_loads_both_bundles(self, client):
+        html = client.get(PAIR_URL).text
         molstar_at = html.index("/static/vendor/molstar.js")
         structure_at = html.index("/static/structure.js")
         assert molstar_at < structure_at
-        assert "/static/vendor/molstar.css" in html
-        assert "/static/plotly-basic.min.js" not in html
-        assert "/static/pair.js" not in html
+        for asset in ("/static/vendor/molstar.css", "/static/vendor/molstar.js",
+                      "/static/structure.js", "/static/plotly-basic.min.js",
+                      "/static/pair.js"):
+            assert asset in html, asset
 
-    def test_3d_view_hides_plotly_panels(self, client):
-        html = client.get(PAIR_URL, params={"view": "3d"}).text
-        assert 'id="pairChart"' not in html
-        assert 'id="framesTable"' not in html
-        assert 'id="pairFigure"' not in html
-        assert "pairFigure" not in html
+    def test_view_param_no_longer_changes_rendering(self, client):
+        plain = client.get(PAIR_URL)
+        legacy = client.get(PAIR_URL, params={"view": "3d"})
+        assert legacy.status_code == 200
+        assert legacy.text == plain.text
 
-    def test_illegal_view_falls_back_to_curves(self, client):
+    def test_illegal_view_renders_same_merged_page(self, client):
         response = client.get(PAIR_URL, params={"view": "xxx"})
         assert response.status_code == 200
-        html = response.text
-        assert 'id="pairChart"' in html
-        assert 'id="molstarViewer"' not in html
-        assert "/static/vendor/molstar.js" not in html
+        assert 'id="molstarViewer"' in response.text
+        assert 'id="pairChart"' in response.text
 
-    def test_3d_view_allows_molstar_eval(self, client):
-        csp = client.get(PAIR_URL, params={"view": "3d"}).headers[
-            "content-security-policy"]
+    def test_merged_page_allows_molstar_eval(self, client):
+        csp = client.get(PAIR_URL).headers["content-security-policy"]
         assert "'unsafe-eval'" in csp
-        curves_csp = client.get(PAIR_URL).headers["content-security-policy"]
-        assert "'unsafe-eval'" not in curves_csp
+        assert "connect-src 'self' data:" in csp
 
 
 # ============================================================
-# 帧号：注入、钳制、开关链接携带
+# 帧号：注入、钳制、存在性条初始状态
 # ============================================================
 
 
-class TestFrameSharing:
-    def test_3d_view_injects_requested_frame(self, client):
-        cfg = _config(client.get(PAIR_URL,
-                                 params={"view": "3d", "frame": 7}).text)
+class TestFrameState:
+    def test_frame_is_injected(self, client):
+        cfg = _config(client.get(PAIR_URL, params={"frame": 7}).text)
         assert cfg["frame"] == 7
         assert cfg["n_frames"] == FRAMES
 
-    def test_3d_view_clamps_frame(self, client):
-        cfg = _config(client.get(PAIR_URL,
-                                 params={"view": "3d", "frame": 99999}).text)
+    def test_frame_is_clamped(self, client):
+        cfg = _config(client.get(PAIR_URL, params={"frame": 99999}).text)
         assert cfg["frame"] == cfg["n_frames"] - 1 == FRAMES - 1
 
-    def test_3d_view_clamps_negative_frame(self, client):
-        cfg = _config(client.get(PAIR_URL,
-                                 params={"view": "3d", "frame": -5}).text)
+    def test_negative_frame_is_clamped(self, client):
+        cfg = _config(client.get(PAIR_URL, params={"frame": -5}).text)
         assert cfg["frame"] == 0
 
-    def test_3d_frame_label_and_bar_start_at_frame(self, client):
-        html = client.get(PAIR_URL, params={"view": "3d", "frame": 7}).text
+    def test_frame_label_and_bar_start_at_frame(self, client):
+        html = client.get(PAIR_URL, params={"frame": 7}).text
         bar = re.search(r'id="existenceBar"[^>]*', html).group(0)
         assert 'aria-valuenow="7"' in bar
 
-    def test_switch_links_carry_frame_in_curves(self, client):
-        html = client.get(PAIR_URL, params={"frame": 7}).text
-        assert f'href="{PAIR_URL}?frame=7"' in html
-        assert f'href="{PAIR_URL}?view=3d&amp;frame=7"' in html
-        assert html.count("btn-active") == 1
-
-    def test_switch_links_carry_frame_in_3d(self, client):
-        html = client.get(PAIR_URL,
-                          params={"view": "3d", "frame": 7}).text
-        assert f'href="{PAIR_URL}?frame=7"' in html
-        assert f'href="{PAIR_URL}?view=3d&amp;frame=7"' in html
-        assert html.count("btn-active") == 1
-
-    def test_3d_view_marks_switch_active(self, client):
-        html = client.get(PAIR_URL, params={"view": "3d"}).text
-        active = re.search(r'<a class="btn btn-sm btn-active"\s+href="[^"]*">3D</a>',
-                           html)
-        assert active, "3D switch link must carry btn-active"
-
 
 # ============================================================
-# prev/next pair 链接保留视图与帧（切对子不丢上下文）
+# prev/next pair 链接：保留帧号，不再带 view
 # ============================================================
 
 
 class TestPairNavigation:
-    def test_next_pair_link_keeps_view_and_frame(self, client):
-        html = client.get(PAIR_URL, params={"view": "3d", "frame": 7}).text
-        assert f'href="/pair/{TYPE}/1?view=3d&amp;frame=7"' in html
-        curves = client.get(PAIR_URL, params={"frame": 7}).text
-        assert f'href="/pair/{TYPE}/1?view=curves&amp;frame=7"' in curves
+    def test_next_pair_link_keeps_frame(self, client):
+        html = client.get(PAIR_URL, params={"frame": 7}).text
+        assert f'href="/pair/{TYPE}/1?frame=7"' in html
+        assert "?view=" not in html
 
-    def test_previous_pair_link_keeps_view_and_frame(self, client):
-        html = client.get(f"/pair/{TYPE}/1",
-                          params={"view": "3d", "frame": 7}).text
-        assert f'href="/pair/{TYPE}/0?view=3d&amp;frame=7"' in html
+    def test_previous_pair_link_keeps_frame(self, client):
+        html = client.get(f"/pair/{TYPE}/1", params={"frame": 7}).text
+        assert f'href="/pair/{TYPE}/0?frame=7"' in html
 
 
 # ============================================================
@@ -252,17 +212,18 @@ class TestPairNavigation:
 
 
 class TestDegenerateNoStructure:
-    def test_3d_view_without_structure_shows_hint(self, client):
-        html = client.get(PAIR_URL, params={"view": "3d"}).text
+    def test_page_without_structure_shows_hint(self, client):
+        html = client.get(PAIR_URL).text
         assert "structure not selected" in html
         cfg = _config(html)
         assert cfg["has_structure"] is False
         assert cfg["n_frames"] == FRAMES
 
-    def test_3d_view_without_structure_keeps_page_panels(self, client):
-        html = client.get(PAIR_URL, params={"view": "3d"}).text
+    def test_page_without_structure_keeps_page_panels(self, client):
+        html = client.get(PAIR_URL).text
         assert "summary" in html and "occupancy" in html
         assert "groups" in html
+        assert 'id="pairChart"' in html
 
     def test_structure_script_hints_structure_selection(self):
         text = _structure_js()
@@ -301,7 +262,7 @@ class TestStructureScript:
 
 
 # ============================================================
-# 模板结构：partial 被两个模板共用（旧页可独立渲染回归）
+# 模板结构：3D 区块 partial（单对页 include，可独立渲染回归）
 # ============================================================
 
 
@@ -312,6 +273,7 @@ class TestPartialTemplate:
     def test_pair_template_includes_partial(self):
         text = PAIR_TEMPLATE.read_text(encoding="utf-8")
         assert '{% include "_structure_view.html" %}' in text, PAIR_TEMPLATE
+        assert '{% if view' not in text, "include must be unconditional"
 
     def test_partial_keeps_viewer_dom_ids(self):
         text = PARTIAL_TEMPLATE.read_text(encoding="utf-8")
@@ -332,3 +294,16 @@ class TestPartialTemplate:
         assert 'id="molstarViewer"' in html
         assert 'id="structureConfig"' in html
         assert "no structure" in html
+        assert "structure not selected" in html
+
+    def test_partial_source_panel_is_details(self):
+        from DuIvyInteractions.web.app import TEMPLATES
+
+        html = TEMPLATES.get_template("_structure_view.html").render(
+            title="structure", ds_name="", datasource="", types=[],
+            active_type=None, type=TYPE, idx=0, pair_label="pair 1",
+            n_atoms=4, n_frames=1, has_structure=True, existence=[1],
+            topology="/data/md.tpr", trajectory="/data/md.xtc",
+            browse_mode="picker")
+        assert '<details class="panel structure-source"' in html
+        assert "structure source · md.tpr + md.xtc" in html

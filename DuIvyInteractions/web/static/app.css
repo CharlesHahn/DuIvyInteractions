@@ -1812,3 +1812,34 @@ a.side-batch-name:hover { color: var(--text); }
 
 /* recent 路径中间省略由 load.js 处理，这里只保证单行与不溢出 */
 .load-recent a { white-space: nowrap; overflow: hidden; }
+
+/* ---------- 单对页合并布局：3D 在首 + 折叠来源面板 ---------- */
+
+details.structure-source > summary {
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+details.structure-source[open] > summary {
+  margin-bottom: 12px;
+}
+
+.structure-viewer-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.structure-viewer-head h2 { margin: 0; }
+.structure-atoms { font-size: 12px; }
+
+/* structure source：输入框与 browse 按钮同高，同一行上下对齐 */
+.structure-form input,
+.structure-form .btn { height: 34px; box-sizing: border-box; }
+.structure-form input { padding: 0 10px; }
+.structure-form .btn { padding: 0 12px; }

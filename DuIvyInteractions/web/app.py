@@ -1388,9 +1388,9 @@ def _hotspot_types_text(types: List[Dict[str, Any]]) -> str:
 def _render_pair(request: Request, state: Dict[str, Any], name: str,
                  idx: int, view: str = PAIR_VIEW_CURVES, frame: int = 0,
                  browse_mode: str = "picker") -> HTMLResponse:
-    """下钻页：基团元信息 + existence/指标对齐图 + 逐帧明细；
+    """下钻单页：3D 结构 + 基团元信息 + 对齐曲线 + 逐帧明细。
 
-    view=3d 时同一页面改为 3D 区块（与 curves 视图共享帧号）。
+    view 仅为旧链接兼容而接受（不再参与渲染选择）；3D 上下文始终提供。
     """
     path, items = _source(state)
     h5_path, it = _find_interaction(items, name)
@@ -1408,12 +1408,11 @@ def _render_pair(request: Request, state: Dict[str, Any], name: str,
         "browse_mode": browse_mode, "recent": load_recent(),
         **_nav_source(path, items, name, _batch_summaries(state)),
     }
-    if view == PAIR_VIEW_3D:
-        context.update(_structure_context(state, it, idx, h5_path))
-        context["frame"] = _clamp_frame(context["frame"], context["n_frames"])
+    context.update(_structure_context(state, it, idx, h5_path))
+    context["frame"] = _clamp_frame(context["frame"], context["n_frames"])
     response = TEMPLATES.TemplateResponse(request, "pair.html", context)
-    if view == PAIR_VIEW_3D:
-        response.headers["Content-Security-Policy"] = STRUCTURE_CSP
+    # 单页始终内嵌 Mol* viewer：CSP 必须放行 new Function 与 WASM 的 data: URL
+    response.headers["Content-Security-Policy"] = STRUCTURE_CSP
     return response
 
 
@@ -1450,6 +1449,8 @@ def _structure_context(state: Dict[str, Any], interaction: Interaction,
                        idx: int, h5_path: str = "") -> Dict[str, Any]:
     """3D 视图上下文：结构状态 + existence 条 + 基团标签（pair/旧页共用）。"""
     structure, run_meta = state.get("structure"), _pair_run_meta(h5_path)
+    topology = structure["topology"] if structure else ""
+    trajectory = structure["trajectory"] if structure else ""
     return {
         "n_frames": structure["n_frames"] if structure
         else interaction.n_frames,
@@ -1458,8 +1459,10 @@ def _structure_context(state: Dict[str, Any], interaction: Interaction,
                                                               idx),
         "existence": [int(value) for value in interaction.existence[idx]],
         "pt_types": pair_types(interaction, idx),
-        "topology": structure["topology"] if structure else "",
-        "trajectory": structure["trajectory"] if structure else "",
+        "topology": topology,
+        "trajectory": trajectory,
+        "topology_name": os.path.basename(topology),
+        "trajectory_name": os.path.basename(trajectory),
         "n_atoms": structure["n_atoms"] if structure else 0,
         "structure_version": structure["version"] if structure else 0,
         "run_meta": run_meta,
