@@ -12,8 +12,10 @@ import numpy as np
 import pytest
 
 from DuIvyInteractions.core.datas import AtomData, Group, Interaction
-from DuIvyInteractions.visualizers import parse_datasource, residue_hotspots
-from DuIvyInteractions.visualizers.data import DISTANCE_METRIC_BY_TYPE
+from DuIvyInteractions.visualizers import (
+    hotspot_segments, parse_datasource, residue_hotspots)
+from DuIvyInteractions.visualizers.data import (
+    DISTANCE_METRIC_BY_TYPE, _dominant_type)
 
 FRAMES = 4
 H5_DATA_DIR = Path(__file__).parent.parent / "interaction_h5data"
@@ -27,9 +29,10 @@ def _atom(gidx: int) -> AtomData:
                     atom_mass=0.0)
 
 
-def _group(gid: int, gtype: str, res: str, rid: int) -> Group:
-    """按 (group_type, residue_name, residue_id) 造基团。"""
-    return Group(group_id=gid, group_type=gtype, molecule="test",
+def _group(gid: int, gtype: str, res: str, rid: int,
+           molecule: str = "test") -> Group:
+    """按 (group_type, residue_name, residue_id[, molecule]) 造基团。"""
+    return Group(group_id=gid, group_type=gtype, molecule=molecule,
                  residue_name=res, residue_id=rid, atoms=[_atom(gid)])
 
 
@@ -95,7 +98,7 @@ class TestSinglePair:
                                        [[3.0, 2.0, 9.0, 9.0]])])
         lys = _row(rows, 10, "LYS")
         assert lys["types"] == [{"type": "hydrogen_bond", "frames": 2,
-                                 "occupancy": 0.5}]
+                                 "occupancy": 0.5, "pairs": 1}]
         assert lys["avg_distance"] == pytest.approx(2.5)
 
     def test_acceptor_symmetric(self):
@@ -224,7 +227,7 @@ class TestZeroFrames:
         assert lys["frames_active"] == 0
         assert lys["occupancy"] == 0.0
         assert lys["types"] == [{"type": "salt_bridge", "frames": 0,
-                                 "occupancy": 0.0}]
+                                 "occupancy": 0.0, "pairs": 1}]
 
 
 class TestAverageDistance:
@@ -352,6 +355,170 @@ class TestAnomalousResidueData:
 
 
 # ============================================================
+# 残基元信息：molecule / group_types / types[].pairs / dominant_type
+# ============================================================
+
+class TestRowMetadata:
+
+    def test_molecule_and_group_types_passed_through(self):
+        specs = [[("H_donor", "LYS", 10, "seg_0_RBD_pro"),
+                  ("H_acceptor", "ASP", 100, "seg_2_KRAS_pro")]]
+        rows = residue_hotspots([_item("hydrogen_bond", specs,
+                                       [[True, False, False, False]])])
+        lys = _row(rows, 10, "LYS")
+        assert lys["molecule"] == "seg_0_RBD_pro"
+        assert lys["group_types"] == ["H_donor"]
+        asp = _row(rows, 100, "ASP")
+        assert asp["molecule"] == "seg_2_KRAS_pro"
+        assert asp["group_types"] == ["H_acceptor"]
+
+    def test_multiple_molecules_take_smallest(self):
+        specs = [[("H_donor", "LYS", 10, "seg_2"),
+                  ("H_acceptor", "ASP", 100, "seg_0")],
+                 [("H_donor", "LYS", 10, "seg_1"),
+                  ("H_acceptor", "GLU", 200, "seg_3")]]
+        rows = residue_hotspots([_item("hydrogen_bond", specs,
+                                       np.zeros((2, FRAMES), dtype=bool))])
+        assert _row(rows, 10, "LYS")["molecule"] == "seg_1"
+
+    def test_group_types_union_of_own_groups(self):
+        hb = _item("hydrogen_bond",
+                   [[("H_donor", "LYS", 10, "seg_0"),
+                     ("H_acceptor", "ASP", 100, "seg_0")]],
+                   np.zeros((1, FRAMES), dtype=bool))
+        sb = _item("salt_bridge",
+                   [[("charged_positive", "LYS", 10, "seg_0"),
+                     ("charged_negative", "ASP", 100, "seg_0")]],
+                   np.zeros((1, FRAMES), dtype=bool))
+        lys = _row(residue_hotspots([hb, sb]), 10, "LYS")
+        assert lys["group_types"] == ["H_donor", "charged_positive"]
+
+
+class TestTypePairs:
+
+    def test_pairs_per_type(self):
+        specs = [[("H_donor", "LYS", 10), ("H_acceptor", "ASP", 100)],
+                 [("H_donor", "LYS", 10), ("H_acceptor", "GLU", 200)]]
+        existence = [[True, False, False, False],
+                     [False, True, False, False]]
+        lys = _row(residue_hotspots([_item("hydrogen_bond", specs, existence)]),
+                   10, "LYS")
+        assert lys["types"][0]["pairs"] == 2
+        assert lys["n_pairs"] == 2
+
+    def test_self_pair_counts_once(self):
+        specs = [[("hydrophobic", "LEU", 50), ("hydrophobic", "LEU", 50)]]
+        rows = residue_hotspots([_item("hydrophobic", specs,
+                                       [[True, True, False, False]])])
+        leu = _row(rows, 50, "LEU")
+        assert leu["types"][0]["pairs"] == 1
+        assert leu["n_pairs"] == 1
+
+
+class TestDominantType:
+
+    def test_more_frames_wins(self):
+        hb = _item("hydrogen_bond", LYS_ASP, [[True, True, False, False]])
+        sb = _item("salt_bridge", LYS_CHARGED, [[True, False, False, False]])
+        assert _row(residue_hotspots([hb, sb]), 10, "LYS")["dominant_type"] \
+            == "hydrogen_bond"
+
+    def test_pairs_break_frame_tie(self):
+        hb = _item("hydrogen_bond", LYS_ASP, [[True, True, False, False]])
+        sb = _item("salt_bridge",
+                   [[("charged_positive", "LYS", 10),
+                     ("charged_negative", "ASP", 100)],
+                    [("charged_positive", "LYS", 10),
+                     ("charged_negative", "GLU", 200)]],
+                   [[True, False, False, False],
+                    [False, True, False, False]])
+        lys = _row(residue_hotspots([hb, sb]), 10, "LYS")
+        assert lys["dominant_type"] == "salt_bridge"
+
+    def test_name_breaks_tie(self):
+        hb = _item("hydrogen_bond", LYS_ASP, [[True, True, False, False]])
+        sb = _item("salt_bridge", LYS_CHARGED, [[True, True, False, False]])
+        assert _row(residue_hotspots([hb, sb]), 10, "LYS")["dominant_type"] \
+            == "salt_bridge"
+
+    def test_no_types_returns_none(self):
+        assert _dominant_type([]) is None
+
+
+# ============================================================
+# 分段（hotspot_segments）
+# ============================================================
+
+class TestHotspotSegments:
+
+    def test_segment_and_inner_ordering(self):
+        specs = [[("H_donor", "LYS", 30, "seg_1"),
+                  ("H_acceptor", "ASP", 130, "seg_1")],
+                 [("H_donor", "LYS", 20, "seg_0"),
+                  ("H_acceptor", "ASP", 120, "seg_0")],
+                 [("H_donor", "LYS", 25, "seg_0"),
+                  ("H_acceptor", "ASP", 125, "seg_0")]]
+        existence = [[True, False, False, False]] * 3
+        rows = residue_hotspots([_item("hydrogen_bond", specs, existence)])
+        segments = hotspot_segments(rows)
+        assert [seg["molecule"] for seg in segments] == ["seg_0", "seg_1"]
+        assert [r["residue_id"] for r in segments[0]["residues"]] == \
+            [20, 25, 120, 125]
+        assert [r["residue_id"] for r in segments[1]["residues"]] == [30, 130]
+
+    def test_zero_occupancy_dropped_by_default(self):
+        specs = [[("H_donor", "LYS", 10), ("H_acceptor", "ASP", 100)],
+                 [("H_donor", "ARG", 40), ("H_acceptor", "GLU", 200)]]
+        existence = [[True, False, False, False],
+                     [False, False, False, False]]
+        rows = residue_hotspots([_item("hydrogen_bond", specs, existence)])
+        labels = [r["label"] for seg in hotspot_segments(rows)
+                  for r in seg["residues"]]
+        assert "ARG40" not in labels and "GLU200" not in labels
+        kept = [r["label"] for seg in hotspot_segments(rows, exclude_unused=False)
+                for r in seg["residues"]]
+        assert {"ARG40", "GLU200"} <= set(kept)
+
+    def test_unused_ion_dropped_used_ion_kept(self):
+        used = _item("metal_coordination",
+                     [[("metal", "MG", 311, "seg_4_Mg"),
+                       ("metal_binding", "GLU", 15, "seg_2_KRAS_pro")]],
+                     [[True, False, False, False]])
+        stray = _item("hydrogen_bond",
+                      [[("metal", "NA", 900, "seg_6_NA"),
+                        ("H_acceptor", "ASP", 100, "seg_0")]],
+                      [[True, False, False, False]])
+        rows = residue_hotspots([used, stray])
+        labels = [r["label"] for seg in hotspot_segments(rows)
+                  for r in seg["residues"]]
+        assert "MG311" in labels
+        assert "NA900" not in labels
+        kept = [r["label"] for seg in hotspot_segments(rows, exclude_unused=False)
+                for r in seg["residues"]]
+        assert "NA900" not in kept      # 离子规则与 exclude_unused 无关
+
+    def test_counts_and_max_occupancy(self):
+        specs = [[("H_donor", "LYS", 10, "seg_0"),
+                  ("H_acceptor", "ASP", 100, "seg_0")],
+                 [("H_donor", "LYS", 12, "seg_0"),
+                  ("H_acceptor", "ASP", 102, "seg_0")]]
+        existence = [[True, True, True, True], [True, True, False, False]]
+        rows = residue_hotspots([_item("hydrogen_bond", specs, existence)])
+        segment = hotspot_segments(rows)[0]
+        assert segment["n_residues"] == 4
+        assert segment["max_occupancy"] == pytest.approx(1.0)
+
+    def test_residues_are_original_rows(self):
+        rows = residue_hotspots([_item("hydrogen_bond", LYS_ASP,
+                                       [[True, False, False, False]])])
+        residues = [r for seg in hotspot_segments(rows) for r in seg["residues"]]
+        assert all(any(r is row for row in rows) for r in residues)
+
+    def test_empty_rows_returns_empty_list(self):
+        assert hotspot_segments([]) == []
+
+
+# ============================================================
 # 真实数据（Tests/interaction_h5data/）
 # ============================================================
 
@@ -461,3 +628,19 @@ class TestRealPerformance:
         elapsed = time.perf_counter() - start
         print(f"\n[hotspots] 8 类聚合 {len(rows)} 个残基，耗时 {elapsed:.3f}s")
         assert rows
+
+
+class TestRealSegments:
+
+    def test_segments_keep_metal_and_drop_stray_ions(self):
+        rows = residue_hotspots(_real_all_items())
+        segments = hotspot_segments(rows)
+        print(f"\n[segments] 共 {len(segments)} 段: " + ", ".join(
+            f"{seg['molecule']}={seg['n_residues']}/{seg['max_occupancy']:.3f}"
+            for seg in segments))
+        assert segments
+        residues = [r for seg in segments for r in seg["residues"]]
+        assert "MG311" in {r["label"] for r in residues}
+        stray = [r for r in residues if "metal" in r["group_types"]
+                 and "metal_coordination" not in {t["type"] for t in r["types"]}]
+        assert stray == []

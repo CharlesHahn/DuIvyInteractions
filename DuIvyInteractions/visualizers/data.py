@@ -39,6 +39,8 @@ METRIC_UNITS = {
     "angle_dh_ow": "°", "angle_ow_hw_a": "°", "angle_h_ow_a": "°",
 }
 WATER_GROUP_TYPE = "water"   # 水桥中的桥接水基团类型
+METAL_GROUP_TYPE = "metal"   # 金属离子基团类型
+METAL_COORDINATION_TYPE = "metal_coordination"  # 金属配位相互作用类型
 DISTANCE_METRIC = "distance"  # 热点表平均距离所用指标名
 DISTANCE_METRIC_BY_TYPE = {"water_bridge": "dist_d_ow"}  # 水桥无 distance，用供体–水氧
 RECENT_LIMIT = 10       # 最近数据源记忆条数
@@ -743,6 +745,9 @@ def residue_hotspots(items: Sequence[Tuple[str, str, Interaction]],
     occupancy 分母为被选中 Interaction 的最大帧数；frames_active 为跨对、跨
     interaction_type 的帧并集；types 明细以 interaction_type 为键。
     avg_distance 的指标按类型映射（水桥 dist_d_ow，其余 distance）。
+    molecule 取该残基自身基团的 h5 molecule（多个值取字典序最小）；group_types
+    为该残基自身基团的 group_type 去重排序；dominant_type 为 types 按
+    (frames, pairs, type) 升序排序后的最后一个类型名。
     """
     selected = _hotspot_items(items, type_filter)
     n_frames = max((it.n_frames for _, _, it in selected), default=0)
@@ -763,20 +768,22 @@ def _hotspot_items(items: Sequence[Tuple[str, str, Interaction]],
     return [item for item in items if item[0] == type_filter]
 
 
-def _pair_residues(pair: Sequence[Group],
-                   include_water: bool) -> List[Tuple[int, str]]:
-    """一对基团涉及的残基键 [(residue_id, residue_name)]（可排除桥接水）。"""
-    keys: List[Tuple[int, str]] = []
-    for group in pair:
-        if include_water or group.group_type != WATER_GROUP_TYPE:
-            keys.append((int(group.residue_id), str(group.residue_name)))
-    return keys
+def _group_key(group: Group) -> Tuple[int, str]:
+    """残基身份键 (residue_id, residue_name)（严格取自 h5 原值）。"""
+    return int(group.residue_id), str(group.residue_name)
+
+
+def _pair_groups(pair: Sequence[Group], include_water: bool) -> List[Group]:
+    """一对基团中参与聚合的基团（可排除桥接水）。"""
+    return [group for group in pair
+            if include_water or group.group_type != WATER_GROUP_TYPE]
 
 
 def _residue_accumulator() -> Dict[str, Any]:
     """单个残基的累计容器。"""
     return {"frames": np.zeros(0, dtype=bool), "n_pairs": 0,
-            "partners": set(), "types": {}, "dist_sum": 0.0, "dist_count": 0}
+            "partners": set(), "types": {}, "dist_sum": 0.0, "dist_count": 0,
+            "molecules": set(), "group_types": set()}
 
 
 def _pad_frames(frames: Optional[np.ndarray], n_frames: int) -> np.ndarray:
@@ -821,24 +828,49 @@ def _add_pair_votes(accumulator: Dict[Tuple[int, str], Dict[str, Any]],
                     interaction: Interaction, pair_idx: int,
                     include_water: bool, n_frames: int) -> None:
     """把一对基团的活跃帧、伙伴、类型与距离投票累加进它涉及的每个残基。"""
-    keys = _pair_residues(interaction.groups[pair_idx], include_water)
+    groups = _pair_groups(interaction.groups[pair_idx], include_water)
     existence = _pad_frames(np.asarray(interaction.existence[pair_idx]), n_frames)
     distances = _pair_distances(interaction, pair_idx, n_frames)
-    for key in dict.fromkeys(keys):
-        _vote_residue(accumulator.setdefault(key, _residue_accumulator()),
-                      key, keys, interaction.interaction_type,
+    for key in dict.fromkeys(_group_key(group) for group in groups):
+        record = accumulator.setdefault(key, _residue_accumulator())
+        _vote_residue(record, key, groups, interaction.interaction_type,
                       existence, distances)
 
 
 def _vote_residue(record: Dict[str, Any], key: Tuple[int, str],
-                  keys: List[Tuple[int, str]], type_name: str,
+                  groups: Sequence[Group], type_name: str,
                   existence: np.ndarray, distances: np.ndarray) -> None:
     """把一次基团对命中并入单残基累计容器（帧取并集，不求和）。"""
     record["frames"] = _pad_frames(record["frames"], existence.size) | existence
     record["n_pairs"] += 1
-    record["partners"].update(other for other in keys if other != key)
-    typed = record["types"].get(type_name)
-    record["types"][type_name] = _pad_frames(typed, existence.size) | existence
+    record["partners"].update(_group_key(group) for group in groups
+                              if _group_key(group) != key)
+    _vote_group_meta(record, key, groups)
+    _vote_type(record, type_name, existence)
+    _vote_distance(record, existence, distances)
+
+
+def _vote_group_meta(record: Dict[str, Any], key: Tuple[int, str],
+                     groups: Sequence[Group]) -> None:
+    """记录该残基自身基团的 molecule 与 group_type。"""
+    for group in groups:
+        if _group_key(group) == key:
+            record["molecules"].add(str(group.molecule))
+            record["group_types"].add(str(group.group_type))
+
+
+def _vote_type(record: Dict[str, Any], type_name: str,
+               existence: np.ndarray) -> None:
+    """记录一次 interaction_type 命中（帧并集与对数）。"""
+    entry = record["types"].get(type_name, {"frames": None, "pairs": 0})
+    record["types"][type_name] = {
+        "frames": _pad_frames(entry["frames"], existence.size) | existence,
+        "pairs": entry["pairs"] + 1}
+
+
+def _vote_distance(record: Dict[str, Any], existence: np.ndarray,
+                   distances: np.ndarray) -> None:
+    """累加活跃帧上的距离取值与有效值个数。"""
     active = distances[existence]
     record["dist_sum"] += float(np.nansum(active))
     record["dist_count"] += int(np.isfinite(active).sum())
@@ -849,22 +881,38 @@ def _finalize_hotspot(key: Tuple[int, str], record: Dict[str, Any],
     """单个残基的对外输出行。"""
     residue_id, residue_name = key
     frames_active = int(record["frames"].sum())
-    types = [_hotspot_type_entry(name, mask, n_frames)
-             for name, mask in sorted(record["types"].items())]
+    types = [_hotspot_type_entry(name, entry, n_frames)
+             for name, entry in sorted(record["types"].items())]
     return {"residue_id": residue_id, "residue_name": residue_name,
             "label": f"{residue_name}{residue_id}",
+            "molecule": min(record["molecules"]) if record["molecules"] else "",
+            "group_types": sorted(record["group_types"]),
             "occupancy": _hotspot_ratio(frames_active, n_frames),
             "frames_active": frames_active, "n_pairs": record["n_pairs"],
             "n_partners": len(record["partners"]), "n_types": len(types),
-            "types": types, "avg_distance": _hotspot_distance(record)}
+            "types": types, "dominant_type": _dominant_type(types),
+            "avg_distance": _hotspot_distance(record)}
 
 
-def _hotspot_type_entry(type_name: str, mask: np.ndarray,
+def _hotspot_type_entry(type_name: str, entry: Dict[str, Any],
                         n_frames: int) -> Dict[str, Any]:
     """单个 interaction_type 的明细行。"""
-    frames = int(mask.sum())
+    frames = int(entry["frames"].sum())
     return {"type": type_name, "frames": frames,
-            "occupancy": _hotspot_ratio(frames, n_frames)}
+            "occupancy": _hotspot_ratio(frames, n_frames),
+            "pairs": entry["pairs"]}
+
+
+def _dominant_type(types: Sequence[Dict[str, Any]]) -> Optional[str]:
+    """主导类型：按 (frames, pairs, type) 升序排序后的最后一条（无类型返回 None）。"""
+    if not types:
+        return None
+    return sorted(types, key=_dominant_key)[-1]["type"]
+
+
+def _dominant_key(entry: Dict[str, Any]) -> Tuple[int, int, str]:
+    """主导类型排序键：帧并集、对数、类型名。"""
+    return entry["frames"], entry["pairs"], entry["type"]
 
 
 def _hotspot_ratio(count: int, n_frames: int) -> float:
@@ -891,3 +939,53 @@ def _hotspot_sort_key(row: Dict[str, Any]) -> Tuple[float, int, int, str]:
     """排序键：occupancy 降序、n_pairs 降序、residue_id 升序、residue_name 升序。"""
     return (-row["occupancy"], -row["n_pairs"], row["residue_id"],
             row["residue_name"])
+
+
+def hotspot_segments(rows: Sequence[Dict[str, Any]],
+                     exclude_unused: bool = True) -> List[Dict[str, Any]]:
+    """把热点行按 h5 molecule 分组为图表分段（残基分布柱状图的数据）。
+
+    exclude_unused=True 时丢弃 occupancy <= 0 的行；group_type 含 metal 但
+    types 里没有 metal_coordination 的离子行始终丢弃。
+    段内按 residue_id 升序；段间按段内最小 residue_id 升序（并列按 molecule 升序）。
+    """
+    kept = [row for row in rows if _segment_keep(row, exclude_unused)]
+    segments = [_segment(molecule, group)
+                for molecule, group in _molecule_groups(kept)]
+    return sorted(segments, key=_segment_sort_key)
+
+
+def _molecule_groups(rows: Sequence[Dict[str, Any]]
+                     ) -> List[Tuple[str, List[Dict[str, Any]]]]:
+    """按 molecule 聚合残基行（保持首次出现顺序）。"""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["molecule"], []).append(row)
+    return list(grouped.items())
+
+
+def _segment_keep(row: Dict[str, Any], exclude_unused: bool) -> bool:
+    """该残基行是否进入分段（零占用与未参与金属配位的离子被丢弃）。"""
+    if exclude_unused and row["occupancy"] <= 0:
+        return False
+    return not _unused_ion(row)
+
+
+def _unused_ion(row: Dict[str, Any]) -> bool:
+    """金属基团但未参与 metal_coordination 的残基行。"""
+    if METAL_GROUP_TYPE not in row["group_types"]:
+        return False
+    return METAL_COORDINATION_TYPE not in {entry["type"] for entry in row["types"]}
+
+
+def _segment(molecule: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """一个 molecule 段：段内按 residue_id 升序，附残基数与最大占有率。"""
+    residues = sorted(rows, key=lambda row: row["residue_id"])
+    return {"molecule": molecule, "n_residues": len(residues),
+            "max_occupancy": max(row["occupancy"] for row in residues),
+            "residues": residues}
+
+
+def _segment_sort_key(segment: Dict[str, Any]) -> Tuple[int, str]:
+    """段排序键：段内最小 residue_id 升序、molecule 升序。"""
+    return segment["residues"][0]["residue_id"], segment["molecule"]

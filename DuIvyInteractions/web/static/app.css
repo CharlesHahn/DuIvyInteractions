@@ -1685,3 +1685,25 @@ tr.clickable { cursor: pointer; }
 /* 热点页主表：占满可用高度并始终可滚（与其它长表一致的观感） */
 .hotspots-scroll { max-height: calc(100vh - 240px); overflow-y: auto; }
 .hotspots-scroll > table { margin: 0; }
+
+/* 热点残基分布图：按 molecule 分段的残基占用度柱状图 */
+.residue-chart { margin: 0 0 14px; }
+.residue-chart-head { display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; flex-wrap: wrap; font-size: 12px; margin-bottom: 6px; }
+.residue-chart-legend { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.residue-legend-item { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.residue-legend-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+/* 只有一列 Y 轴（无纵向标题），覆盖 .bars-plot 的三列网格 */
+.residue-plot { grid-template-columns: 42px minmax(0, 1fr); }
+.residue-plot .residue-yaxis { align-self: start; height: 96px; }
+.residue-track { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+.residue-seg { min-width: 0; display: flex; flex-direction: column; }
+/* .bars.big 的 64px 让位于 96px 柱区（标签行另计） */
+.bars.residue-bars { height: 96px; gap: 1px; }
+.residue-bars span { flex: 1 1 0; min-width: 1px; max-width: none; border-radius: 1px 1px 0 0; }
+.residue-seg-label { margin-top: 4px; font-size: 10px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+
+/* 段清单：不依赖柱宽的段名与残基数（极窄段也能读出） */
+.residue-chart-segments { margin: 6px 0 0; font-size: 11px; display: flex; flex-wrap: wrap; gap: 8px; }
+.residue-seg-chip { white-space: nowrap; }

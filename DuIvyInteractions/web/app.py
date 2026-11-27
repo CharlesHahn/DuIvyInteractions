@@ -28,7 +28,8 @@ from ..core.datas import Interaction
 from ..io.h5 import RunMeta, RunRecord, load_run_meta
 from ..visualizers import (
     add_recent, aggregate_table, cell_values, export_table, fig_pair,
-    frame_activity, frame_view, get_exporter, interaction_meta, load_recent,
+    frame_activity, frame_view, get_exporter, hotspot_segments,
+    interaction_meta, load_recent,
     matrix_view, metric_stats, overview, pair_drilldown, pair_frames,
     pair_summary, pair_types, parse_datasource, residue_hotspots,
     string_stats, type_summary,
@@ -1221,6 +1222,7 @@ def _type_hotspot_context(state: Dict[str, Any], name: str, h5_path: str,
     """类型页热点面板上下文（该类型的全部残基，按 occupancy 降序）。"""
     rows = residue_hotspots([(name, h5_path, interaction)], type_filter=name)
     return {"hotspots_top": rows,
+            "hotspot_segments": hotspot_segments(rows),
             "hotspot_ds": _dataset_of(state, h5_path)}
 
 
@@ -1255,6 +1257,7 @@ def _hotspot_context(state: Dict[str, Any], source: Dict[str, Any],
     return {"title": "hot spots",
             "dataset": {"path": source["path"], "name": source["name"]},
             "type": type_name, "rows": rows, "total": len(rows),
+            "segments": hotspot_segments(rows),
             "include_water": include_water, "sort_by": field,
             "sort_dir": direction, "search": search,
             **_nav(state, type_name)}
