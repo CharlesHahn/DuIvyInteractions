@@ -20,6 +20,8 @@ from DuIvyInteractions.visualizers import (
 
 FRAMES = 5
 H5_DATA_DIR = Path(__file__).parent.parent / "interaction_h5data"
+LOAD_JS = (Path(__file__).resolve().parents[2]
+           / "DuIvyInteractions" / "web" / "static" / "load.js")
 
 
 @pytest.fixture(autouse=True)
@@ -503,12 +505,19 @@ class TestRoutes:
     def test_index_has_single_open_control(self, client):
         html = client.get("/").text
         assert html.count('class="source-form') == 1
-        assert 'name="path"' in html and "browseBtn" in html
+        assert 'name="path"' in html and 'id="loadPath"' in html
+        assert 'id="loadModal"' in html and 'id="loadBrowse"' in html
+        from fastapi.testclient import TestClient
+        from DuIvyInteractions.web.app import create_app
+        server = TestClient(create_app(browse_mode="server"))
+        assert 'id="browseBtn"' in server.get("/").text
 
     def test_index_wires_browse_control(self, client):
         html = client.get("/").text
-        assert "fetch('/api/pick'" in html
-        assert "browseBtn" in html
+        assert "/static/load.js" in html
+        source = LOAD_JS.read_text(encoding="utf-8")
+        assert "fetch('/api/pick'" in source
+        assert "loadBrowse" in source
 
     def test_type_page_links_back_to_source(self, client):
         html = client.get("/type/hydrogen_bond").text

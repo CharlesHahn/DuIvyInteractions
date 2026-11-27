@@ -13,7 +13,6 @@ STATIC_DIR = WEB_DIR / "static"
 RUN_JS = STATIC_DIR / "run.js"
 FILEPICK_JS = STATIC_DIR / "filepick.js"
 APP_CSS = STATIC_DIR / "app.css"
-INDEX_HTML = TEMPLATE_DIR / "index.html"
 
 INTERACTIONS = ["halogen_bond", "hydrogen_bond", "hydrophobic",
                 "metal_coordination", "pi_cation", "pi_stacking",
@@ -335,7 +334,8 @@ class TestStaticFrontend:
         assert css.count("{") == css.count("}")
 
     def test_index_has_run_entry(self):
-        html = INDEX_HTML.read_text(encoding="utf-8")
+        """run 入口已移到侧栏（base.html），index 主区不再承载入口按钮。"""
+        html = (TEMPLATE_DIR / "base.html").read_text(encoding="utf-8")
         assert 'href="/run"' in html
-        assert "Run job" in html
+        assert "+ run" in html
         assert "New calculation" not in html

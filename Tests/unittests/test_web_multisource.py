@@ -293,8 +293,11 @@ class TestRemoveClear:
         assert state["sources"] == [] and state["items"] == []
         html = client.get("/").text
         assert 'class="card"' not in html
-        assert html.count('class="start-choice"') == 2
-        assert "Load results" in html and "Run job" in html
+        main = html.split('<main class="content">', 1)[1].split("</main>", 1)[0]
+        assert 'class="empty-brand"' in main
+        aside = html.split('<aside class="sidebar">', 1)[1].split("</aside>", 1)[0]
+        assert "+ load" in aside and "+ run" in aside
+        assert 'id="loadModal"' in html
 
     def test_clear_all_batches(self, loaded):
         client, state = loaded

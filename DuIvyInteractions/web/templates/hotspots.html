@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block main %}
+{% if dataset %}
+<div class="breadcrumb hotspots-crumb">
+  <span><a href="/">workspace</a> / <span title="{{ dataset.path }}">{{ dataset.name }}</span> / hot spots</span>
+  <a class="btn btn-sm" href="/download/residues.csv?ds={{ dataset.path | urlencode }}{% if type %}&amp;type={{ type | urlencode }}{% endif %}{% if search %}&amp;search={{ search | urlencode }}{% endif %}&amp;sort_by={{ sort_by }}&amp;sort_dir={{ sort_dir }}&amp;include_water={{ 1 if include_water else 0 }}">CSV</a>
+</div>
+
+<p class="hotspots-summary">{{ total }} residues · {{ type or "all interactions" }} · water: {{ "included" if include_water else "excluded" }}</p>
+
+<form class="toolbar hotspots-form" method="get" action="/residues">
+  <input type="hidden" name="ds" value="{{ dataset.path }}">
+  <input type="search" name="search" value="{{ search }}" placeholder="search residue…">
+  <select name="sort_by">
+    <option value="occupancy"{% if sort_by == "occupancy" %} selected{% endif %}>sort: occupancy</option>
+    <option value="pairs"{% if sort_by == "pairs" %} selected{% endif %}>sort: pairs</option>
+    <option value="partners"{% if sort_by == "partners" %} selected{% endif %}>sort: partners</option>
+    <option value="residue"{% if sort_by == "residue" %} selected{% endif %}>sort: residue</option>
+  </select>
+  <select name="sort_dir">
+    <option value="desc"{% if sort_dir == "desc" %} selected{% endif %}>desc</option>
+    <option value="asc"{% if sort_dir == "asc" %} selected{% endif %}>asc</option>
+  </select>
+  <label class="field"><input type="checkbox" name="include_water" value="1"{% if include_water %} checked{% endif %}> include water</label>
+  <button class="btn btn-sm">apply</button>
+</form>
+
+{% include "_residue_chart.html" %}
+
+{% if rows %}
+<div class="table-wrap hotspots-scroll">
+  <table class="hotspots-table">
+    <thead><tr><th>residue</th><th>occupancy</th><th>frames</th><th>pairs</th><th>partners</th><th>types</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+    <tr>
+      <td class="mono">{{ row.label }}</td>
+      <td>{{ "%.1f" | format(row.occupancy * 100) }}%</td>
+      <td>{{ row.frames_active }}</td>
+      <td>{{ row.n_pairs }}</td>
+      <td>{{ row.n_partners }}</td>
+      <td class="hotspots-types">
+        {% for t in row.types %}<span class="chip static">{{ t.type }} {{ "%.0f" | format(t.occupancy * 100) }}%</span>{% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted hotspots-empty">no residues match the current filter</p>
+{% endif %}
+{% else %}
+<div class="breadcrumb"><a href="/">workspace</a> / hot spots</div>
+<div class="panel">
+  <h2>hot spots · pick a dataset</h2>
+  {% if batches %}
+  <ul class="hotspots-datasets">
+    {% for b in batches %}
+    <li><a class="hotspots-dataset" href="/residues?ds={{ b.path | urlencode }}">{{ b.name }}</a><span class="muted mono" title="{{ b.path }}">{{ b.path }}</span><span class="muted">{{ b.n_types }} types</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">no dataset loaded — open a run output first.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

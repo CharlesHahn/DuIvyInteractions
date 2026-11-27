@@ -1,0 +1,34 @@
+{# 热点残基分布柱状图：按 h5 molecule 分段的残基占用度柱；调用方提供 segments。 #}
+{% if segments %}
+{% set chart_types = [] %}
+{% for seg in segments %}
+{% for r in seg.residues %}
+{% if r.dominant_type and r.dominant_type not in chart_types %}{% set _ = chart_types.append(r.dominant_type) %}{% endif %}
+{% endfor %}
+{% endfor %}
+<div class="residue-chart">
+  <div class="residue-chart-head">
+    <span class="muted">occupancy per residue · colour = dominant interaction type</span>
+    <span class="residue-chart-legend">
+      {% for t in chart_types | sort %}<span class="residue-legend-item"><span class="residue-legend-dot" style="background: var(--c-{{ t }})"></span>{{ t }}</span>{% endfor %}
+    </span>
+  </div>
+  <div class="bars-plot residue-plot">
+    <div class="residue-yaxis bars-yaxis" aria-hidden="true"><span>100%</span><span>50%</span><span>0</span></div>
+    <div class="residue-track">
+      {% for seg in segments %}
+      <div class="residue-seg" style="flex-grow: {{ seg.n_residues }}; flex-basis: 0">
+        <div class="bars big residue-bars">
+          {% for r in seg.residues %}<span style="height: {{ (r.occupancy * 100) | round(1) }}%; background: {% if r.dominant_type %}var(--c-{{ r.dominant_type }}){% else %}var(--muted){% endif %}"
+              title="{{ r.label }} · {{ seg.molecule }} · {{ '%.1f' | format(r.occupancy * 100) }}% · {{ r.n_pairs }} pair{{ "" if r.n_pairs == 1 else "s" }} · {{ r.n_types }} type{{ "" if r.n_types == 1 else "s" }}"></span>{% endfor %}
+        </div>
+        <div class="residue-seg-label" title="{{ seg.molecule }}">{{ seg.molecule }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <p class="residue-chart-segments muted">
+    {% for seg in segments %}<span class="residue-seg-chip">{{ seg.molecule }} · {{ seg.n_residues }}</span>{% endfor %}
+  </p>
+</div>
+{% endif %}

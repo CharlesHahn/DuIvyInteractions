@@ -77,7 +77,8 @@ def _aside(html: str) -> str:
 def _side_batch(aside: str, name: str) -> str:
     """侧栏中名为 name 的数据集块（split 边界恰为下一块起点）。"""
     for chunk in aside.split('<div class="side-batch">')[1:]:
-        head = '<span class="side-batch-name" title="/data/%s">%s</span>' % (name, name)
+        head = '<a class="side-batch-name" href="/" title="/data/%s">%s</a>' % (
+            name, name)
         if head in chunk:
             return chunk
     raise AssertionError("missing sidebar batch: %s" % name)
@@ -168,7 +169,7 @@ class TestSidebarTree:
         assert html.count('class="side-batch"') == 3
         for batch in batches:
             assert 'name="path" value="%s"' % batch["path"] in html
-            assert '<span class="side-batch-name" title="%s">%s</span>' % (
+            assert '<a class="side-batch-name" href="/" title="%s">%s</a>' % (
                 batch["path"], batch["name"]) in html
             assert '<span class="side-batch-count">%d</span>' % \
                 batch["n_types"] in html
@@ -201,12 +202,16 @@ class TestSidebarTree:
         assert html.count('class="side-batch"') == 1
         assert 'action="/select/clear"' in html
 
-    def test_empty_or_missing_batches_hides_sidebar(self, env):
-        """无批次（空列表 / 不传）时不渲染侧栏，也不再有单 chip 回退。"""
+    def test_empty_or_missing_batches_keeps_sidebar_actions(self, env):
+        """无批次（空列表 / 不传）时侧栏常驻，只剩 + load / + run 两个入口。"""
         empty = _render(env, batches=[])
         missing = _render(env)
         for html in (empty, missing):
-            assert 'class="sidebar"' not in html
-            assert "side-batch" not in html
+            aside = _aside(html)
+            assert 'class="sidebar"' in html
+            assert "+ load" in aside and "+ run" in aside
+            assert "data-load-open" in aside
+            assert 'class="side-batch"' not in aside
+            assert 'action="/select/clear"' not in aside
             assert "ds-chip" not in html
             assert "ds-chips" not in html

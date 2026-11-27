@@ -266,7 +266,8 @@ class TestStructureCsp:
                           "img-src 'self' data:"):
             assert directive in csp, directive
 
-    def test_curves_view_keeps_strict_connect_src(self, client):
+    def test_merged_pair_page_allows_data_wasm(self, client):
+        """合并后的单对页恒含 Mol*：connect-src 必须放行 data:（WASM data: URL）"""
         csp = client.get(PAIR_URL).headers["content-security-policy"]
-        assert "connect-src 'self'" in csp
-        assert "connect-src 'self' data:" not in csp
+        assert "connect-src 'self' data:" in csp
+        assert "connect-src *" not in csp

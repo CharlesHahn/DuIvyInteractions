@@ -959,10 +959,10 @@ class TestStructurePage:
         csp = client.get("/").headers["content-security-policy"]
         assert "'unsafe-eval'" not in csp
 
-    def test_pair_page_links_to_3d_view(self, client):
+    def test_pair_page_embeds_3d_viewer(self, client):
         html = client.get("/pair/hydrogen_bond/0").text
-        assert 'href="/pair/hydrogen_bond/0?view=3d' in html
-        assert ">3D</a>" in html
+        assert 'id="molstarViewer"' in html
+        assert "/static/structure.js" in html
 
 
 # ============================================================

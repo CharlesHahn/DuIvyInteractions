@@ -135,6 +135,31 @@
 </div>
 
 <div class="panel">
+  <div class="section-head compact"><h2>top residues · this type</h2></div>
+  {% if hotspots_top %}
+  {% with segments = hotspot_segments %}{% include "_residue_chart.html" %}{% endwith %}
+  <div class="table-wrap short">
+    <table class="table hotspots-table">
+      <thead><tr><th>residue</th><th>occupancy</th><th>pairs</th><th>partners</th><th>avg dist</th></tr></thead>
+      <tbody>
+      {% for row in hotspots_top %}
+      <tr>
+        <td class="mono">{{ row.label }}</td>
+        <td>{{ "%.1f" | format(row.occupancy * 100) }}%</td>
+        <td>{{ row.n_pairs }}</td>
+        <td>{{ row.n_partners }}</td>
+        <td>{{ "%.3f" | format(row.avg_distance) if row.avg_distance is not none else "—" }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">no residues for this type</p>
+  {% endif %}
+</div>
+
+<div class="panel">
   <h2>active pairs per frame{% if activity | length < n_frames %} <span class="muted">· {{ activity | length }} buckets, max per bucket</span>{% endif %}</h2>
   {% if activity %}
   {% set act_top = activity | max %}

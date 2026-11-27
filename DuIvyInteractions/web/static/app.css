@@ -1387,63 +1387,7 @@ tr.clickable { cursor: pointer; }
   text-shadow: 0 1px 2px rgba(20, 26, 38, .45), 0 0 1px rgba(20, 26, 38, .35);
 }
 
-/* ---------- 极简外壳（P0）：起始屏 / 数据集分块 / 侧栏数据集树 ---------- */
-
-.start-screen {
-  max-width: 720px;
-  margin: 72px auto 0;
-}
-.start-choices {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
-.start-choice {
-  display: grid;
-  place-items: center;
-  min-height: 120px;
-  padding: 20px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
-  box-shadow: var(--shadow-sm);
-  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
-}
-.start-choice:hover {
-  text-decoration: none;
-  border-color: var(--accent);
-  box-shadow: var(--shadow);
-  transform: translateY(-1px);
-}
-.start-recent {
-  margin: 18px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-.start-recent a {
-  margin-left: 8px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-}
-
-.add-panel { margin-bottom: 24px; }
-.add-panel > summary {
-  cursor: pointer;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-2);
-}
-.add-panel[open] > summary { margin-bottom: 14px; }
-.add-panel .source-form {
-  margin: 0;
-  max-width: none;
-  justify-content: flex-start;
-}
-.add-panel .hint { margin-top: 10px; }
+/* ---------- 极简外壳（P0）：数据集分块 / 侧栏数据集树 ---------- */
 
 .ds-block { margin-bottom: 28px; }
 .ds-block-head {
@@ -1469,7 +1413,6 @@ tr.clickable { cursor: pointer; }
   font-family: var(--mono);
   font-size: 11.5px;
 }
-.ds-add { margin: 0 0 8px; }
 
 .side-actions {
   display: grid;
@@ -1540,8 +1483,6 @@ tr.clickable { cursor: pointer; }
 .side-clear button:hover { background: var(--danger-soft); color: var(--danger); }
 
 @media (max-width: 900px) {
-  .start-screen { margin-top: 40px; }
-  .start-choices { grid-template-columns: minmax(0, 1fr); }
   .ds-block-path { display: none; }
 }
 
@@ -1636,3 +1577,269 @@ tr.clickable { cursor: pointer; }
 .rows-more { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .rows-status { font-size: 12px; }
 .rows-status.error { color: var(--danger); }
+
+/* ---------- 残基热点（hot spots） ---------- */
+
+.hotspots-crumb {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.hotspots-summary { margin: 0 0 12px; font-size: 13px; color: var(--text-2); }
+.hotspots-form { margin: 0 0 14px; }
+.hotspots-form .field { gap: 4px; }
+.hotspots-table tbody td { text-align: right; }
+.hotspots-table tbody td:first-child,
+.hotspots-table tbody td.hotspots-types { text-align: left; }
+.hotspots-table td.hotspots-types { white-space: normal; }
+.hotspots-table .chip {
+  margin: 0 4px 2px 0;
+  padding: 3px 9px;
+  font-size: 11px;
+}
+.hotspots-empty { margin: 0; }
+.hotspots-datasets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.hotspots-datasets li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.hotspots-dataset { font-weight: 600; }
+.hotspots-datasets .mono {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 热点页主表：占满可用高度并始终可滚（与其它长表一致的观感） */
+.hotspots-scroll { max-height: calc(100vh - 240px); overflow-y: auto; }
+.hotspots-scroll > table { margin: 0; }
+
+/* 热点残基分布图：按 molecule 分段的残基占用度柱状图 */
+.residue-chart { margin: 0 0 14px; }
+.residue-chart-head { display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; flex-wrap: wrap; font-size: 12px; margin-bottom: 6px; }
+.residue-chart-legend { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.residue-legend-item { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.residue-legend-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+/* 只有一列 Y 轴（无纵向标题），覆盖 .bars-plot 的三列网格 */
+.residue-plot { grid-template-columns: 42px minmax(0, 1fr); }
+.residue-plot .residue-yaxis { align-self: start; height: 96px; }
+.residue-track { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+.residue-seg { min-width: 0; display: flex; flex-direction: column; }
+/* .bars.big 的 64px 让位于 96px 柱区（标签行另计） */
+.bars.residue-bars { height: 96px; gap: 1px; }
+.residue-bars span { flex: 1 1 0; min-width: 1px; max-width: none; border-radius: 1px 1px 0 0; }
+.residue-seg-label { margin-top: 4px; font-size: 10px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+
+/* 段清单：不依赖柱宽的段名与残基数（极窄段也能读出） */
+.residue-chart-segments { margin: 6px 0 0; font-size: 11px; display: flex; flex-wrap: wrap; gap: 8px; }
+.residue-seg-chip { white-space: nowrap; }
+
+/* 侧栏数据集名可点击回主页：去掉链接下划线，hover 提亮 */
+a.side-batch-name { text-decoration: none; }
+a.side-batch-name:hover { color: var(--text); }
+
+/* ---------- 全局 load 弹窗（视觉与 browse 弹窗一致；z-index 低于 browse） ---------- */
+
+.load-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .42);
+}
+
+.load-panel {
+  width: 560px;
+  max-width: 100%;
+  padding: 16px 18px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+.load-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.load-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.load-modal .source-form { display: block; max-width: none; margin: 0; }
+
+.load-row { display: flex; align-items: center; gap: 8px; }
+.load-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: 12.5px var(--mono);
+}
+.load-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.load-row .btn { flex: none; }
+.load-modal .hint { margin-top: 12px; }
+
+@media (max-width: 900px) {
+  .load-modal { padding: 10px; }
+  .load-row { flex-wrap: wrap; }
+}
+
+/* ---------- 空主页品牌空状态（无数据时的初始屏，纯展示无入口） ---------- */
+
+.empty-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: calc(100vh - 230px);
+  padding: 24px 0 48px;
+  text-align: center;
+}
+.empty-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #38A7D0, #F67088);
+  color: #fff;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: .5px;
+  box-shadow: 0 10px 26px rgba(56, 167, 208, .28);
+}
+.empty-brand h1 { margin: 6px 0 0; font-size: 22px; font-weight: 650; }
+.empty-brand-tagline { margin: 0; color: var(--text-2); font-size: 13px; }
+.empty-brand-hint { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; }
+.kbd {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* ---------- load 弹窗 recent：竖排单行省略（绝不横向溢出） ---------- */
+
+.load-panel { min-width: 0; overflow: hidden; }
+.load-recent { margin: 12px 0 0; min-width: 0; }
+.load-recent-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.load-recent ul {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.load-recent li { min-width: 0; }
+.load-recent a {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.load-recent a:hover { color: var(--accent); }
+
+/* ---------- load 弹窗输入行：Enter 即提交（无提交按钮） ---------- */
+
+.load-row input { flex: 1 1 auto; min-width: 0; }
+.load-row #loadBrowse { flex: none; }
+
+/* ---------- 提示栏关闭按钮 ---------- */
+
+.banner { position: relative; padding-right: 32px; }
+.banner-close {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: .65;
+}
+.banner-close:hover { opacity: 1; }
+
+/* recent 路径中间省略由 load.js 处理，这里只保证单行与不溢出 */
+.load-recent a { white-space: nowrap; overflow: hidden; }
+
+/* ---------- 单对页合并布局：3D 在首 + 折叠来源面板 ---------- */
+
+details.structure-source > summary {
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+details.structure-source[open] > summary {
+  margin-bottom: 12px;
+}
+
+.structure-viewer-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.structure-viewer-head h2 { margin: 0; }
+.structure-atoms { font-size: 12px; }
+
+/* structure source：输入框与 browse 按钮同高，同一行上下对齐 */
+.structure-form input,
+.structure-form .btn { height: 34px; box-sizing: border-box; }
+.structure-form input { padding: 0 10px; }
+.structure-form .btn { padding: 0 12px; }

@@ -6,7 +6,7 @@ from .data import (
     pair_summary, pair_types, load_recent, add_recent, get_exporter,
     runs_from_mask, numeric_metrics, matrix_view, cell_values, frame_view,
     interaction_meta, metric_stats, string_stats, pair_frames, frame_activity,
-    type_summary,
+    type_summary, residue_hotspots, hotspot_segments,
 )
 from .figures import fig_pair
 
@@ -16,5 +16,6 @@ __all__ = [
     "add_recent", "get_exporter",
     "runs_from_mask", "numeric_metrics", "matrix_view", "cell_values", "frame_view",
     "interaction_meta", "metric_stats", "string_stats", "pair_frames",
-    "frame_activity", "type_summary", "fig_pair",
+    "frame_activity", "type_summary", "fig_pair", "residue_hotspots",
+    "hotspot_segments",
 ]

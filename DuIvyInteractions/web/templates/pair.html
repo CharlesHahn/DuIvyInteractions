@@ -5,21 +5,15 @@
 <div class="section-head">
   <div>
     <h1 class="pair-title">{{ pair_label }}</h1>
-    <p class="muted">pair {{ idx + 1 }} / {{ n_pairs }} · {{ n_frames }} frames{% if view == "3d" %} · {{ n_atoms }} atoms{% if not has_structure %} · structure not selected{% endif %}{% endif %}{% if flags %} · flags: {{ flags | join(", ") }}{% endif %}</p>
+    <p class="muted">pair {{ idx + 1 }} / {{ n_pairs }} · {{ n_frames }} frames{% if flags %} · flags: {{ flags | join(", ") }}{% endif %}</p>
   </div>
   <div class="actions">
-    <div class="view-switch">
-      <a class="btn btn-sm{% if view != "3d" %} btn-active{% endif %}"
-         href="/pair/{{ type | urlencode }}/{{ idx }}?frame={{ frame }}">Curves</a>
-      <a class="btn btn-sm{% if view == "3d" %} btn-active{% endif %}"
-         href="/pair/{{ type | urlencode }}/{{ idx }}?view=3d&amp;frame={{ frame }}">3D</a>
-    </div>
-    {% if idx > 0 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx - 1 }}?view={{ view }}&amp;frame={{ frame }}">‹ previous pair</a>{% endif %}
-    {% if idx < n_pairs - 1 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx + 1 }}?view={{ view }}&amp;frame={{ frame }}">next pair ›</a>{% endif %}
+    {% if idx > 0 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx - 1 }}?frame={{ frame }}">‹ previous pair</a>{% endif %}
+    {% if idx < n_pairs - 1 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx + 1 }}?frame={{ frame }}">next pair ›</a>{% endif %}
   </div>
 </div>
 
-{% if view == "3d" %}{% include "_structure_view.html" %}{% endif %}
+{% include "_structure_view.html" %}
 
 <div class="panel">
   <h2>summary</h2>
@@ -57,13 +51,12 @@
   </table>
 </div>
 
-{% if view != "3d" %}
 <div class="panel">
   <div id="pairChart" class="chart"></div>
   {% if downsampled %}<p class="hint">curves are bucket-aggregated (mean per bucket); exact per-frame values are in the table below.</p>{% endif %}
 </div>
 
-<div class="panel">
+<div class="panel frames-panel" id="framesPanel">
   <div class="section-head compact">
     <h2>frames</h2>
     <div class="actions">
@@ -77,20 +70,16 @@
 
 <script id="pairFigure" type="application/json">{{ figure | tojson }}</script>
 <script id="pairConfig" type="application/json">{{ {"type": type, "idx": idx} | tojson }}</script>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
-{% if view == "3d" %}
-{# Mol* bundle 只在 3D 视图引入：曲线视图不加载 ~5MB 资源 #}
+{# 单页合并：Mol* viewer 与 Plotly 曲线同页，两套资源都需加载 #}
 <link rel="stylesheet" href="/static/vendor/molstar.css">
 <script src="/static/vendor/molstar.js"></script>
 <script src="/static/structure.js"></script>
 {% if (browse_mode | default('picker')) == "server" %}
 <script src="/static/filepick.js"></script>
 {% endif %}
-{% else %}
 <script src="/static/plotly-basic.min.js"></script>
 <script src="/static/pair.js"></script>
-{% endif %}
 {% endblock %}
