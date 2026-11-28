@@ -1,4 +1,4 @@
-/* 单对页：Plotly 对齐曲线 + 逐帧明细表分页 */
+/* 单对页：Plotly 对齐曲线 + 逐帧明细表分页 + 页内切 pair（不整页跳转） */
 (function () {
   "use strict";
   var figEl = document.getElementById("pairFigure");
@@ -9,9 +9,18 @@
   var chart = document.getElementById("pairChart");
   var VALUE_DIGITS = 3;
   var TIME_DIGITS = 2;
+  var PLOT_CONFIG = {
+    responsive: true,
+    displaylogo: false,
+    scrollZoom: false,
+    modeBarButtonsToRemove: ["select2d", "lasso2d"]
+  };
+  var frames = null;      /* {el, state}：帧表分页上下文（切 pair 后重置） */
+  var switching = false;  /* 防重复点击 */
 
   renderChart();
   renderFrames();
+  bindPairNav();
 
   function renderChart() {
     if (typeof Plotly === "undefined") {
@@ -26,12 +35,8 @@
   }
 
   function createChart() {
-    var promise = Plotly.newPlot(chart, figure.data, figure.layout, {
-      responsive: true,
-      displaylogo: false,
-      scrollZoom: false,
-      modeBarButtonsToRemove: ["select2d", "lasso2d"]
-    });
+    var promise = Plotly.newPlot(chart, figure.data, figure.layout,
+      PLOT_CONFIG);
     if (promise && promise.catch) {
       promise.catch(function (error) {
         chart.textContent = "failed to render chart: " + error;
@@ -42,6 +47,7 @@
   function renderFrames() {
     var el = frameElements();
     var state = {start: 0, next: null, pageSize: 1};
+    frames = {el: el, state: state};
     el.prev.addEventListener("click", function () { goPrev(el, state); });
     el.next.addEventListener("click", function () { goNext(el, state); });
     loadFramePage(el, state);
@@ -91,7 +97,7 @@
     el.info.textContent = frameInfoText(data);
     el.prev.disabled = data.start <= 0;
     el.next.disabled = state.next === null;
-    el.table.innerHTML = "";
+    el.table.replaceChildren();
     if (!data.rows.length) {
       el.table.textContent = "no frames";
       return;
@@ -159,5 +165,131 @@
 
   function formatNumber(value, digits) {
     return typeof value === "number" ? value.toFixed(digits) : "—";
+  }
+
+  /* ---------------- 页内切 pair（结构/轨迹常驻，不整页跳转） ---------------- */
+
+  function bindPairNav() {
+    document.addEventListener("click", onPairNavClick);
+  }
+
+  function onPairNavClick(event) {
+    var trigger = event.target && event.target.closest
+      ? event.target.closest("[data-pair-nav]") : null;
+    if (!trigger) return;
+    event.preventDefault();
+    switchPair(cfg.idx + Number(trigger.getAttribute("data-pair-nav")));
+  }
+
+  function panelUrl(idx) {
+    return "/api/pair/" + encodeURIComponent(cfg.type) + "/" + idx +
+      "/panels";
+  }
+
+  function dataUrl(idx) {
+    return "/api/pair/" + encodeURIComponent(cfg.type) + "/" + idx;
+  }
+
+  function switchPair(target) {
+    target = parseInt(target, 10);
+    if (switching || isNaN(target)) return;
+    if (target < 0 || target >= cfg.n_pairs) return;
+    switching = true;
+    Promise.all([
+      fetch(panelUrl(target)).then(readJson),
+      fetch(dataUrl(target)).then(readJson)
+    ]).then(function (results) {
+      applyPanels(results[0]);
+      return applyPairData(results[1], target);
+    }).catch(function (error) {
+      console.warn("[dii] pair switch failed", error);
+      toast("failed to switch pair: " + (error && error.message
+        ? error.message : error));
+    }).then(function () {
+      switching = false;
+    });
+  }
+
+  function applyPanels(panels) {
+    replaceSection("pairHead", panels.head);
+    replaceSection("pairSummary", panels.summary);
+    replaceSection("pairGroups", panels.groups);
+  }
+
+  /* 用 DOMParser 解析出的节点替换容器内容（只操作 DOM 节点） */
+  function replaceSection(elementId, html) {
+    var host = document.getElementById(elementId);
+    if (!host || !html) return;
+    var body = new DOMParser().parseFromString(html, "text/html").body;
+    var nodes = Array.prototype.slice.call(body.childNodes);
+    host.replaceChildren.apply(host, nodes);
+  }
+
+  function applyPairData(payload, target) {
+    cfg.idx = target;
+    if (payload.n_pairs) cfg.n_pairs = payload.n_pairs;
+    if (payload.pair_label) cfg.pair_label = payload.pair_label;
+    if (frames) {
+      frames.state.start = 0;
+      frames.state.next = null;
+      loadFramePage(frames.el, frames.state);
+    }
+    reactChart(payload.figure);
+    syncHistory(target);
+    syncNav();
+    return updateStructure(payload);
+  }
+
+  function reactChart(nextFigure) {
+    if (!nextFigure || typeof Plotly === "undefined") return;
+    try {
+      Plotly.react(chart, nextFigure.data, nextFigure.layout, PLOT_CONFIG);
+    } catch (error) {
+      console.warn("[dii] chart update failed", error);
+    }
+  }
+
+  /* 3D 原地更新：未挂载时跳过（页面其它部分仍已切换） */
+  function updateStructure(payload) {
+    var api = window.DiiStructure;
+    if (!api || typeof api.updatePair !== "function") {
+      console.warn("[dii] DiiStructure is unavailable; 3D keeps the previous pair");
+      return Promise.resolve();
+    }
+    if (typeof api.isMounted === "function" && !api.isMounted()) {
+      console.warn("[dii] DiiStructure is not mounted; 3D keeps the previous pair");
+      return Promise.resolve();
+    }
+    return Promise.resolve(api.updatePair(payload)).catch(function (error) {
+      console.warn("[dii] 3D pair update failed", error);
+    });
+  }
+
+  function syncHistory(target) {
+    if (!window.history || typeof history.replaceState !== "function") return;
+    var url = "/pair/" + encodeURIComponent(cfg.type) + "/" + target;
+    try {
+      history.replaceState(null, "", url);
+    } catch (error) {
+      /* 浏览器限制 replaceState 频率时忽略；页面内数据已更新 */
+    }
+  }
+
+  /* 首/末 pair 的链接服务端不渲染；这里再兜底同步禁用态 */
+  function syncNav() {
+    var links = document.querySelectorAll("[data-pair-nav]");
+    for (var i = 0; i < links.length; i++) {
+      var step = Number(links[i].getAttribute("data-pair-nav"));
+      var target = cfg.idx + step;
+      if (target < 0 || target >= cfg.n_pairs) {
+        links[i].setAttribute("aria-disabled", "true");
+      } else {
+        links[i].removeAttribute("aria-disabled");
+      }
+    }
+  }
+
+  function toast(text) {
+    if (typeof window.showToast === "function") window.showToast(text, true);
   }
 })();

@@ -135,6 +135,7 @@
   var frame = clampFrame(cfg.frame || 0);  /* 后端注入的初始帧（缺省 0） */
   var measurements = [];        /* 当前帧的虚线测量 [{selection, representation}] */
   var residueRefs = [];         /* 当前 pair 的残基棍棒组件 ref（updatePair 整批替换） */
+  var backgroundRefs = [];      /* 卡通/配体/离子背景组件 ref（updatePair 一并重建） */
   var mounted = false;          /* mount 幂等标记 */
   var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
   var measureSeq = 0;
@@ -646,12 +647,19 @@
       });
   }
 
-  /* 记录残基棍棒组件 ref：updatePair 只删这些，保留卡通/配体/离子背景 */
+  /* 记录残基棍棒组件 ref：updatePair 时与背景层一起清掉后重建 */
   function trackResidueRef(tag, result) {
     var component = result ? result.component : null;
     if (!component || String(tag).indexOf(TAG_RESIDUE) !== 0) return;
     var ref = refOf(component.cell);
     if (ref) residueRefs.push(ref);
+  }
+
+  /* 记录卡通 polymer / 配体 ligand / 离子组件 ref（updatePair 重建背景层用） */
+  function trackBackgroundRef(component) {
+    if (!component) return;
+    var ref = refOf(component.cell);
+    if (ref) backgroundRefs.push(ref);
   }
 
   /* tryCreateComponentStatic(parent, keyword, {label}, tags)：第三个参数是
@@ -662,6 +670,7 @@
       builders.tryCreateComponentStatic(structureRef, keyword,
         { label: label })
     ).then(function (component) {
+      trackBackgroundRef(component);
       return addLayerRepresentation(component, params,
         "static-" + keyword + "-repr");
     }).catch(function (error) {
@@ -693,17 +702,23 @@
     };
   }
 
-  /* 主结构按残基分区，不再叠加额外几何：骨架与配体层都排除相互作用残基，
-     相互作用残基本身拆成"其余原子（灰）+ 定义基团原子（组色）"两块互补棍棒。 */
+  /* 主结构按残基分区，不再叠加额外几何：骨架与配体层都排除相互作用残基。
+     整页首屏与 updatePair 共用：背景层（卡通 polymer + 配体 ligand）+ 棍棒层。 */
   function buildLayers() {
-    var residues = data && data.residues ? data.residues : [];
     residueRefs = [];
-    return buildPolymerLayer(residues)
-      .then(function () { return buildLigandLayer(residues); })
+    backgroundRefs = [];
+    return buildBackgroundLayers()
       .then(function () { return buildResidueLayers(); });
   }
 
-  /* 只重建 pair 相关的残基棍棒层（updatePair 不碰骨架/配体/轨迹） */
+  /* 背景层：卡通 polymer + 配体/离子 ligand（排除列表取当前 data.residues） */
+  function buildBackgroundLayers() {
+    var residues = data && data.residues ? data.residues : [];
+    return buildPolymerLayer(residues)
+      .then(function () { return buildLigandLayer(residues); });
+  }
+
+  /* 只重建 pair 相关的残基棍棒层；骨架/配体由 buildBackgroundLayers 单独重建 */
   function buildResidueLayers() {
     var residues = data && data.residues ? data.residues : [];
     var chain = Promise.resolve();
@@ -717,6 +732,7 @@
     return buildScriptComponent(polymerExpression(residues), TAG_POLYMER,
       "polymer").then(function (result) {
       if (result.component) {
+        trackBackgroundRef(result.component);
         return addLayerRepresentation(result.component, cartoonParams(),
           TAG_POLYMER + "-repr");
       }
@@ -806,6 +822,7 @@
     return buildScriptComponent(ligandExpression(residues), TAG_LIGAND,
       "ligand").then(function (result) {
       if (result.component) {
+        trackBackgroundRef(result.component);
         return addLayerRepresentation(result.component, ligandParams(),
           TAG_LIGAND + "-repr");
       }
@@ -818,6 +835,7 @@
     return buildScriptComponent(NON_POLYMER_EXPRESSION, TAG_LIGAND, "ligand")
       .then(function (result) {
         if (result.component) {
+          trackBackgroundRef(result.component);
           return addLayerRepresentation(result.component, ligandParams(),
             TAG_LIGAND + "-repr");
         }
@@ -1170,10 +1188,13 @@
 
   /* ---------------- 原地切 pair（不重载结构/轨迹） ---------------- */
 
-  /* 只删当前 pair 的残基棍棒组件：卡通/配体/离子背景与轨迹常驻 */
+  /* 清掉当前 pair 的全部表示组件（卡通/配体/离子背景 + 残基棍棒）；
+     structure 与 trajectory 常驻，不重新载入 */
   function clearResidueLayers() {
     var stale = residueRefs;
     residueRefs = [];
+    stale.push.apply(stale, backgroundRefs);
+    backgroundRefs = [];
     if (!stale.length || !ready) return Promise.resolve();
     var builder = viewer.plugin.state.data.build();
     for (var i = 0; i < stale.length; i++) builder.delete(stale[i]);
@@ -1190,6 +1211,7 @@
   }
 
   /* 切 pair：只换与 pair 相关的表示/帧数据，structure 与 trajectory 复用。
+     背景层（卡通 polymer / 配体 ligand / 离子）也按新残基集合重建，
      payload = GET /api/pair/{type}/{idx} 的 JSON（groups/existence/...）。 */
   function updatePair(payload) {
     var next = payload || {};
@@ -1208,6 +1230,7 @@
     var target = typeof next.frame === "number" ? next.frame : frame;
     return clearResidueLayers()
       .then(function () { return clearMeasurements(); })
+      .then(function () { return buildBackgroundLayers(); })
       .then(function () { return buildResidueLayers(); })
       .then(function () {
         renderExistence(data.existence, data.pt_types);

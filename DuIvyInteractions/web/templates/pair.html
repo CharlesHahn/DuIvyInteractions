@@ -2,54 +2,13 @@
 {% block main %}
 <div class="breadcrumb"><a href="/">overview</a> / <a href="/type/{{ type | urlencode }}">{{ type }}</a> / <span>pair {{ idx + 1 }}</span></div>
 
-<div class="section-head">
-  <div>
-    <h1 class="pair-title">{{ pair_label }}</h1>
-    <p class="muted">pair {{ idx + 1 }} / {{ n_pairs }} · {{ n_frames }} frames{% if flags %} · flags: {{ flags | join(", ") }}{% endif %}</p>
-  </div>
-  <div class="actions">
-    {% if idx > 0 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx - 1 }}?frame={{ frame }}">‹ previous pair</a>{% endif %}
-    {% if idx < n_pairs - 1 %}<a class="btn btn-sm" href="/pair/{{ type | urlencode }}/{{ idx + 1 }}?frame={{ frame }}">next pair ›</a>{% endif %}
-  </div>
-</div>
+<div id="pairHead">{% include "_pair_head.html" %}</div>
 
 {% include "_structure_view.html" %}
 
-<div class="panel">
-  <h2>summary</h2>
-  <div class="meta-grid">
-    <div><span class="k">occupancy</span><span class="v">{{ "%.1f%%" | format(summary.occupancy * 100) }}</span></div>
-    {% for name, s in summary.metrics.items() %}
-    <div><span class="k">{{ name }}{% if s.unit %} ({{ s.unit }}){% endif %}</span><span class="v">mean {{ "%.3f" | format(s.mean) if s.mean is not none else "—" }} · std {{ "%.3f" | format(s.std) if s.std is not none else "—" }} · n={{ s.count }}</span></div>
-    {% endfor %}
-    {% for name, f in summary.flags.items() %}
-    <div><span class="k">{{ name }}</span><span class="v">{{ f.active }} / {{ f.frames }} frames</span></div>
-    {% endfor %}
-    {% for name, top in summary.string_metrics.items() %}
-    <div><span class="k">{{ name }}</span><span class="v chips left">{% for item in top %}<span class="chip static">{{ item.value }} <span class="muted">×{{ item.count }}</span></span>{% endfor %}</span></div>
-    {% endfor %}
-  </div>
-</div>
+<div id="pairSummary">{% include "_pair_summary.html" %}</div>
 
-<div class="panel">
-  <h2>groups</h2>
-  <table class="meta-table">
-    <thead><tr><th>#</th><th>group_type</th><th>residue</th><th>molecule</th><th>atoms (name · ff type · charge)</th></tr></thead>
-    <tbody>
-    {% for g in meta %}
-    <tr>
-      <td>{{ loop.index }}</td>
-      <td class="mono">{{ g.group_type }}</td>
-      <td>{{ g.residue_name }}{{ g.residue_id }}</td>
-      <td>{{ g.molecule }}</td>
-      <td class="atoms">
-        {% for a in g.atoms %}<span class="atom" title="ff type {{ a.type }} · element {{ a.element }} · charge {{ '%.3f' | format(a.charge) }} · global #{{ a.global_idx }}">{{ a.name }}</span>{% endfor %}
-      </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
+<div id="pairGroups">{% include "_pair_groups.html" %}</div>
 
 <div class="panel">
   <div id="pairChart" class="chart"></div>
@@ -69,7 +28,7 @@
 </div>
 
 <script id="pairFigure" type="application/json">{{ figure | tojson }}</script>
-<script id="pairConfig" type="application/json">{{ {"type": type, "idx": idx} | tojson }}</script>
+<script id="pairConfig" type="application/json">{{ {"type": type, "idx": idx, "n_pairs": n_pairs} | tojson }}</script>
 {% endblock %}
 
 {% block scripts %}

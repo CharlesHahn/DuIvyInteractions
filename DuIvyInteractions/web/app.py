@@ -562,6 +562,10 @@ def _register_pair_api(app: FastAPI, state: Dict[str, Any]) -> None:
     def api_pair(name: str, idx: int) -> Dict[str, Any]:
         return _pair_api_body(_pair_payload(state, name, idx))
 
+    @app.get("/api/pair/{name}/{idx}/panels", response_model=None)
+    def api_pair_panels(name: str, idx: int) -> Dict[str, Any]:
+        return _pair_panels(state, name, idx)
+
     @app.get("/api/frames/{name}/{idx}", response_model=None)
     def api_frames(name: str, idx: int, start: int = 0) -> Dict[str, Any]:
         return _guard(lambda: pair_frames(_get_interaction(state, name), idx, start))
@@ -1436,13 +1440,10 @@ def _pair_api_body(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {key: payload[key] for key in PAIR_API_KEYS}
 
 
-def _render_pair(request: Request, state: Dict[str, Any], name: str,
-                 idx: int, view: str = PAIR_VIEW_CURVES, frame: int = 0,
-                 browse_mode: str = "picker") -> HTMLResponse:
-    """下钻单页：3D 结构 + 基团元信息 + 对齐曲线 + 逐帧明细。
-
-    view 仅为旧链接兼容而接受（不再参与渲染选择）；3D 上下文始终提供。
-    """
+def _pair_page_context(state: Dict[str, Any], name: str, idx: int,
+                       frame: int = 0, browse_mode: str = "picker",
+                       view: str = PAIR_VIEW_CURVES) -> Dict[str, Any]:
+    """整页与 /panels 共用的渲染上下文（同一 payload → HTML 逐字一致）。"""
     path, items = _source(state)
     payload = _pair_payload(state, name, idx)
     context: Dict[str, Any] = {
@@ -1459,6 +1460,31 @@ def _render_pair(request: Request, state: Dict[str, Any], name: str,
     }
     context.update(payload["structure_context"])
     context["frame"] = _clamp_frame(context["frame"], context["n_frames"])
+    return context
+
+
+PAIR_PANEL_TEMPLATES = (("head", "_pair_head.html"),
+                        ("summary", "_pair_summary.html"),
+                        ("groups", "_pair_groups.html"))
+
+
+def _pair_panels(state: Dict[str, Any], name: str,
+                 idx: int) -> Dict[str, Any]:
+    """页内切 pair 所需的三段 HTML（与整页 include 同一上下文渲染）。"""
+    context = _pair_page_context(state, name, idx)
+    panels = {key: TEMPLATES.get_template(template).render(context)
+              for key, template in PAIR_PANEL_TEMPLATES}
+    return {"idx": context["idx"], "n_pairs": context["n_pairs"], **panels}
+
+
+def _render_pair(request: Request, state: Dict[str, Any], name: str,
+                 idx: int, view: str = PAIR_VIEW_CURVES, frame: int = 0,
+                 browse_mode: str = "picker") -> HTMLResponse:
+    """下钻单页：3D 结构 + 基团元信息 + 对齐曲线 + 逐帧明细。
+
+    view 仅为旧链接兼容而接受（不再参与渲染选择）；3D 上下文始终提供。
+    """
+    context = _pair_page_context(state, name, idx, frame, browse_mode, view)
     response = TEMPLATES.TemplateResponse(request, "pair.html", context)
     # 单页始终内嵌 Mol* viewer：CSP 必须放行 new Function 与 WASM 的 data: URL
     response.headers["Content-Security-Policy"] = STRUCTURE_CSP
