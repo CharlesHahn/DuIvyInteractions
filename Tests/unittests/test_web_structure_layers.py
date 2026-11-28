@@ -59,7 +59,7 @@ def test_background_layers_built_only_on_mount_and_reload():
     assert "buildLigandLayer()" in body
     assert "residues" not in body
     assert "buildBackgroundLayers()" in _function_body(text, "buildLayers")
-    assert "loadScene()" in _function_body(text, "reloadStructure")
+    assert 'loadScene("reload")' in _function_body(text, "reloadStructure")
     assert "buildBackgroundLayers()" not in _function_body(text, "updatePair")
 
 

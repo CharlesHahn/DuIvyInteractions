@@ -137,7 +137,7 @@
   var residueRefs = [];         /* 当前 pair 的残基棍棒组件 ref（updatePair 整批替换） */
   var backgroundRefs = [];      /* 卡通/配体/离子背景组件 ref（updatePair 一并重建） */
   var mounted = false;          /* mount 幂等标记 */
-  var currentStructure = { topology: "", trajectory: "" };  /* 已载入结构指纹 */
+  var currentStructure = { version: "", topology: "", trajectory: "" };  /* 已载入结构指纹 */
   var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
   var measureSeq = 0;
   var frameSeq = 0;             /* 已请求的换帧序号（滑块） */
@@ -404,8 +404,13 @@
     });
   }
 
-  function loadScene() {
+  function loadScene(reason) {
     currentStructure = structureKey(cfg);
+    console.warn("[dii] loadScene", reason, {
+      topology: cfg.topology,
+      trajectory: cfg.trajectory,
+      version: cfg.structure_version
+    });
     setStatus("loading topology and trajectory…", false);
     return Promise.all([fetchTopologyText(), fetchInteractions()])
       .then(function (results) {
@@ -1238,6 +1243,8 @@
 
   function structureKey(config) {
     return {
+      version: String(config && config.structure_version != null
+        ? config.structure_version : ""),
       topology: String(config && config.topology ? config.topology : ""),
       trajectory: String(config && config.trajectory ? config.trajectory : "")
     };
@@ -1245,6 +1252,10 @@
 
   function sameStructure(config) {
     var next = structureKey(config);
+    /* 服务端会话结构版本相同 ⇒ 结构必然未变（优先判据） */
+    if (next.version && currentStructure.version) {
+      return next.version === currentStructure.version;
+    }
     /* 页面没给结构信息：视为相同，避免无谓重载 */
     if (!next.topology && !next.trajectory) return true;
     /* 指纹缺失但 viewer 已就绪：旧轨迹仍在，同样不重载 */
@@ -1318,7 +1329,7 @@
       .then(function () { return clearBackgroundLayers(); })
       .then(function () {
         data = null;
-        return loadScene();
+        return loadScene("reload");
       });
   }
 
@@ -1641,7 +1652,7 @@
     molstar.Viewer.create(host, VIEWER_OPTIONS).then(function (instance) {
       viewer = instance;
       ready = true;
-      return loadScene();
+      return loadScene("mount");
     }).catch(function (error) {
       setStatus("viewer init failed: " + error.message, true);
     });
