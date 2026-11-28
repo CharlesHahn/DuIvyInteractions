@@ -52,11 +52,38 @@ def test_ligand_layer_falls_back_to_ion():
         'buildStaticLayer("ion"')
 
 
-def test_background_layers_are_rebuilt_from_static_components():
-    body = _function_body(_source(), "buildBackgroundLayers")
+def test_background_layers_built_only_on_mount_and_reload():
+    text = _source()
+    body = _function_body(text, "buildBackgroundLayers")
     assert "buildPolymerLayer()" in body
     assert "buildLigandLayer()" in body
     assert "residues" not in body
+    assert "buildBackgroundLayers()" in _function_body(text, "buildLayers")
+    assert "loadScene()" in _function_body(text, "reloadStructure")
+    assert "buildBackgroundLayers()" not in _function_body(text, "updatePair")
+
+
+def test_clear_functions_have_disjoint_responsibilities():
+    text = _source()
+    residue = _function_body(text, "clearResidueLayers")
+    background = _function_body(text, "clearBackgroundLayers")
+    assert "backgroundRefs" not in residue
+    assert "residueRefs" in residue
+    assert "backgroundRefs" in background
+    assert "residueRefs" not in background
+    reload_body = _function_body(text, "reloadStructure")
+    assert "clearResidueLayers()" in reload_body
+    assert "clearBackgroundLayers()" in reload_body
+
+
+def test_update_pair_reports_timing_and_keeps_background():
+    body = _function_body(_source(), "updatePair")
+    assert 'console.warn("[dii] pair updated in"' in body
+    assert "backgroundKept: true" in body
+    assert "clearResidueLayers()" in body
+    assert "clearMeasurements()" in body
+    assert "buildResidueLayers()" in body
+    assert "buildBackgroundLayers()" not in body
 
 
 def test_dock_attach_uses_console_warn():
@@ -87,7 +114,7 @@ def test_static_failure_warns_once_without_throw():
 def test_static_components_are_tracked_for_rebuild():
     body = _function_body(_source(), "buildStaticLayer")
     assert "trackBackgroundRef(component)" in body
-    clear = _function_body(_source(), "clearResidueLayers")
+    clear = _function_body(_source(), "clearBackgroundLayers")
     assert "backgroundRefs" in clear
 
 

@@ -198,18 +198,21 @@ class TestPairScript:
 
 
 class TestStructureBackgroundRebuild:
-    def test_update_pair_rebuilds_background(self):
+    def test_update_pair_keeps_background(self):
         text = STRUCTURE_JS.read_text(encoding="utf-8")
         body = _function_body(text, "updatePair")
-        assert "buildBackgroundLayers()" in body
-        background = _function_body(text, "buildBackgroundLayers")
-        assert "buildPolymerLayer(" in background
-        assert "buildLigandLayer(" in background
+        assert "buildBackgroundLayers()" not in body
+        for token in ("clearResidueLayers()", "clearMeasurements()",
+                      "buildResidueLayers()"):
+            assert token in body, token
         for token in ("TOPOLOGY_URL", "TRAJECTORY_URL", "loadTrajectoryOnce("):
             assert token not in body, token
 
-    def test_clears_background_refs_on_pair_switch(self):
+    def test_background_cleanup_is_separate_from_pair_switch(self):
         text = STRUCTURE_JS.read_text(encoding="utf-8")
         body = _function_body(text, "clearResidueLayers")
-        assert "backgroundRefs" in body
+        assert "backgroundRefs" not in body
         assert "residueRefs = [];" in body
+        background = _function_body(text, "clearBackgroundLayers")
+        assert "backgroundRefs" in background
+        assert "residueRefs" not in background

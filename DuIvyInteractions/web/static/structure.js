@@ -1152,13 +1152,10 @@
 
   /* ---------------- 原地切 pair（不重载结构/轨迹） ---------------- */
 
-  /* 清掉当前 pair 的全部表示组件（卡通/配体/离子背景 + 残基棍棒）；
-     structure 与 trajectory 常驻，不重新载入 */
+  /* 只清残基棍棒组件；背景层由 clearBackgroundLayers 单独管理 */
   function clearResidueLayers() {
     var stale = residueRefs;
     residueRefs = [];
-    stale.push.apply(stale, backgroundRefs);
-    backgroundRefs = [];
     if (!stale.length || !ready) return Promise.resolve();
     var builder = viewer.plugin.state.data.build();
     for (var i = 0; i < stale.length; i++) builder.delete(stale[i]);
@@ -1168,21 +1165,40 @@
       });
   }
 
+  /* 只清卡通/配体/离子背景组件；切 pair 时保留，换结构时才调用 */
+  function clearBackgroundLayers() {
+    var stale = backgroundRefs;
+    backgroundRefs = [];
+    if (!stale.length || !ready) return Promise.resolve();
+    var builder = viewer.plugin.state.data.build();
+    for (var i = 0; i < stale.length; i++) builder.delete(stale[i]);
+    return Promise.resolve(builder.commit({ canUndo: false }))
+      .catch(function (error) {
+        noteFailure("background cleanup failed", error);
+      });
+  }
+
   function clearMeasurements() {
     var stale = measurements;
     measurements = [];
     return deleteMeasurementCells(stale);
   }
 
-  /* 切 pair：只换与 pair 相关的表示/帧数据，structure 与 trajectory 复用。
-     背景层（卡通 polymer / 配体 ligand / 离子）也按新残基集合重建，
-     payload = GET /api/pair/{type}/{idx} 的 JSON（groups/existence/...）。 */
+  /* performance 在旧环境可能缺失；仅用于诊断日志 */
+  function nowMs() {
+    return typeof performance !== "undefined" && performance.now
+      ? performance.now() : Date.now();
+  }
+
+  /* 切 pair：只换残基棍棒/测量/帧数据；卡通+配体背景与 structure/trajectory
+     均常驻不重建。payload = GET /api/pair/{type}/{idx} 的 JSON。 */
   function updatePair(payload) {
     var next = payload || {};
     if (!ready || !structureRef) {
       setStatus("3D viewer is not ready; pair not updated", true);
       return Promise.resolve();
     }
+    var t0 = nowMs();
     data = {
       residues: next.groups || [],
       existence: next.existence || [],
@@ -1194,7 +1210,6 @@
     var target = typeof next.frame === "number" ? next.frame : frame;
     return clearResidueLayers()
       .then(function () { return clearMeasurements(); })
-      .then(function () { return buildBackgroundLayers(); })
       .then(function () { return buildResidueLayers(); })
       .then(function () {
         renderExistence(data.existence, data.pt_types);
@@ -1205,6 +1220,13 @@
       })
       .then(function () { return focusInitially(); })
       .then(function () { return selectFrame(clampFrame(target)); })
+      .then(function () {
+        console.warn("[dii] pair updated in", Math.round(nowMs() - t0),
+          "ms", {
+            stickCount: data.residues.length,
+            backgroundKept: true
+          });
+      })
       .catch(function (error) {
         console.warn("[dii] pair update failed", error);
         setStatus("pair update failed: " + (error && error.message
@@ -1288,16 +1310,14 @@
     return result;
   }
 
-  /* 拓扑/轨迹变了：清空表示层与测量后重新载入（viewer 容器不销毁） */
+  /* 拓扑/轨迹变了：残基、背景、测量全部清掉后重新载入（viewer 容器不销毁） */
   function reloadStructure() {
     frame = clampFrame(cfg.frame || 0);
     return clearMeasurements()
-      .then(function () { return clearDefaultComponents(); })
+      .then(function () { return clearResidueLayers(); })
+      .then(function () { return clearBackgroundLayers(); })
       .then(function () {
         data = null;
-        measurements = [];
-        residueRefs = [];
-        backgroundRefs = [];
         return loadScene();
       });
   }
