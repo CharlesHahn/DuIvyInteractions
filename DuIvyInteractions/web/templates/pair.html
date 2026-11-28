@@ -34,11 +34,11 @@
 {% block scripts %}
 {# 单页合并：Mol* viewer 与 Plotly 曲线同页，两套资源都需加载 #}
 <link rel="stylesheet" href="/static/vendor/molstar.css">
-<script src="/static/vendor/molstar.js"></script>
-<script src="/static/structure.js"></script>
+<script src="/static/vendor/molstar.js" data-once></script>
+<script src="/static/structure.js" data-once></script>
 {% if (browse_mode | default('picker')) == "server" %}
 <script src="/static/filepick.js"></script>
 {% endif %}
-<script src="/static/plotly-basic.min.js"></script>
+<script src="/static/plotly-basic.min.js" data-once></script>
 <script src="/static/pair.js"></script>
 {% endblock %}

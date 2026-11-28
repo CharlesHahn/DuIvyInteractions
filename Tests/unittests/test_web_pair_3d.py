@@ -276,12 +276,16 @@ class TestPartialTemplate:
         assert '{% if view' not in text, "include must be unconditional"
 
     def test_partial_keeps_viewer_dom_ids(self):
+        """viewer 类 id 已迁到 base 常驻坞；partial 只保留槽位与表单。"""
         text = PARTIAL_TEMPLATE.read_text(encoding="utf-8")
-        for element_id in ("molstarViewer", "frameLabel", "existenceBar",
-                           "groupLegend", "structureStatus", "structureConfig",
-                           "structureForm", "filepickModal", "topologyInput",
-                           "trajectoryInput", "openStructure"):
+        for element_id in ("structureConfig", "structureForm", "filepickModal",
+                           "topologyInput", "trajectoryInput",
+                           "openStructure", "structureDockSlot"):
             assert 'id="%s"' % element_id in text, element_id
+        base = (TEMPLATES_DIR / "base.html").read_text(encoding="utf-8")
+        for element_id in ("molstarViewer", "frameLabel", "existenceBar",
+                           "groupLegend", "structureStatus"):
+            assert 'id="%s"' % element_id in base, element_id
 
     def test_partial_template_renders_standalone(self):
         from DuIvyInteractions.web.app import TEMPLATES
@@ -291,9 +295,8 @@ class TestPartialTemplate:
             active_type=None, type=TYPE, idx=0, pair_label="pair 1",
             n_atoms=4, n_frames=1, has_structure=False, existence=[1],
             topology="", trajectory="", browse_mode="picker")
-        assert 'id="molstarViewer"' in html
+        assert 'id="structureDockSlot"' in html
         assert 'id="structureConfig"' in html
-        assert "no structure" in html
         assert "structure not selected" in html
 
     def test_partial_source_panel_is_details(self):

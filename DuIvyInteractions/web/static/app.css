@@ -1843,3 +1843,10 @@ details.structure-source[open] > summary {
 .structure-form .btn { height: 34px; box-sizing: border-box; }
 .structure-form input { padding: 0 10px; }
 .structure-form .btn { padding: 0 12px; }
+
+/* ---------- 常驻 3D 坞（pjax 切页复用 viewer，不销毁结构/轨迹） ---------- */
+
+.viewer-dock { margin-bottom: 16px; }
+.viewer-dock[hidden] { display: none; }
+.structure-dock-slot { display: block; }
+body.routing { cursor: progress; }

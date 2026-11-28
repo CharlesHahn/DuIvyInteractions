@@ -3,6 +3,11 @@
 (function () {
   "use strict";
 
+  /* pjax 重放/重复引入时复用既有实例：绝不创建第二个 viewer */
+  if (window.DiiStructure && typeof window.DiiStructure.mount === "function") {
+    return;
+  }
+
   var cfgEl = document.getElementById("structureConfig");
   if (!cfgEl) return;
   var cfg = JSON.parse(cfgEl.textContent);
@@ -51,13 +56,8 @@
      language 解析字符串（表达式类型需要编译好的 AST，字符串会被当常量）。 */
   var EXPRESSION_LANGUAGE = "pymol";
   var COMPONENT_SCRIPT = "script";
-  var POLYMER_KEYWORD = "polymer";        /* static 组件关键字（兜底用） */
-  /* 宏：protein / water / nucleic 是选择语言里真实存在的宏；
-     polymer 只是数值属性、organic/inorganic 不是宏，裸用会解析成空选择 */
-  var POLYMER_EXPRESSION = "protein";
-  var NON_POLYMER_EXPRESSION = "not (protein or water or nucleic)";
-  var STATIC_LIGAND = "ligand";
-  var STATIC_ION = "ion";
+  /* 背景层用 Mol* 内置 static 组件关键字（polymer/ligand/ion），
+     不拼 protein/water/nucleic 选择语言表达式 */
   var STICK_TYPE = "ball-and-stick";
   var CARTOON_TYPE = "cartoon";
 
@@ -137,6 +137,7 @@
   var residueRefs = [];         /* 当前 pair 的残基棍棒组件 ref（updatePair 整批替换） */
   var backgroundRefs = [];      /* 卡通/配体/离子背景组件 ref（updatePair 一并重建） */
   var mounted = false;          /* mount 幂等标记 */
+  var currentStructure = { topology: "", trajectory: "" };  /* 已载入结构指纹 */
   var focusPath = "";           /* 状态栏：focus: residues|residues-each|structure */
   var measureSeq = 0;
   var frameSeq = 0;             /* 已请求的换帧序号（滑块） */
@@ -155,6 +156,15 @@
   function noteFailure(label, error) {
     failures += 1;
     console.warn("[dii] " + label, error);
+  }
+
+  /* 同一表达式/组件失败只提示一次：重建、换帧不刷屏 */
+  var warnedOnce = new Set();
+
+  function warnOnce(key) {
+    if (warnedOnce.has(key)) return;
+    warnedOnce.add(key);
+    console.warn.apply(console, Array.prototype.slice.call(arguments, 1));
   }
 
   function readJson(response) {
@@ -395,6 +405,7 @@
   }
 
   function loadScene() {
+    currentStructure = structureKey(cfg);
     setStatus("loading topology and trajectory…", false);
     return Promise.all([fetchTopologyText(), fetchInteractions()])
       .then(function (results) {
@@ -610,7 +621,8 @@
       structureBuilders().tryCreateComponent(structureRef, spec, tag)
     ).then(function (component) {
       if (!componentElementCount(component)) {
-        console.warn("[dii] empty component:", tag, "expr=" + expression);
+        warnOnce("empty:" + tag + "|" + expression,
+          "[dii] empty component:", tag, "expr=" + expression);
         return { ok: false, component: null };
       }
       return { ok: true, component: component };
@@ -662,19 +674,23 @@
     if (ref) backgroundRefs.push(ref);
   }
 
-  /* tryCreateComponentStatic(parent, keyword, {label}, tags)：第三个参数是
-     label/tags，不是标签字符串（第四个参数必须是数组，否则展开会报错）。 */
+  /* tryCreateComponentStatic(parent, keyword, {label})：keyword 是 Mol* 内置
+     static 关键字（polymer/ligand/ion/water），不经过选择语言解析。 */
   function buildStaticLayer(keyword, label, params) {
     var builders = structureBuilders();
     return Promise.resolve(
       builders.tryCreateComponentStatic(structureRef, keyword,
         { label: label })
     ).then(function (component) {
+      if (!component) return null;
       trackBackgroundRef(component);
       return addLayerRepresentation(component, params,
-        "static-" + keyword + "-repr");
+        "static-" + keyword + "-repr").then(function () {
+          return component;
+        });
     }).catch(function (error) {
-      noteFailure("static component failed: " + keyword, error);
+      warnOnce("static:" + keyword,
+        "[dii] static component failed:", keyword, error);
       return null;
     });
   }
@@ -713,9 +729,8 @@
 
   /* 背景层：卡通 polymer + 配体/离子 ligand（排除列表取当前 data.residues） */
   function buildBackgroundLayers() {
-    var residues = data && data.residues ? data.residues : [];
-    return buildPolymerLayer(residues)
-      .then(function () { return buildLigandLayer(residues); });
+    return buildPolymerLayer()
+      .then(function () { return buildLigandLayer(); });
   }
 
   /* 只重建 pair 相关的残基棍棒层；骨架/配体由 buildBackgroundLayers 单独重建 */
@@ -728,23 +743,9 @@
     return chain;
   }
 
-  function buildPolymerLayer(residues) {
-    return buildScriptComponent(polymerExpression(residues), TAG_POLYMER,
-      "polymer").then(function (result) {
-      if (result.component) {
-        trackBackgroundRef(result.component);
-        return addLayerRepresentation(result.component, cartoonParams(),
-          TAG_POLYMER + "-repr");
-      }
-      if (result.ok) return null;
-      return buildStaticLayer(POLYMER_KEYWORD, "polymer", cartoonParams());
-    });
-  }
-
-  function polymerExpression(residues) {
-    var excluded = residueSelectorUnion(residues);
-    if (!excluded) return POLYMER_EXPRESSION;
-    return POLYMER_EXPRESSION + " and not (" + excluded + ")";
+  /* 卡通背景：Mol* 内置 static 组件，不拼选择语言表达式 */
+  function buildPolymerLayer() {
+    return buildStaticLayer("polymer", "polymer", cartoonParams());
   }
 
   function residueStep(residue, index) {
@@ -792,23 +793,6 @@
     return !!residue && residue.is_water === true;
   }
 
-  function residueSelectorUnion(residues) {
-    var parts = [];
-    for (var i = 0; i < residues.length; i++) {
-      if (isWaterResidue(residues[i])) continue;
-      var selector = residueSelector(residues[i]);
-      if (selector) parts.push("(" + selector + ")");
-    }
-    return parts.length ? parts.join(" or ") : null;
-  }
-
-  /* 配体/离子层：非蛋白、非水、非核酸，并排除相互作用残基（它们已由棍棒显示） */
-  function ligandExpression(residues) {
-    var excluded = residueSelectorUnion(residues);
-    if (!excluded) return NON_POLYMER_EXPRESSION;
-    return "(" + NON_POLYMER_EXPRESSION + ") and not (" + excluded + ")";
-  }
-
   function residueUnionExpression(residues) {
     var parts = [];
     for (var i = 0; i < residues.length; i++) {
@@ -818,32 +802,12 @@
     return parts.length ? parts.join(" or ") : null;
   }
 
-  function buildLigandLayer(residues) {
-    return buildScriptComponent(ligandExpression(residues), TAG_LIGAND,
-      "ligand").then(function (result) {
-      if (result.component) {
-        trackBackgroundRef(result.component);
-        return addLayerRepresentation(result.component, ligandParams(),
-          TAG_LIGAND + "-repr");
-      }
-      if (result.ok) return null;
-      return buildPlainLigandLayer();
-    });
-  }
-
-  function buildPlainLigandLayer() {
-    return buildScriptComponent(NON_POLYMER_EXPRESSION, TAG_LIGAND, "ligand")
-      .then(function (result) {
-        if (result.component) {
-          trackBackgroundRef(result.component);
-          return addLayerRepresentation(result.component, ligandParams(),
-            TAG_LIGAND + "-repr");
-        }
-        if (result.ok) return null;
-        return buildStaticLayer(STATIC_LIGAND, "ligand", ligandParams())
-          .then(function () {
-            return buildStaticLayer(STATIC_ION, "ion", ligandParams());
-          });
+  /* 配体背景：内置 static ligand；为空再试 ion；都为空则跳过（背景可选） */
+  function buildLigandLayer() {
+    return buildStaticLayer("ligand", "ligand", ligandParams())
+      .then(function (component) {
+        if (component) return component;
+        return buildStaticLayer("ion", "ion", ligandParams());
       });
   }
 
@@ -1248,6 +1212,178 @@
       });
   }
 
+  /* ---------------- 常驻坞：attach / detach（pjax 页面切换复用 viewer） ---------------- */
+
+  function structureKey(config) {
+    return {
+      topology: String(config && config.topology ? config.topology : ""),
+      trajectory: String(config && config.trajectory ? config.trajectory : "")
+    };
+  }
+
+  function sameStructure(config) {
+    var next = structureKey(config);
+    /* 页面没给结构信息：视为相同，避免无谓重载 */
+    if (!next.topology && !next.trajectory) return true;
+    /* 指纹缺失但 viewer 已就绪：旧轨迹仍在，同样不重载 */
+    if (!currentStructure.topology && !currentStructure.trajectory) {
+      return !!viewer && ready;
+    }
+    return next.topology === currentStructure.topology &&
+      next.trajectory === currentStructure.trajectory;
+  }
+
+  function attachInitialDock() {
+    var dock = document.getElementById("viewerDock");
+    var slot = document.getElementById("structureDockSlot");
+    if (!dock || !slot) return;
+    slot.appendChild(dock);
+    dock.hidden = false;
+  }
+
+  /* 把坞搬进当前页槽位；结构相同只刷新帧条/帧号，不同才重载结构 */
+  function attach(config) {
+    var dock = document.getElementById("viewerDock");
+    var slot = document.getElementById("structureDockSlot");
+    var same = !!viewer && ready && sameStructure(config);
+    var hasViewer = !!viewer;
+    var reloaded = false;
+    var result;
+    if (!dock || !slot) {
+      result = Promise.resolve({ attached: false, reloaded: false });
+    } else {
+      if (dock.parentNode !== slot) slot.appendChild(dock);
+      dock.hidden = false;
+      cfg = config;
+      if (same) {
+        frame = clampFrame(frame);
+        renderExistence(cfg.existence || [], cfg.pt_types || []);
+        updateFrameRange();
+        renderTypeLegend(cfg.pt_types || []);
+        resizeViewer();
+        result = Promise.resolve({ attached: true, reloaded: false });
+      } else if (!hasViewer) {
+        reloaded = true;
+        mount();
+        resizeViewer();
+        result = Promise.resolve({ attached: true, reloaded: true });
+      } else if (!ready) {
+        result = Promise.resolve({ attached: true, reloaded: false });
+      } else {
+        reloaded = true;
+        result = reloadStructure().then(function () {
+          resizeViewer();
+          return { attached: true, reloaded: true };
+        });
+      }
+    }
+    console.warn("[dii] dock attach", {
+      same: same,
+      ready: ready,
+      hasViewer: hasViewer,
+      reloaded: reloaded,
+      from: currentStructure,
+      to: structureKey(config)
+    });
+    return result;
+  }
+
+  /* 拓扑/轨迹变了：清空表示层与测量后重新载入（viewer 容器不销毁） */
+  function reloadStructure() {
+    frame = clampFrame(cfg.frame || 0);
+    return clearMeasurements()
+      .then(function () { return clearDefaultComponents(); })
+      .then(function () {
+        data = null;
+        measurements = [];
+        residueRefs = [];
+        backgroundRefs = [];
+        return loadScene();
+      });
+  }
+
+  /* 移回 body 末尾并保持 hidden；viewer/trajectory 不销毁、不重置 */
+  function detach() {
+    var dock = document.getElementById("viewerDock");
+    if (!dock) return;
+    dock.hidden = true;
+    if (dock.parentNode !== document.body) document.body.appendChild(dock);
+  }
+
+  /* pjax 交换前：坞若还挂在 main 里，先摘回 body，避免随 main 一起离场 */
+  function detachFromMain() {
+    var dock = document.getElementById("viewerDock");
+    if (!dock) return;
+    if (dock.parentNode && dock.parentNode !== document.body) {
+      detach();
+    }
+  }
+
+  /* DOM 搬移后 WebGL 画布需要重新量尺寸 */
+  function resizeViewer() {
+    if (!viewer || typeof viewer.handleResize !== "function") return;
+    setTimeout(function () {
+      try {
+        viewer.handleResize();
+      } catch (error) {
+        console.warn("[dii] viewer resize failed", error);
+      }
+    }, 0);
+  }
+
+  /* pjax 交换后：有槽位+配置 → attach 并按新 pair 刷新 3D 数据；否则隐藏坞 */
+  function registerSwapHook() {
+    if (!window.DiiRouter || typeof window.DiiRouter.onAfterSwap !== "function") {
+      return;
+    }
+    if (typeof window.DiiRouter.onBeforeSwap === "function") {
+      window.DiiRouter.onBeforeSwap(detachFromMain);
+    }
+    window.DiiRouter.onAfterSwap(function (doc) {
+      var slot = document.getElementById("structureDockSlot") ||
+        (doc && doc.getElementById("structureDockSlot"));
+      var configEl = document.getElementById("structureConfig") ||
+        (doc && doc.getElementById("structureConfig"));
+      if (!slot || !configEl) {
+        detach();
+        return null;
+      }
+      var next;
+      try {
+        next = JSON.parse(configEl.textContent);
+      } catch (error) {
+        noteFailure("structure config parse failed", error);
+        return null;
+      }
+      return attach(next).then(function (result) {
+        if (!result || result.reloaded) return null;
+        return refreshPairData();
+      }).catch(function (error) {
+        console.warn("[dii] structure attach failed", error);
+      });
+    });
+  }
+
+  /* 结构未变时用 /api/pair 数据原地更新 pair 相关表示 */
+  function refreshPairData() {
+    var pairCfgEl = document.getElementById("pairConfig");
+    if (!pairCfgEl || !ready) return Promise.resolve();
+    var pairCfg;
+    try {
+      pairCfg = JSON.parse(pairCfgEl.textContent);
+    } catch (error) {
+      console.warn("[dii] pair config parse failed", error);
+      return Promise.resolve();
+    }
+    return fetch("/api/pair/" + encodeURIComponent(pairCfg.type) + "/" +
+      pairCfg.idx)
+      .then(readJson)
+      .then(function (payload) { return updatePair(payload); })
+      .catch(function (error) {
+        console.warn("[dii] pair data update failed", error);
+      });
+  }
+
   /* 原生轨迹控件（首帧/上一帧/下一帧）改帧后把当前帧同步回滑块与 existence 条；
      滑块拖动（pendingTimer）或换帧未落地（frameSeq != appliedSeq）时避让。 */
   function pollFrame() {
@@ -1510,6 +1646,7 @@
   function mount() {
     if (mounted) return;
     mounted = true;
+    attachInitialDock();
     highlightFrame(frame);
     /* 自动尝试优先于 has_structure：切到另一数据集时旧结构与该 h5 记录不一致，
        必须先按记录重载，否则会用旧宇宙算新拓扑（400）。 */
@@ -1526,9 +1663,13 @@
   window.DiiStructure = {
     mount: mount,
     updatePair: updatePair,
+    attach: attach,
+    detach: detach,
     isMounted: function () { return !!viewer; }
   };
 
-  /* 模板未改：脚本自挂载，行为与原首屏流程一致；外层后续可显式再调 mount（幂等） */
+  registerSwapHook();
+
+  /* 首屏自挂载（幂等）；pjax 后续走 DiiRouter.onAfterSwap 回调 */
   if (window.DiiStructure) window.DiiStructure.mount();
 })();

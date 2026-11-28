@@ -379,24 +379,24 @@ class TestNativeTrajectoryScript:
         assert "residueSelector(residue)" in helper
 
     def test_mixed_layers_exclude_interaction_residues(self):
-        """主干层不叠加：骨架/配体层都排除相互作用残基（它们改用棍棒显示）。"""
+        """背景层改用 Mol* 内置 static 组件：不再拼选择语言表达式。"""
         text = _structure_js()
-        body = _function_body(text, "polymerExpression")
-        assert "POLYMER_EXPRESSION + \" and not (\"" in body
-        assert "residueSelectorUnion(residues)" in body
-        lig = _function_body(text, "ligandExpression")
-        assert "NON_POLYMER_EXPRESSION" in lig
-        assert "and not (" in lig
-        assert "residueSelectorUnion(residues)" in lig
+        body = _function_body(text, "buildPolymerLayer")
+        assert 'buildStaticLayer("polymer"' in body
+        assert "and not (" not in body
+        lig = _function_body(text, "buildLigandLayer")
+        assert '"ligand"' in lig and '"ion"' in lig
+        assert lig.index('"ligand"') < lig.index('"ion"')
+        assert "and not (" not in lig
 
     def test_residue_selector_is_used_for_exclusion_lists(self):
-        """骨架/配体层的排除列表仍来自 residue_selector（Cartoon 分区不变）。"""
+        """残基棍棒层仍用后端 residue_selector（背景层已改 static 组件）。"""
         text = _structure_js()
-        union = _function_body(text, "residueSelectorUnion")
-        assert '" or "' in union
-        assert "isWaterResidue(" in union
+        layer = _function_body(text, "residueLayerExpression")
+        assert "residueSelector(residue)" in layer
         selector = _function_body(text, "residueSelector")
         assert "residue_selector" in selector
+        assert "residueSelectorUnion" not in text
 
     def test_script_uses_backend_expression_payload(self):
         text = _structure_js()
@@ -424,7 +424,8 @@ class TestNativeTrajectoryScript:
             text, "buildResidueLayer")
         assert "residueSelector(residue)" in _function_body(
             text, "residueLayerExpression")
-        assert "POLYMER_EXPRESSION" in _function_body(text, "polymerExpression")
+        assert 'buildStaticLayer("polymer"' in _function_body(
+            text, "buildPolymerLayer")
         for token in ("split(\" and", "replace(/chain", "parseExpression",
                       "resi \""):
             assert token not in text, token
@@ -436,7 +437,6 @@ class TestNativeTrajectoryScript:
         helper = _function_body(text, "isWaterResidue")
         assert "is_water" in helper
         assert "isWaterResidue(" in _function_body(text, "residueLayerExpression")
-        assert "isWaterResidue(" in _function_body(text, "residueSelectorUnion")
 
     def test_script_polls_native_trajectory_controls(self):
         text = _structure_js()
@@ -569,17 +569,16 @@ class TestNativeTrajectoryScript:
         assert ".msp-left-panel-controls-buttons" not in text
 
     def test_polymer_expression_uses_real_macro(self):
-        """polymer/organic/inorganic 不是可靠宏；用 protein / not (protein or water or nucleic)。"""
+        """背景层走 Mol* 内置 static 关键字，不再拼 protein/water/nucleic 表达式。"""
         text = _structure_js()
-        assert 'POLYMER_EXPRESSION = "protein"' in text
-        assert 'POLYMER_EXPRESSION = "polymer"' not in text
-        assert 'NON_POLYMER_EXPRESSION = "not (protein or water or nucleic)"' in text
-        assert "organic or inorganic" not in text
-        poly = _function_body(text, "polymerExpression")
-        assert 'POLYMER_EXPRESSION + " and not ("' in poly
-        lig = _function_body(text, "ligandExpression")
-        assert "NON_POLYMER_EXPRESSION" in lig
-        assert "and not (" in lig
+        assert "POLYMER_EXPRESSION" not in text
+        assert "NON_POLYMER_EXPRESSION" not in text
+        poly = _function_body(text, "buildPolymerLayer")
+        assert '"polymer"' in poly
+        lig = _function_body(text, "buildLigandLayer")
+        assert '"ligand"' in lig and '"ion"' in lig
+        static = _function_body(text, "buildStaticLayer")
+        assert "tryCreateComponentStatic(structureRef, keyword" in static
 
     def test_empty_component_falls_back(self):
         """构建成功但为空的组件按失败处理，骨架回退 static polymer、配体回退 static ligand。"""
@@ -591,9 +590,9 @@ class TestNativeTrajectoryScript:
         assert "componentElementCount(" in guard
         assert "ok: false" in guard
         polymer = _function_body(text, "buildPolymerLayer")
-        assert "buildStaticLayer(POLYMER_KEYWORD" in polymer
-        plain = _function_body(text, "buildPlainLigandLayer")
-        assert "STATIC_LIGAND" in plain
+        assert 'buildStaticLayer("polymer"' in polymer
+        ligand = _function_body(text, "buildLigandLayer")
+        assert '"ligand"' in ligand and '"ion"' in ligand
 
     def test_script_keeps_sequence_toggle_and_structure_form(self):
         text = _structure_js()

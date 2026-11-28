@@ -170,7 +170,8 @@
   /* ---------------- 页内切 pair（结构/轨迹常驻，不整页跳转） ---------------- */
 
   function bindPairNav() {
-    document.addEventListener("click", onPairNavClick);
+    var head = document.getElementById("pairHead");
+    if (head) head.addEventListener("click", onPairNavClick);
   }
 
   function onPairNavClick(event) {
