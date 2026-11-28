@@ -38,7 +38,7 @@ from ..visualizers import (
 from ..visualizers.data import (
     TABLE_PAGE_SIZE, _columns, _table_rows, _units, merge_batches)
 from ..visualizers.structure import (
-    alignment_errors, interaction_expressions, load_universe, topology_pdb,
+    alignment_errors, interaction_expressions, load_universe, topology_cif,
 )
 from .fsbrowse import (
     BYTES_PER_KB, H5_SUFFIX, LIST_LIMIT, SIZE_DECIMALS, confine,
@@ -105,6 +105,9 @@ CANNOT_CANCEL = "job is not running"
 PAIR_VIEW_CURVES = "curves"
 PAIR_VIEW_3D = "3d"
 PAIR_VIEWS = (PAIR_VIEW_CURVES, PAIR_VIEW_3D)
+PAIR_API_KEYS = ("pair_label", "idx", "n_pairs", "n_frames", "flags",
+                 "existence", "pt_types", "groups", "summary", "figure",
+                 "topology")
 # base.html / index.html 存在内联脚本且不在本次授权范围内，故允许 inline
 # script；若将来把内联脚本外置，可收紧为 script-src 'self'。
 SECURITY_HEADERS = {
@@ -553,7 +556,15 @@ def _register_cell_api(app: FastAPI, state: Dict[str, Any]) -> None:
 
 
 def _register_pair_api(app: FastAPI, state: Dict[str, Any]) -> None:
-    """逐帧明细。"""
+    """单对完整数据与逐帧明细。"""
+
+    @app.get("/api/pair/{name}/{idx}", response_model=None)
+    def api_pair(name: str, idx: int) -> Dict[str, Any]:
+        return _pair_api_body(_pair_payload(state, name, idx))
+
+    @app.get("/api/pair/{name}/{idx}/panels", response_model=None)
+    def api_pair_panels(name: str, idx: int) -> Dict[str, Any]:
+        return _pair_panels(state, name, idx)
 
     @app.get("/api/frames/{name}/{idx}", response_model=None)
     def api_frames(name: str, idx: int, start: int = 0) -> Dict[str, Any]:
@@ -865,9 +876,9 @@ def _session_cache_headers() -> Dict[str, str]:
 
 def _locked_topology(structure: Dict[str, Any], interaction: Interaction,
                      idx: int) -> str:
-    """加锁生成带该对 B-factor 标记的拓扑 PDB 文本。"""
+    """加锁生成带该对 B-factor 标记的拓扑 mmCIF 文本。"""
     with structure["lock"]:
-        return topology_pdb(structure["universe"], interaction, idx)
+        return topology_cif(interaction, idx, structure["universe"])
 
 
 def _alignment_failure(structure: Dict[str, Any],
@@ -882,7 +893,7 @@ def _alignment_failure(structure: Dict[str, Any],
 
 def _topology_response(state: Dict[str, Any], name: str,
                        idx: Optional[int]) -> Response:
-    """该对打标后的拓扑 PDB（type/idx 缺失 → 400）。"""
+    """该对打标后的拓扑 mmCIF（type/idx 缺失 → 400）。"""
     structure = _structure_or_400(state)
     if not name or idx is None:
         raise HTTPException(status_code=400, detail=STRUCTURE_PAIR_REQUIRED)
@@ -891,7 +902,7 @@ def _topology_response(state: Dict[str, Any], name: str,
     if failure:
         return failure
     return Response(_locked_topology(structure, interaction, idx),
-                    media_type="chemical/x-pdb",
+                    media_type="chemical/x-cif",
                     headers=_session_cache_headers())
 
 
@@ -1385,6 +1396,87 @@ def _hotspot_types_text(types: List[Dict[str, Any]]) -> str:
                     for entry in types)
 
 
+def _pair_pt_types(interaction: Interaction, idx: int) -> List[str]:
+    """该对逐帧 π-堆积类型；缺失或长度不等于帧数 → 空列表。"""
+    types = pair_types(interaction, idx)
+    return types if len(types) == interaction.n_frames else []
+
+
+def _pair_topology(structure: Optional[Dict[str, Any]],
+                   interaction: Interaction) -> Dict[str, Any]:
+    """3D 结构状态：是否已选、原子数、帧数（无结构时帧数回落到 h5 帧数）。"""
+    return {"has_structure": structure is not None,
+            "n_atoms": structure["n_atoms"] if structure else 0,
+            "n_frames": structure["n_frames"] if structure
+            else interaction.n_frames}
+
+
+def _pair_payload(state: Dict[str, Any], name: str,
+                  idx: int) -> Dict[str, Any]:
+    """单对完整数据（页面与 /api/pair 同源）：图/摘要/分组/帧/结构信息。"""
+    h5_path, it = _find_interaction(_source(state)[1], name)
+    if not 0 <= idx < it.n_pairs:
+        raise HTTPException(status_code=404,
+                            detail=f"pair index out of range: {idx}")
+    data = pair_drilldown(it, idx)
+    structure = state.get("structure")
+    return {
+        "pair_label": data["pair_label"], "idx": idx,
+        "n_pairs": it.n_pairs, "n_frames": it.n_frames,
+        "flags": sorted(it.flags),
+        "existence": [int(value) for value in it.existence[idx]],
+        "pt_types": _pair_pt_types(it, idx),
+        "groups": interaction_expressions(
+            it, idx, structure["universe"] if structure else None)["residues"],
+        "summary": pair_summary(it, idx), "figure": fig_pair(data),
+        "topology": _pair_topology(structure, it),
+        "meta": data["groups"], "downsampled": data["downsampled"],
+        "structure_context": _structure_context(state, it, idx, h5_path),
+    }
+
+
+def _pair_api_body(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """/api/pair 输出：页面 payload 的稳定子集（去掉模板专用对象）。"""
+    return {key: payload[key] for key in PAIR_API_KEYS}
+
+
+def _pair_page_context(state: Dict[str, Any], name: str, idx: int,
+                       frame: int = 0, browse_mode: str = "picker",
+                       view: str = PAIR_VIEW_CURVES) -> Dict[str, Any]:
+    """整页与 /panels 共用的渲染上下文（同一 payload → HTML 逐字一致）。"""
+    path, items = _source(state)
+    payload = _pair_payload(state, name, idx)
+    context: Dict[str, Any] = {
+        "title": payload["pair_label"], "type": name, "idx": idx,
+        "n_pairs": payload["n_pairs"], "n_frames": payload["n_frames"],
+        "pair_label": payload["pair_label"], "meta": payload["meta"],
+        "summary": payload["summary"],
+        "downsampled": payload["downsampled"],
+        "flags": payload["flags"], "figure": payload["figure"],
+        "view": _pair_view(view),
+        "frame": _clamp_frame(frame, payload["n_frames"]),
+        "browse_mode": browse_mode, "recent": load_recent(),
+        **_nav_source(path, items, name, _batch_summaries(state)),
+    }
+    context.update(payload["structure_context"])
+    context["frame"] = _clamp_frame(context["frame"], context["n_frames"])
+    return context
+
+
+PAIR_PANEL_TEMPLATES = (("head", "_pair_head.html"),
+                        ("summary", "_pair_summary.html"),
+                        ("groups", "_pair_groups.html"))
+
+
+def _pair_panels(state: Dict[str, Any], name: str,
+                 idx: int) -> Dict[str, Any]:
+    """页内切 pair 所需的三段 HTML（与整页 include 同一上下文渲染）。"""
+    context = _pair_page_context(state, name, idx)
+    panels = {key: TEMPLATES.get_template(template).render(context)
+              for key, template in PAIR_PANEL_TEMPLATES}
+    return {"idx": context["idx"], "n_pairs": context["n_pairs"], **panels}
+
+
 def _render_pair(request: Request, state: Dict[str, Any], name: str,
                  idx: int, view: str = PAIR_VIEW_CURVES, frame: int = 0,
                  browse_mode: str = "picker") -> HTMLResponse:
@@ -1392,24 +1484,7 @@ def _render_pair(request: Request, state: Dict[str, Any], name: str,
 
     view 仅为旧链接兼容而接受（不再参与渲染选择）；3D 上下文始终提供。
     """
-    path, items = _source(state)
-    h5_path, it = _find_interaction(items, name)
-    if not 0 <= idx < it.n_pairs:
-        raise HTTPException(status_code=404, detail=f"pair index out of range: {idx}")
-    view = _pair_view(view)
-    data = pair_drilldown(it, idx)
-    context: Dict[str, Any] = {
-        "title": data["pair_label"], "type": name, "idx": idx,
-        "n_pairs": it.n_pairs, "n_frames": it.n_frames,
-        "pair_label": data["pair_label"], "meta": data["groups"],
-        "summary": pair_summary(it, idx), "downsampled": data["downsampled"],
-        "flags": sorted(it.flags), "figure": fig_pair(data),
-        "view": view, "frame": _clamp_frame(frame, it.n_frames),
-        "browse_mode": browse_mode, "recent": load_recent(),
-        **_nav_source(path, items, name, _batch_summaries(state)),
-    }
-    context.update(_structure_context(state, it, idx, h5_path))
-    context["frame"] = _clamp_frame(context["frame"], context["n_frames"])
+    context = _pair_page_context(state, name, idx, frame, browse_mode, view)
     response = TEMPLATES.TemplateResponse(request, "pair.html", context)
     # 单页始终内嵌 Mol* viewer：CSP 必须放行 new Function 与 WASM 的 data: URL
     response.headers["Content-Security-Policy"] = STRUCTURE_CSP

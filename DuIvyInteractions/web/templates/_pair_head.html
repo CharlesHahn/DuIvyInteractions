@@ -1,0 +1,10 @@
+<div class="section-head">
+  <div>
+    <h1 class="pair-title" id="pairTitle">{{ pair_label }}</h1>
+    <p class="muted"><span id="pairMeta">pair {{ idx + 1 }} / {{ n_pairs }} · {{ n_frames }} frames{% if flags %} · flags: {{ flags | join(", ") }}{% endif %}</span></p>
+  </div>
+  <div class="actions">
+    {% if idx > 0 %}<a class="btn btn-sm" id="pairPrev" data-pair-nav="-1" href="/pair/{{ type | urlencode }}/{{ idx - 1 }}?frame={{ frame }}">‹ previous pair</a>{% endif %}
+    {% if idx < n_pairs - 1 %}<a class="btn btn-sm" id="pairNext" data-pair-nav="1" href="/pair/{{ type | urlencode }}/{{ idx + 1 }}?frame={{ frame }}">next pair ›</a>{% endif %}
+  </div>
+</div>

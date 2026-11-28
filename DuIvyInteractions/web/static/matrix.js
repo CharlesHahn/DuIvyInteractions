@@ -635,10 +635,19 @@
     frameBody.appendChild(button);
   }
 
+  /* 站内跳转优先走 pjax 路由；无 router 时保留整页兜底 */
+  function navigateTo(url) {
+    if (window.DiiRouter && typeof window.DiiRouter.navigate === "function") {
+      window.DiiRouter.navigate(url);
+      return;
+    }
+    window.location.href = url;
+  }
+
   function openPair(idx, frame) {
     var url = "/pair/" + encodeURIComponent(cfg.type) + "/" + idx;
     if (typeof frame === "number" && frame >= 0) url += "?frame=" + frame;
-    window.location.href = url;
+    navigateTo(url);
   }
 
   function addCell(tr, text, cls) {

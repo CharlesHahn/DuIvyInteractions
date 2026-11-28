@@ -20,7 +20,7 @@ WAIT_INTERVAL_MS = 100
 WAIT_TIMEOUT_MS = 5000
 DIAGNOSTIC_HEAD_CHARS = 40
 # 假拓扑：换行落在前 40 字符内，用来验证诊断 head 的转义
-TOPOLOGY = "ATOM      1  N   ASN A   1\nATOM      2  H   ASN A   1\n"
+TOPOLOGY = ("data_test\n#\nloop_\n_atom_site.id\n""ATOM 1 N N ASN A 1 1 1 ASN A N ? 0.000 0.000 0.000 1.00 0.00\n")
 CFG = {"has_structure": True, "n_frames": 101}
 
 NODE_SCRIPT = r"""
@@ -233,15 +233,16 @@ class TestTopologyValidation:
         assert text.index("var topologySnapshot") < text.index(
             "function fetchTopologyText")
 
-    def test_fetch_topology_validates_pdb(self):
+    def test_fetch_topology_validates_mmcif(self):
         body = _function("fetchTopologyText")
-        assert "isPdbText(text)" in body
-        assert "topology response is not PDB" in body
+        assert "isCifText(text)" in body
+        assert "topology response is not mmCIF" in body
         assert "text.length" in body
         assert "topologySnapshot = text;" in body
         assert "return response.text();" in body
         assert "return text;" in body
-        assert "ATOM" in _function("isPdbText")
+        check = _function("isCifText")
+        assert 'data_' in check and '_atom_site.' in check
 
     def test_diagnostic_head_is_escaped_single_line(self):
         body = _function("diagnosticHead")

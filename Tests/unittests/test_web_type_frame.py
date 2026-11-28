@@ -241,3 +241,37 @@ class TestMatrixJs:
         assert "axisCol" in source
         assert "var inAxis = rows.length > 0 && y >= plotHeight()" in source
         assert "AXIS_H" in source
+
+    def _open_pair_body(self, source):
+        match = re.search(r"  function openPair\(.*?\n  \}\n", source, re.S)
+        assert match
+        return match.group(0)
+
+    def test_pair_navigation_uses_pjax_router(self):
+        """格点/打开 pair 走 pjax 路由，不再整页跳转。"""
+        source = _js_source()
+        assert "function navigateTo(url)" in source
+        assert "navigateTo(url);" in self._open_pair_body(source)
+        assert "window.DiiRouter.navigate(url);" in source
+
+    def test_open_pair_does_not_assign_location(self):
+        body = self._open_pair_body(_js_source())
+        assert "navigateTo(url);" in body
+        assert "window.location.href" not in body
+
+    def test_navigate_to_keeps_location_fallback(self):
+        source = _js_source()
+        match = re.search(r"  function navigateTo\(.*?\n  \}\n", source, re.S)
+        assert match
+        body = match.group(0)
+        assert "window.DiiRouter && typeof window.DiiRouter.navigate" in body
+        assert "window.location.href = url;" in body
+
+    def test_no_direct_location_jump_to_pair(self):
+        source = _js_source()
+        assert source.count("window.location.href =") == 1
+        assert not re.search(
+            r'window\.location\.href\s*=\s*[^;]*"/pair/"', source)
+        assert '"/pair/" + encodeURIComponent(cfg.type)' in source
+        assert "openPair(pair.idx)" in source
+        assert "openPair(rows[hit.row].idx, selectedFrame)" in source

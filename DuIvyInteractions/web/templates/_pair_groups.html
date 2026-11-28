@@ -1,0 +1,19 @@
+<div class="panel">
+  <h2>groups</h2>
+  <table class="meta-table" id="pairGroupsBody">
+    <thead><tr><th>#</th><th>group_type</th><th>residue</th><th>molecule</th><th>atoms (name · ff type · charge)</th></tr></thead>
+    <tbody>
+    {% for g in meta %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td class="mono">{{ g.group_type }}</td>
+      <td>{{ g.residue_name }}{{ g.residue_id }}</td>
+      <td>{{ g.molecule }}</td>
+      <td class="atoms">
+        {% for a in g.atoms %}<span class="atom" title="ff type {{ a.type }} · element {{ a.element }} · charge {{ '%.3f' | format(a.charge) }} · global #{{ a.global_idx }}">{{ a.name }}</span>{% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -20,31 +20,10 @@
   <p class="hint">topology and trajectory are opened on the server; paths must stay inside the browse root.</p>
 </details>
 
-<div class="panel">
-  <div class="structure-viewer-head">
-    <h2>3D structure</h2>
-    <span class="muted structure-atoms">{% if has_structure %}{{ n_atoms }} atoms{% else %}structure not selected{% endif %}</span>
-  </div>
-  <div id="molstarViewer" class="structure-viewer"></div>
-  <div class="structure-frame-row">
-    <span id="frameLabel" class="muted structure-frame-label">{% if has_structure %}frame {{ frame | default(0) }} / {{ n_frames }}{% else %}no structure{% endif %}</span>
-  </div>
-  {# 进度条并入相互作用向量条：可直接拖动/点选/键盘换帧（structure.js 处理指针与键盘） #}
-  <div class="bars structure-existence" id="existenceBar" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="{{ [(n_frames | default(0)) - 1, 0] | max }}" aria-valuenow="{{ frame | default(0) }}" aria-label="interaction frames">
-    {% for value in existence | default([], true) %}
-    {% set pt = pt_types[loop.index0] if pt_types and (pt_types | length) == (existence | length) else "" %}
-    <span class="{% if value %}on{% endif %}{% if value and pt %} pt-{{ pt | lower }}{% endif %}" title="frame {{ loop.index0 }}: {{ 'active' if value else 'inactive' }}{% if value and pt %} ({{ pt }}){% endif %}"></span>
-    {% endfor %}
-  </div>
-  {% if pt_types and (pt_types | length) == (existence | length) %}
-  <div class="pt-legend">
-    <span class="pt-legend-item"><span class="pt-dot" style="background: #3c5488"></span>P</span>
-    <span class="pt-legend-item"><span class="pt-dot" style="background: #e64b35"></span>T</span>
-  </div>
-  {% endif %}
-  <div class="structure-groups" id="groupLegend"></div>
-  <div class="structure-status" id="structureStatus"></div>
-</div>
+<div id="structureDockSlot" class="structure-dock-slot"></div>
+{% if not has_structure | default(false) %}
+<p class="hint">structure not selected — choose topology and trajectory above to load the 3D view.</p>
+{% endif %}
 
 {% if (browse_mode | default('picker')) == "server" %}
 <div class="filepick-modal hidden" id="filepickModal">
@@ -82,6 +61,7 @@
   "existence": {{ existence | default([], true) | tojson }},
   "pt_types": {{ pt_types | default([]) | tojson }},
   "trajectory": {{ trajectory | default("") | tojson }},
+  "topology": {{ topology | default("") | tojson }},
   "auto_url": "/api/structure/auto",
   "run_meta": {{ run_meta | tojson if run_meta else "null" }},
   "auto_attempt": {{ "true" if auto_attempt else "false" }}

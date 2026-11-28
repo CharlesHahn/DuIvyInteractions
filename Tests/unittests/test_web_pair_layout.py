@@ -153,7 +153,7 @@ class TestBlockOrder:
 
     def test_header_shows_frames(self, bare_client):
         html = bare_client.get(PAIR_URL).text
-        assert re.search(r'<p class="muted">pair 1 / 2 · 3 frames', html)
+        assert re.search(r'<span id="pairMeta">pair 1 / 2 · 3 frames', html)
 
     def test_both_asset_bundles_loaded(self, bare_client):
         html = bare_client.get(PAIR_URL).text

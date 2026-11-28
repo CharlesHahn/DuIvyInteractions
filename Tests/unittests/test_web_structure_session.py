@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """3D 结构会话缓存与 CSP 回归。
 
-会话相关响应（拓扑 PDB / 原始轨迹）由当前结构动态生成，必须禁止缓存：复用上一次
+会话相关响应（拓扑 mmCIF / 原始轨迹）由当前结构动态生成，必须禁止缓存：复用上一次
 会话的轨迹会让 Mol* 抛 element count mismatch。前端另加会话版本号 ?v=… 作双保险
 （结构每次重选自增）。Mol* 内置 WASM 经 fetch(data:…base64) 载入，3D 页 CSP 的
 connect-src 需放行 data:。

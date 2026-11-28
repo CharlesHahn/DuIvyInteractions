@@ -5,7 +5,6 @@
 """
 
 import collections
-import io
 import re
 from pathlib import Path
 
@@ -19,7 +18,7 @@ from DuIvyInteractions.visualizers import get_exporter
 from DuIvyInteractions.visualizers.structure import (
     SAMPLE_ATOMS, STRUCTURE_CACHE_SIZE, WATER_RESIDUES, alignment_errors,
     contact_label, group_atoms, group_label, interaction_expressions,
-    involves_water, load_universe, residue_chains, topology_pdb,
+    involves_water, load_universe, residue_chains, topology_cif,
 )
 from DuIvyInteractions.web.picker import FILE_TYPES, pick_file
 
@@ -65,7 +64,6 @@ D927_DIR = Path(__file__).resolve().parents[1] / "test_MD_case_amber"
 D927_TOPOLOGY = D927_DIR / "md.tpr"
 D927_TRAJECTORY = D927_DIR / "md1ns.xtc"
 H5_DATA_DIR = Path(__file__).resolve().parents[1] / "interaction_h5data"
-PDB_LINE_WIDTH = 78
 
 
 def _cryst1(box) -> str:
@@ -261,20 +259,24 @@ def _open_structure(client, pdb_file):
                              "trajectory": str(pdb_file)})
 
 
-def _atom_lines(text: str):
-    return [line for line in text.splitlines() if line.startswith("ATOM")]
+def _atom_lines(text: str) -> list:
+    """_atom_site 数据行解析为 dict（列名去掉 _atom_site. 前缀）。"""
+    columns = [line.split(".", 1)[1] for line in text.splitlines()
+               if line.startswith("_atom_site.")]
+    return [dict(zip(columns, line.split()))
+            for line in text.splitlines() if line.startswith("ATOM ")]
 
 
 def _chain_rows(text: str) -> dict:
-    """(resname, resSeq) → chainID（拓扑 PDB 的行列解析）。"""
-    return {(line[17:20].strip(), int(line[22:26])): line[21]
-            for line in _atom_lines(text)}
+    """(label_comp_id, auth_seq_id) → label_asym_id（拓扑 mmCIF 解析）。"""
+    return {(row["label_comp_id"], int(row["auth_seq_id"])):
+            row["label_asym_id"] for row in _atom_lines(text)}
 
 
 def _b_factor_rows(text: str) -> list:
-    """(原子名, B-factor) 列表（按行序，B-factor 取 61-66 列）。"""
-    return [(line[12:16].strip(), float(line[60:66]))
-            for line in _atom_lines(text)]
+    """(label_atom_id, B_iso_or_equiv) 列表（按行序）。"""
+    return [(row["label_atom_id"], float(row["B_iso_or_equiv"]))
+            for row in _atom_lines(text)]
 
 
 def _b_band(expression: str) -> tuple:
@@ -384,7 +386,7 @@ def d927_universe():
 
 @pytest.fixture(scope="module")
 def d927_topology_text(d927_universe):
-    return topology_pdb(d927_universe)
+    return topology_cif(None, None, d927_universe)
 
 
 # ============================================================
@@ -464,23 +466,29 @@ class TestAlignmentErrors:
         assert alignment_errors(universe, interaction) == []
 
 
-class TestTopologyPdb:
-    """第 0 帧全原子拓扑 PDB：行数/chain 规则/auth 编号/列宽。"""
+class TestTopologyCif:
+    """第 0 帧全原子拓扑 mmCIF：行数/chain 规则/编号/实体分类。"""
 
     def test_one_atom_line_per_atom(self, universe):
-        text = topology_pdb(universe)
-        lines = _atom_lines(text)
-        assert len(lines) == universe.atoms.n_atoms
-        assert [line[12:16].strip() for line in lines] == list(
-            universe.atoms.names)
+        rows = _atom_lines(topology_cif(None, None, universe))
+        assert len(rows) == universe.atoms.n_atoms
+        assert [row["label_atom_id"] for row in rows] == [
+            str(name) for name in universe.atoms.names]
 
-    def test_atom_lines_keep_fixed_width(self, mixed_universe):
-        widths = {len(line) for line in _atom_lines(
-            topology_pdb(mixed_universe))}
-        assert widths == {PDB_LINE_WIDTH}
+    def test_cif_block_header_and_columns(self, universe):
+        lines = topology_cif(None, None, universe).splitlines()
+        assert lines[0] == "data_dii"
+        assert lines[2] == "loop_"
+        columns = [line for line in lines if line.startswith("_atom_site.")]
+        assert len(columns) == 20
+        assert "_atom_site.label_alt_id" in columns
+        assert "_atom_site.auth_seq_id" in columns
+        assert "_atom_site.B_iso_or_equiv" in columns
+        widths = {len(row) for row in _atom_lines("\n".join(lines))}
+        assert widths == {20}
 
     def test_chain_rules_for_protein_water_and_ions(self, mixed_universe):
-        rows = _chain_rows(topology_pdb(mixed_universe))
+        rows = _chain_rows(topology_cif(None, None, mixed_universe))
         assert rows[("ALA", 1)] == "A"
         assert rows[("MOL", 5)] == "A"  # 同一 segment → 同一 chain 字母
         assert rows[("SOL", 7)] == "W"
@@ -488,7 +496,7 @@ class TestTopologyPdb:
         assert rows[("CL", 10)] == "I"
 
     def test_segments_get_distinct_chain_letters(self, segment_universe):
-        rows = _chain_rows(topology_pdb(segment_universe))
+        rows = _chain_rows(topology_cif(None, None, segment_universe))
         assert rows[("ALA", 51)] == "A"
         assert rows[("GLY", 51)] == "B"
         rows = interaction_expressions(_segment_interaction(), 0,
@@ -506,41 +514,68 @@ class TestTopologyPdb:
             residue_chains(universe)
 
     def test_resseq_is_auth_numbering(self, numbered_universe):
-        lines = _atom_lines(topology_pdb(numbered_universe))
-        assert {int(line[22:26]) for line in lines
-                if line[17:20].strip() == "TYR"} == {51}
-        assert {int(line[22:26]) for line in lines
-                if line[17:20].strip() == "MOL"} == {143}
+        rows = _atom_lines(topology_cif(None, None, numbered_universe))
+        assert {int(row["auth_seq_id"]) for row in rows
+                if row["label_comp_id"] == "TYR"} == {51}
+        assert {int(row["auth_seq_id"]) for row in rows
+                if row["label_comp_id"] == "MOL"} == {143}
 
-    def test_no_conect_and_ends_with_end(self, universe):
-        text = topology_pdb(universe)
+    def test_long_water_number_is_not_truncated(self, d927_topology_text):
+        """D2 关键：水 resid 15689 原样写入，且恰好 3 个原子行。"""
+        rows = [row for row in _atom_lines(d927_topology_text)
+                if row["label_comp_id"] == "SOL"
+                and row["auth_seq_id"] == "15689"]
+        assert len(rows) == 3
+        assert [row["label_atom_id"] for row in rows] == ["OW", "HW1", "HW2"]
+
+    def test_chain_sequence_pairs_are_unique(self, d927_universe,
+                                             d927_topology_text):
+        """全结构 (auth_asym_id, auth_seq_id) 唯一：0 冲突。"""
+        rows = _atom_lines(d927_topology_text)
+        pairs = {(row["auth_asym_id"], row["auth_seq_id"]) for row in rows}
+        assert len(pairs) == len(d927_universe.atoms.residues)
+
+    def test_cif_has_no_conect_and_ends_with_hash(self, universe):
+        text = topology_cif(None, None, universe)
         assert "CONECT" not in text
-        assert text.rstrip().endswith("END")
+        assert text.rstrip().endswith("#")
 
     def test_coordinates_are_wrapped_for_the_box(self, tmp_path):
         path = _write_pdb(tmp_path / "wrapped.pdb",
                           [("C1", (12.0, 2.0, 3.0), "C")])
         universe = load_universe(str(path), str(path))
-        line = _atom_lines(topology_pdb(universe))[0]
-        assert float(line[30:38]) == pytest.approx(2.0)
-        assert float(line[38:46]) == pytest.approx(2.0)
+        row = _atom_lines(topology_cif(None, None, universe))[0]
+        assert float(row["Cartn_x"]) == pytest.approx(2.0)
+        assert float(row["Cartn_y"]) == pytest.approx(2.0)
 
     def test_without_box_keeps_coordinates(self, tmp_path):
         path = _write_pdb(tmp_path / "nobox.pdb",
                           [("C1", (12.0, 2.0, 3.0), "C")], box=None)
         universe = load_universe(str(path), str(path))
-        line = _atom_lines(topology_pdb(universe))[0]
-        assert float(line[30:38]) == pytest.approx(12.0)
+        row = _atom_lines(topology_cif(None, None, universe))[0]
+        assert float(row["Cartn_x"]) == pytest.approx(12.0)
 
-    def test_topology_is_parseable_with_assigned_chains(self, mixed_universe):
-        text = topology_pdb(mixed_universe)
-        parsed = mda.Universe(io.StringIO(text), format="PDB")
-        assert parsed.atoms.n_atoms == mixed_universe.atoms.n_atoms
-        assert sorted(set(parsed.atoms.chainIDs)) == ["A", "I", "W"]
+    def test_cif_lists_expected_chains(self, mixed_universe):
+        rows = _atom_lines(topology_cif(None, None, mixed_universe))
+        assert len(rows) == mixed_universe.atoms.n_atoms
+        assert sorted({row["label_asym_id"] for row in rows}) == [
+            "A", "I", "W"]
+
+    def test_entity_per_chain_and_class(self, mixed_universe):
+        """蛋白/配体同链也分属不同实体；水与离子按类别分实体。"""
+        rows = _atom_lines(topology_cif(None, None, mixed_universe))
+        entities = {}
+        for row in rows:
+            entities.setdefault((row["label_asym_id"],
+                                 row["label_comp_id"]),
+                                row["label_entity_id"])
+        assert entities[("A", "ALA")] != entities[("A", "MOL")]
+        assert entities[("W", "SOL")] != entities[("A", "ALA")]
+        assert entities[("I", "NA")] == entities[("I", "CL")]
 
     def test_tagged_atoms_get_unique_b_factors(self, numbered_universe):
         interaction = _numbered_interaction()
-        rows = _b_factor_rows(topology_pdb(numbered_universe, interaction, 0))
+        rows = _b_factor_rows(topology_cif(interaction, 0, numbered_universe))
         tagged = [value for _, value in rows if value != 0.0]
         assert len(tagged) == len(
             [atom for group in interaction.groups[0] for atom in group.atoms])
@@ -548,7 +583,7 @@ class TestTopologyPdb:
 
     def test_untagged_atoms_keep_zero_b_factor(self, water_universe):
         rows = dict(_b_factor_rows(
-            topology_pdb(water_universe, _protein_interaction(), 0)))
+            topology_cif(_protein_interaction(), 0, water_universe)))
         assert rows["OW"] == 0.0 and rows["HW1"] == 0.0
         assert [rows[name] for name in ("N1", "H1", "O1", "O2")] == [
             100.0, 101.0, 102.0, 103.0]
@@ -556,19 +591,21 @@ class TestTopologyPdb:
     def test_tag_order_matches_expression_order(self, numbered_universe):
         interaction = _numbered_interaction()
         tagged = [name for name, value
-                  in _b_factor_rows(topology_pdb(numbered_universe,
-                                                 interaction, 0))
+                  in _b_factor_rows(topology_cif(interaction, 0,
+                                                 numbered_universe))
                   if value != 0.0]
         residues = interaction_expressions(
             interaction, 0, numbered_universe)["residues"]
         assert tagged == [row["name"] for group in residues
                           for row in group["atoms"]]
 
-    def test_serial_column_truncates_to_five_digits(self):
-        from DuIvyInteractions.visualizers.structure import _pdb_serial
-        assert _pdb_serial(116383) == 16383
-        assert _pdb_serial(100000) == 0
-        assert _pdb_serial(51) == 51
+    def test_atom_id_is_global_index_plus_one(self, numbered_universe):
+        rows = _atom_lines(topology_cif(None, None, numbered_universe))
+        assert [int(row["id"]) for row in rows] == [1, 2, 3, 4]
+
+    def test_large_atom_ids_are_not_truncated(self, d927_topology_text):
+        rows = _atom_lines(d927_topology_text)
+        assert rows[-1]["id"] == "116383"
 
 
 class TestD927SegmentChains:
@@ -596,7 +633,7 @@ class TestD927SegmentChains:
                                                        d927_topology_text):
         segment_atoms = {segment.segid: len(segment.atoms)
                          for segment in d927_universe.atoms.segments}
-        counts = collections.Counter(line[21] for line in
+        counts = collections.Counter(row["label_asym_id"] for row in
                                      _atom_lines(d927_topology_text))
         assert counts["A"] == segment_atoms["seg_0_RBD_pro"] == 2355
         assert counts["B"] == segment_atoms["seg_1_D927"] == 53
@@ -663,14 +700,27 @@ class TestInteractionExpressions:
         residues = interaction_expressions(
             _numbered_interaction(), 0, numbered_universe)["residues"]
         assert all(set(row) == {"label", "residue_selector", "is_water",
-                                "expression", "atoms"} for row in residues)
+                                "expression", "group_expression", "indices",
+                                "residue_indices", "atoms"}
+                   for row in residues)
         assert [row["residue_selector"] for row in residues] == [
             "chain A and resi 51", "chain B and resi 143"]
-        chains = _chain_rows(topology_pdb(numbered_universe))
+        chains = _chain_rows(topology_cif(None, None, numbered_universe))
         assert residues[0]["residue_selector"] == (
             f"chain {chains[('TYR', 51)]} and resi 51")
         assert residues[1]["residue_selector"] == (
             f"chain {chains[('MOL', 143)]} and resi 143")
+
+    def test_water_group_expression_keeps_full_number(self, d927_universe):
+        """D2 关键：CIF 后水组表达式是 chain W and resi 15689（无 b 区间）。"""
+        interaction = load_interactions(
+            str(H5_DATA_DIR / "water_bridge.h5"))[0]
+        residues = interaction_expressions(
+            interaction, 0, d927_universe)["residues"]
+        water = [row for row in residues if row["is_water"]]
+        assert len(water) == 1
+        assert water[0]["group_expression"] == "chain W and resi 15689"
+        assert "b >" not in water[0]["group_expression"]
 
     def test_water_bridge_groups_all_have_residue_selectors(self,
                                                             bridge_universe):
@@ -749,16 +799,44 @@ class TestStructureSelect:
 
 class TestTopologyRoute:
 
-    def test_returns_full_topology_pdb(self, client, pdb_file):
+    def test_returns_full_topology_cif(self, client, pdb_file):
         _open_structure(client, pdb_file)
         response = client.get("/api/structure/topology",
                               params={"type": "hydrogen_bond", "idx": 0})
         assert response.status_code == 200
-        assert response.headers["content-type"] == "chemical/x-pdb"
+        assert response.headers["content-type"] == "chemical/x-cif"
+        assert response.text.startswith("data_dii")
         rows = _b_factor_rows(response.text)
         assert len(rows) == len(ATOMS)
         assert [value for _, value in rows] == [100.0, 101.0, 102.0, 103.0]
-        assert response.text.rstrip().endswith("END")
+        assert response.text.rstrip().endswith("#")
+
+    def test_mmcif_is_parseable_by_biopython(self):
+        """标准 mmCIF：Biopython 可解析；水 15689 恰好 3 个原子（无截断）。"""
+        try:
+            from Bio.PDB import MMCIFParser
+        except ImportError:  # pragma: no cover - 环境缺依赖时显式跳过
+            pytest.skip("Biopython unavailable: mmCIF parse check skipped")
+        from io import StringIO
+        client = _client()
+        client.post("/select", data={"path": str(H5_DATA_DIR)})
+        opened = client.post("/api/structure/select", data={
+            "topology": str(D927_TOPOLOGY),
+            "trajectory": str(D927_TRAJECTORY)})
+        assert opened.status_code == 200
+        topology = client.get("/api/structure/topology",
+                              params={"type": "pi_stacking", "idx": 0})
+        assert topology.status_code == 200
+        structure = MMCIFParser(QUIET=True).get_structure(
+            "dii", StringIO(topology.text))
+        atoms = list(structure.get_atoms())
+        assert len(atoms) == opened.json()["n_atoms"] == 116383
+        water = [residue for residue in structure.get_residues()
+                 if residue.resname.strip() == "SOL"
+                 and residue.id[1] == 15689]
+        assert len(water) == 1
+        assert [atom.get_name() for atom in water[0].get_atoms()] == [
+            "OW", "HW1", "HW2"]
 
     def test_tags_only_pair_atoms_in_full_structure(self, water_client,
                                                     water_pdb):
@@ -1026,17 +1104,19 @@ class TestGroupLabel:
         assert group_label(interaction, interaction.groups[0][0],
                            universe) == "LYS1 · H_donor"
 
-    def test_long_residue_number_is_truncated_to_four_columns(
-            self, water_universe):
+    def test_long_residue_number_is_kept_verbatim(self, water_universe):
+        """mmCIF 不再截断：水 resid 15689 在标签与选择器里都是 15689。"""
         interaction = _water_bridge_interaction()
         water_universe.atoms.residues.resids = [15689, 1]
         assert group_label(interaction, interaction.groups[0][1],
-                           water_universe) == "SOL2 (PDB 5689) · water"
+                           water_universe) == "SOL2 (PDB 15689) · water"
 
-    def test_pdb_resid_truncates_to_four_digits(self):
-        from DuIvyInteractions.visualizers.structure import _pdb_resid
-        assert _pdb_resid(15689) == 5689
-        assert _pdb_resid(51) == 51
+    def test_residue_selector_keeps_five_digits(self, water_universe):
+        interaction = _water_bridge_interaction()
+        water_universe.atoms.residues.resids = [15689, 1]
+        residues = interaction_expressions(
+            interaction, 0, water_universe)["residues"]
+        assert residues[1]["residue_selector"] == "chain W and resi 15689"
 
     def test_without_universe_falls_back_to_h5_number(self):
         interaction = _numbered_interaction()

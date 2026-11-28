@@ -1,0 +1,15 @@
+<div class="panel">
+  <h2>summary</h2>
+  <div class="meta-grid" id="pairSummaryBody">
+    <div><span class="k">occupancy</span><span class="v">{{ "%.1f%%" | format(summary.occupancy * 100) }}</span></div>
+    {% for name, s in summary.metrics.items() %}
+    <div><span class="k">{{ name }}{% if s.unit %} ({{ s.unit }}){% endif %}</span><span class="v">mean {{ "%.3f" | format(s.mean) if s.mean is not none else "—" }} · std {{ "%.3f" | format(s.std) if s.std is not none else "—" }} · n={{ s.count }}</span></div>
+    {% endfor %}
+    {% for name, f in summary.flags.items() %}
+    <div><span class="k">{{ name }}</span><span class="v">{{ f.active }} / {{ f.frames }} frames</span></div>
+    {% endfor %}
+    {% for name, top in summary.string_metrics.items() %}
+    <div><span class="k">{{ name }}</span><span class="v chips left">{% for item in top %}<span class="chip static">{{ item.value }} <span class="muted">×{{ item.count }}</span></span>{% endfor %}</span></div>
+    {% endfor %}
+  </div>
+</div>

@@ -27,7 +27,8 @@ H5_DATA_DIR = Path(__file__).parent.parent / "interaction_h5data"
 STATIC_CSS = (Path(__file__).resolve().parents[2]
               / "DuIvyInteractions" / "web" / "static" / "app.css")
 CHART_MARKER = '<div class="residue-chart">'
-GLOBAL_SCRIPTS = frozenset({"/static/load.js", "/static/browse.js"})
+GLOBAL_SCRIPTS = frozenset({"/static/load.js", "/static/browse.js",
+                            "/static/router.js"})
 SEG_RE = re.compile(r'<div class="residue-seg" style="flex-grow: (\d+); flex-basis: 0">')
 SEG_LABEL_RE = re.compile(r'<div class="residue-seg-label" title="([^"]*)">([^<]*)</div>')
 BAR_GROUP_RE = re.compile(r'<div class="bars big residue-bars">(.*?)</div>', re.S)
